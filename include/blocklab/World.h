@@ -1,0 +1,76 @@
+#pragma once
+
+#include "blocklab/Math.h"
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <unordered_map>
+#include <vector>
+
+namespace blocklab {
+
+enum class Block : uint8_t {
+    Air = 0,
+    Grass,
+    Dirt,
+    Stone,
+};
+
+class Chunk {
+public:
+    static constexpr int32_t SizeX = 16;
+    static constexpr int32_t SizeY = 32;
+    static constexpr int32_t SizeZ = 16;
+    static constexpr int32_t Volume = SizeX * SizeY * SizeZ;
+
+    Block get(int32_t x, int32_t y, int32_t z) const;
+    void set(int32_t x, int32_t y, int32_t z, Block block);
+
+private:
+    std::array<Block, Volume> m_blocks { };
+};
+
+struct BlockCoord {
+    int32_t x = 0;
+    int32_t y = 0;
+    int32_t z = 0;
+
+    bool operator==(const BlockCoord& other) const { return x == other.x && y == other.y && z == other.z; }
+};
+
+struct BlockCoordHash {
+    std::size_t operator()(const BlockCoord& coord) const noexcept;
+};
+
+struct BlockOverride {
+    BlockCoord coord;
+    Block block = Block::Air;
+};
+
+class World {
+public:
+    explicit World(uint32_t seed = 1);
+
+    void reset(uint32_t seed);
+    Block getBlock(int32_t x, int32_t y, int32_t z) const;
+    void setBlock(int32_t x, int32_t y, int32_t z, Block block);
+    bool isSolid(int32_t x, int32_t y, int32_t z) const;
+    float groundHeight(float x, float z) const;
+    std::vector<IVec3> visibleBlocksNear(Vec3 center, int32_t radius) const;
+    void collectOverridesInRegion(IVec3 origin, IVec3 size, std::vector<BlockOverride>& out) const;
+
+    uint32_t seed() const { return m_seed; }
+    std::size_t overrideCount() const { return m_overrides.size(); }
+    uint64_t version() const { return m_version; }
+
+private:
+    uint32_t m_seed = 1;
+    uint64_t m_version = 1;
+    std::unordered_map<BlockCoord, Block, BlockCoordHash> m_overrides;
+
+    Block generatedBlock(int32_t x, int32_t y, int32_t z) const;
+    float terrainHeight(int32_t x, int32_t z) const;
+};
+
+} // namespace blocklab
