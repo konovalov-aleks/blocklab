@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -31,6 +32,7 @@ struct BenchmarkConfig {
     double visualFps = 30.0;
     int32_t minActionSteps = 20;
     int32_t maxActionSteps = 160;
+    uint64_t initialOverrides = 1000;
     blocklab::RenderConfig renderConfig;
 };
 
@@ -168,6 +170,7 @@ std::optional<std::pair<int32_t, int32_t>> parseActionSteps(std::string_view tex
                 "  --visualize              Open SDL3 GPU window and render the environment.\n"
                 "  --visual-fps N           Max visual presentation rate, default 30.\n"
                 "  --action-steps A:B       Hold sampled movement/look for A..B steps, default 20:160.\n"
+                "  --initial-overrides N    Apply N clustered block overrides after each reset, default 1000.\n"
                 "  --resolution WxH         Render/window resolution for --visualize, default 320x180.\n"
                 "  -h, --help               Show this help.\n");
     std::exit(exitCode);
@@ -210,6 +213,13 @@ BenchmarkConfig parseArgs(int argc, char** argv)
             }
             config.minActionSteps = actionSteps->first;
             config.maxActionSteps = actionSteps->second;
+        } else if (arg == "--initial-overrides" || arg.starts_with("--initial-overrides=")) {
+            auto initialOverrides = parseUint64(optionValue(i, argc, argv, arg, "--initial-overrides"));
+            if (!initialOverrides) [[unlikely]] {
+                std::fprintf(stderr, "Invalid --initial-overrides value.\n");
+                std::exit(EXIT_FAILURE);
+            }
+            config.initialOverrides = *initialOverrides;
         } else if (arg == "--seconds" || arg.starts_with("--seconds=")) {
             auto seconds = parseDouble(optionValue(i, argc, argv, arg, "--seconds"));
             if (!seconds || *seconds < 0.0) [[unlikely]] {
@@ -281,6 +291,41 @@ bool handleVisualEvents(blocklab::Renderer& renderer)
     return true;
 }
 
+uint64_t applyInitialOverrides(blocklab::Environment& env, const BenchmarkConfig& config, uint32_t seed)
+{
+    if (!config.initialOverrides)
+        return 0;
+
+    blocklab::World& world = env.mutableWorld();
+    const std::size_t before = world.overrideCount();
+    std::mt19937 rng(seed ^ 0x8f3d5b79U);
+    std::normal_distribution<float> horizontal(0.0f, 8.0f);
+    std::uniform_int_distribution<int32_t> verticalOffset(-8, 4);
+    constexpr uint64_t maxAttemptsMultiplier = 64;
+    const uint64_t maxAttempts = config.initialOverrides * maxAttemptsMultiplier + 1024;
+
+    for (uint64_t attempts = 0; world.overrideCount() - before < config.initialOverrides && attempts < maxAttempts;
+        ++attempts) {
+        const int32_t x = std::clamp(static_cast<int32_t>(std::lround(horizontal(rng))), -28, 28);
+        const int32_t z = std::clamp(static_cast<int32_t>(std::lround(horizontal(rng))), -28, 28);
+        const int32_t surfaceY
+            = std::max(0, blocklab::floorToInt(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1);
+        const int32_t y = std::clamp(surfaceY + verticalOffset(rng), 0, blocklab::Chunk::SizeY - 1);
+        const blocklab::Block current = world.getBlock(x, y, z);
+        const blocklab::Block replacement
+            = current == blocklab::Block::Air ? blocklab::Block::Stone : blocklab::Block::Air;
+        world.setBlock(x, y, z, replacement);
+    }
+
+    return static_cast<uint64_t>(world.overrideCount() - before);
+}
+
+uint64_t resetEnvironment(blocklab::Environment& env, const BenchmarkConfig& config, uint32_t seed)
+{
+    env.reset(seed);
+    return applyInitialOverrides(env, config, seed);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -309,7 +354,7 @@ int main(int argc, char** argv)
         renderer = std::make_unique<blocklab::Renderer>(window, renderConfig);
         env.setObservationRenderer(renderer.get());
     }
-    env.reset(config.seed);
+    uint64_t lastInitialOverridesApplied = resetEnvironment(env, config, config.seed);
 
     using Clock = std::chrono::steady_clock;
     const auto startedAt = Clock::now();
@@ -336,7 +381,8 @@ int main(int argc, char** argv)
 
         if (result.terminated || result.truncated) {
             ++stats.episodes;
-            env.reset(config.seed + static_cast<uint32_t>(stats.episodes));
+            lastInitialOverridesApplied
+                = resetEnvironment(env, config, config.seed + static_cast<uint32_t>(stats.episodes));
             lastBlocksCollected = env.agent().state().blocksCollected;
             lastBlocksPlaced = env.agent().state().blocksPlaced;
         }
@@ -379,13 +425,18 @@ int main(int argc, char** argv)
                 "  episodes: %llu\n"
                 "  blocks_collected: %llu\n"
                 "  blocks_placed: %llu\n"
+                "  initial_overrides_requested: %llu\n"
+                "  initial_overrides_applied: %llu\n"
+                "  world_overrides: %llu\n"
                 "  observation_version: %llu\n"
                 "  observation_handle: 0x%llx\n",
         static_cast<unsigned long long>(stats.steps), totalSeconds, static_cast<double>(stats.steps) / totalSeconds,
         stats.reward / static_cast<double>(std::max<uint64_t>(1, stats.steps)),
         static_cast<unsigned long long>(stats.episodes), static_cast<unsigned long long>(stats.blocksCollected),
-        static_cast<unsigned long long>(stats.blocksPlaced), static_cast<unsigned long long>(observation.version),
-        static_cast<unsigned long long>(observation.handle));
+        static_cast<unsigned long long>(stats.blocksPlaced), static_cast<unsigned long long>(config.initialOverrides),
+        static_cast<unsigned long long>(lastInitialOverridesApplied),
+        static_cast<unsigned long long>(env.world().overrideCount()),
+        static_cast<unsigned long long>(observation.version), static_cast<unsigned long long>(observation.handle));
 
     if (window) {
         SDL_DestroyWindow(window);

@@ -52,9 +52,10 @@ The `blocklab_benchmark` CLI executable runs a simple agent in the environment a
 ./build/blocklab_benchmark --seconds 30
 ./build/blocklab_benchmark --steps 1000000 --report-interval 5
 ./build/blocklab_benchmark --action-steps 60:240
+./build/blocklab_benchmark --initial-overrides 10000
 ```
 
-By default, no window is opened, but the environment still renders observation into a hidden SDL3 GPU target and returns a texture handle. Add `--no-render` to compare against pure CPU simulation.
+By default, no window is opened, but the environment still renders observation into a hidden SDL3 GPU target and returns a texture handle. The benchmark also seeds the world with `1000` clustered block overrides after each reset, so long-running measurements include non-empty world-diff lookup costs. Use `--initial-overrides 0` for the old clean-world baseline. Add `--no-render` to compare against pure CPU simulation.
 
 For a visual smoke check, enable the SDL3 GPU viewer:
 
@@ -63,7 +64,7 @@ For a visual smoke check, enable the SDL3 GPU viewer:
 ./build/blocklab_benchmark --visualize --visual-fps 30
 ```
 
-The final report includes `steps_per_second`, average reward, episode count, and accumulated dig/place counters. The benchmark agent holds only movement and camera rotation for several steps to test sustained motion; `dig`, `place`, and `jump` remain one-tick actions.
+The final report includes `steps_per_second`, average reward, episode count, accumulated dig/place counters, and the requested/applied/current override counts. The benchmark agent holds only movement and camera rotation for several steps to test sustained motion; `dig`, `place`, and `jump` remain one-tick actions.
 
 If you opt into system SDL3 on macOS, Homebrew is usually enough:
 
