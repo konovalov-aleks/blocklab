@@ -24,6 +24,23 @@ namespace {
         return static_cast<float>(hash & 0x00ffffffU) / static_cast<float>(0x00ffffffU) * 2.0f - 1.0f;
     }
 
+    int32_t floorDiv(int32_t value, int32_t divisor)
+    {
+        if (value >= 0)
+            return value / divisor;
+        return -((-value + divisor - 1) / divisor);
+    }
+
+    int32_t overrideClusterLocalCoord(int32_t value, int32_t cluster)
+    {
+        return value - cluster * OverrideCluster::Edge;
+    }
+
+    int32_t overrideClusterIndex(int32_t x, int32_t y, int32_t z)
+    {
+        return x + z * OverrideCluster::Edge + y * OverrideCluster::Edge * OverrideCluster::Edge;
+    }
+
 } // namespace
 
 Block Chunk::get(int32_t x, int32_t y, int32_t z) const
@@ -50,6 +67,37 @@ std::size_t BlockCoordHash::operator()(const BlockCoord& coord) const noexcept
     return static_cast<std::size_t>(hash);
 }
 
+OverrideCluster::OverrideCluster() { m_blocks.fill(NoOverride); }
+
+std::optional<Block> OverrideCluster::get(std::size_t index) const
+{
+    const uint8_t stored = m_blocks[index];
+    if (stored == NoOverride)
+        return std::nullopt;
+    return static_cast<Block>(stored);
+}
+
+bool OverrideCluster::set(std::size_t index, Block block)
+{
+    uint8_t& stored = m_blocks[index];
+    const bool inserted = stored == NoOverride;
+    if (inserted)
+        ++m_count;
+    stored = static_cast<uint8_t>(block);
+    return inserted;
+}
+
+bool OverrideCluster::clear(std::size_t index)
+{
+    uint8_t& stored = m_blocks[index];
+    if (stored == NoOverride)
+        return false;
+
+    stored = NoOverride;
+    --m_count;
+    return true;
+}
+
 World::World(uint32_t seed)
     : m_seed(seed)
 {
@@ -58,15 +106,29 @@ World::World(uint32_t seed)
 void World::reset(uint32_t seed)
 {
     m_seed = seed;
-    m_overrides.clear();
+    m_overrideColumns.clear();
+    m_overrideCount = 0;
     ++m_version;
 }
 
 Block World::getBlock(int32_t x, int32_t y, int32_t z) const
 {
-    const auto it = m_overrides.find({ x, y, z });
-    if (it != m_overrides.end())
-        return it->second;
+    const int32_t clusterX = floorDiv(x, OverrideCluster::Edge);
+    const int32_t clusterY = floorDiv(y, OverrideCluster::Edge);
+    const int32_t clusterZ = floorDiv(z, OverrideCluster::Edge);
+    const auto columnIt = m_overrideColumns.find(clusterX, clusterZ);
+    if (columnIt != m_overrideColumns.end()) {
+        const int32_t localX = overrideClusterLocalCoord(x, clusterX);
+        const int32_t localY = overrideClusterLocalCoord(y, clusterY);
+        const int32_t localZ = overrideClusterLocalCoord(z, clusterZ);
+        const auto clusterIt = columnIt->clusters.find(clusterY);
+        if (clusterIt != columnIt->clusters.end()) {
+            const std::optional<Block> stored
+                = clusterIt->second.get(static_cast<std::size_t>(overrideClusterIndex(localX, localY, localZ)));
+            if (stored)
+                return *stored;
+        }
+    }
     return generatedBlock(x, y, z);
 }
 
@@ -75,14 +137,43 @@ void World::setBlock(int32_t x, int32_t y, int32_t z, Block block)
     if (y < 0 || y >= Chunk::SizeY)
         return;
 
-    const BlockCoord coord { x, y, z };
     if (getBlock(x, y, z) == block)
         return;
 
-    if (generatedBlock(x, y, z) == block)
-        m_overrides.erase(coord);
-    else
-        m_overrides[coord] = block;
+    const int32_t clusterX = floorDiv(x, OverrideCluster::Edge);
+    const int32_t clusterY = floorDiv(y, OverrideCluster::Edge);
+    const int32_t clusterZ = floorDiv(z, OverrideCluster::Edge);
+    const int32_t localX = overrideClusterLocalCoord(x, clusterX);
+    const int32_t localY = overrideClusterLocalCoord(y, clusterY);
+    const int32_t localZ = overrideClusterLocalCoord(z, clusterZ);
+    const std::size_t localIndex = static_cast<std::size_t>(overrideClusterIndex(localX, localY, localZ));
+
+    if (generatedBlock(x, y, z) == block) {
+        auto columnIt = m_overrideColumns.find(clusterX, clusterZ);
+        if (columnIt != m_overrideColumns.end()) {
+            auto clusterIt = columnIt->clusters.find(clusterY);
+            if (clusterIt != columnIt->clusters.end()) {
+                if (clusterIt->second.clear(localIndex)) {
+                    --m_overrideCount;
+                    if (clusterIt->second.isEmpty()) {
+                        columnIt->clusters.erase(clusterIt);
+                        if (columnIt->isEmpty())
+                            m_overrideColumns.erase(columnIt);
+                    }
+                }
+            }
+        }
+    } else {
+        auto columnIt = m_overrideColumns.find(clusterX, clusterZ);
+        if (columnIt == m_overrideColumns.end()) {
+            m_overrideColumns.insert(clusterX, clusterZ, OverrideClusterColumn { });
+            columnIt = m_overrideColumns.find(clusterX, clusterZ);
+        }
+
+        OverrideCluster& cluster = columnIt->clusters[clusterY];
+        if (cluster.set(localIndex, block))
+            ++m_overrideCount;
+    }
 
     ++m_version;
 }
@@ -127,15 +218,63 @@ std::vector<IVec3> World::visibleBlocksNear(Vec3 center, int32_t radius) const
 void World::collectOverridesInRegion(IVec3 origin, IVec3 size, std::vector<BlockOverride>& out) const
 {
     out.clear();
-    for (const auto& [coord, block] : m_overrides) {
-        if (coord.x < origin.x || coord.y < origin.y || coord.z < origin.z || coord.x >= origin.x + size.x
-            || coord.y >= origin.y + size.y || coord.z >= origin.z + size.z) {
-            continue;
+    const IVec3 end = origin + size;
+    const int32_t startClusterX = floorDiv(origin.x, OverrideCluster::Edge);
+    const int32_t startClusterY = floorDiv(origin.y, OverrideCluster::Edge);
+    const int32_t startClusterZ = floorDiv(origin.z, OverrideCluster::Edge);
+    const int32_t endClusterX = floorDiv(end.x - 1, OverrideCluster::Edge);
+    const int32_t endClusterY = floorDiv(end.y - 1, OverrideCluster::Edge);
+    const int32_t endClusterZ = floorDiv(end.z - 1, OverrideCluster::Edge);
+
+    for (int32_t clusterZ = startClusterZ; clusterZ <= endClusterZ; ++clusterZ) {
+        for (int32_t clusterX = startClusterX; clusterX <= endClusterX; ++clusterX) {
+            const auto columnIt = m_overrideColumns.find(clusterX, clusterZ);
+            if (columnIt == m_overrideColumns.end())
+                continue;
+
+            const auto startYIt = columnIt->clusters.lower_bound(startClusterY);
+            const auto endYIt = columnIt->clusters.upper_bound(endClusterY);
+            for (auto clusterIt = startYIt; clusterIt != endYIt; ++clusterIt) {
+                const int32_t clusterY = clusterIt->first;
+                const OverrideCluster& cluster = clusterIt->second;
+                const IVec3 clusterOrigin {
+                    clusterX * OverrideCluster::Edge,
+                    clusterY * OverrideCluster::Edge,
+                    clusterZ * OverrideCluster::Edge,
+                };
+                const IVec3 clusterEnd
+                    = clusterOrigin + IVec3 { OverrideCluster::Edge, OverrideCluster::Edge, OverrideCluster::Edge };
+                if (clusterEnd.x <= origin.x || clusterEnd.y <= origin.y || clusterEnd.z <= origin.z
+                    || clusterOrigin.x >= end.x || clusterOrigin.y >= end.y || clusterOrigin.z >= end.z) {
+                    continue;
+                }
+
+                const int32_t localStartX = std::max(0, origin.x - clusterOrigin.x);
+                const int32_t localStartY = std::max(0, origin.y - clusterOrigin.y);
+                const int32_t localStartZ = std::max(0, origin.z - clusterOrigin.z);
+                const int32_t localEndX = std::min(OverrideCluster::Edge, end.x - clusterOrigin.x);
+                const int32_t localEndY = std::min(OverrideCluster::Edge, end.y - clusterOrigin.y);
+                const int32_t localEndZ = std::min(OverrideCluster::Edge, end.z - clusterOrigin.z);
+                for (int32_t y = localStartY; y < localEndY; ++y) {
+                    for (int32_t z = localStartZ; z < localEndZ; ++z) {
+                        for (int32_t x = localStartX; x < localEndX; ++x) {
+                            const std::optional<Block> stored
+                                = cluster.get(static_cast<std::size_t>(overrideClusterIndex(x, y, z)));
+                            if (!stored)
+                                continue;
+                            out.push_back({
+                                .coord = {
+                                    .x = clusterOrigin.x + x,
+                                    .y = clusterOrigin.y + y,
+                                    .z = clusterOrigin.z + z,
+                                },
+                                .block = *stored,
+                            });
+                        }
+                    }
+                }
+            }
         }
-        out.push_back({
-            .coord = coord,
-            .block = block,
-        });
     }
 }
 

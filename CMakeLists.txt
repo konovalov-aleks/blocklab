@@ -64,6 +64,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glm)
 
+FetchContent_Declare(
+    Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG v3.7.1
+    GIT_PROGRESS TRUE
+)
+FetchContent_MakeAvailable(Catch2)
+
 if(APPLE)
     set(BLOCKLAB_SHADER_DEST MSL)
     set(BLOCKLAB_SHADER_EXTENSION msl)
@@ -193,9 +201,23 @@ add_executable(blocklab_smoke_test
 )
 
 target_link_libraries(blocklab_smoke_test PRIVATE blocklab_env)
+target_link_libraries(blocklab_smoke_test PRIVATE Catch2::Catch2WithMain)
 
 target_compile_options(blocklab_smoke_test PRIVATE
     $<$<CXX_COMPILER_ID:Clang,AppleClang>:-Wall -Wextra -Wpedantic>
 )
 
 add_test(NAME blocklab_smoke_test COMMAND blocklab_smoke_test)
+
+add_executable(blocklab_quad_tree_test
+    tests/blocklab_quad_tree_test.cpp
+)
+
+target_link_libraries(blocklab_quad_tree_test PRIVATE blocklab_env)
+target_link_libraries(blocklab_quad_tree_test PRIVATE Catch2::Catch2WithMain)
+
+target_compile_options(blocklab_quad_tree_test PRIVATE
+    $<$<CXX_COMPILER_ID:Clang,AppleClang>:-Wall -Wextra -Wpedantic>
+)
+
+add_test(NAME blocklab_quad_tree_test COMMAND blocklab_quad_tree_test)
