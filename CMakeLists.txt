@@ -120,6 +120,9 @@ blocklab_compile_shader(blocklab_mesh_fragment_shader shaders/mesh.frag.hlsl fra
 
 add_library(blocklab_env
     src/Agent.cpp
+    src/characters/Character.cpp
+    src/characters/NPC.cpp
+    src/characters/PigCharacter.cpp
     src/Environment.cpp
     src/World.cpp
 )

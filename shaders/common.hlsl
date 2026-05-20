@@ -21,10 +21,10 @@ enum AtlasTile {
     TileDirt = 1,
     TileStone = 2,
     TileGrassSide = 3,
-    TileSand = 4,
+    TilePigSkin = 4,
     TileWood = 5,
     TileLeaves = 6,
-    TileWater = 7,
+    TilePigFace = 7,
 };
 
 cbuffer Params : register(b0, space2)

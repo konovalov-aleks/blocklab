@@ -1,5 +1,7 @@
 #include "blocklab/World.h"
 
+#include "blocklab/characters/PigCharacter.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -41,6 +43,14 @@ namespace {
         return x + z * OverrideCluster::Edge + y * OverrideCluster::Edge * OverrideCluster::Edge;
     }
 
+    OverrideCluster::Mask overrideClusterColumnMask(int32_t x, int32_t z, int32_t minY, int32_t maxY)
+    {
+        OverrideCluster::Mask mask = 0;
+        for (int32_t y = minY; y <= maxY; ++y)
+            mask |= OverrideCluster::Mask { 1 } << static_cast<std::size_t>(overrideClusterIndex(x, y, z));
+        return mask;
+    }
+
 } // namespace
 
 Block Chunk::get(int32_t x, int32_t y, int32_t z) const
@@ -69,31 +79,47 @@ std::size_t BlockCoordHash::operator()(const BlockCoord& coord) const noexcept
 
 OverrideCluster::OverrideCluster() { m_blocks.fill(NoOverride); }
 
+OverrideCluster::Mask OverrideCluster::bitFor(std::size_t index) { return Mask { 1 } << index; }
+
+bool OverrideCluster::hasOverride(std::size_t index) const { return (m_overrideMask & bitFor(index)) != 0; }
+
+bool OverrideCluster::hasSolidOverride(std::size_t index) const { return (m_solidMask & bitFor(index)) != 0; }
+
 std::optional<Block> OverrideCluster::get(std::size_t index) const
 {
-    const uint8_t stored = m_blocks[index];
-    if (stored == NoOverride)
+    if (!hasOverride(index))
         return std::nullopt;
+    const uint8_t stored = m_blocks[index];
     return static_cast<Block>(stored);
 }
 
 bool OverrideCluster::set(std::size_t index, Block block)
 {
     uint8_t& stored = m_blocks[index];
-    const bool inserted = stored == NoOverride;
+    const Mask bit = bitFor(index);
+    const bool inserted = (m_overrideMask & bit) == 0;
     if (inserted)
         ++m_count;
+
+    m_overrideMask |= bit;
+    if (block == Block::Air)
+        m_solidMask &= ~bit;
+    else
+        m_solidMask |= bit;
+
     stored = static_cast<uint8_t>(block);
     return inserted;
 }
 
 bool OverrideCluster::clear(std::size_t index)
 {
-    uint8_t& stored = m_blocks[index];
-    if (stored == NoOverride)
+    const Mask bit = bitFor(index);
+    if ((m_overrideMask & bit) == 0)
         return false;
 
-    stored = NoOverride;
+    m_blocks[index] = NoOverride;
+    m_overrideMask &= ~bit;
+    m_solidMask &= ~bit;
     --m_count;
     return true;
 }
@@ -108,10 +134,20 @@ void World::reset(uint32_t seed)
     m_seed = seed;
     m_overrideColumns.clear();
     m_overrideCount = 0;
+    m_nextEntityId = 1;
+    m_characters.clear();
+    spawnTestPigs();
     ++m_version;
 }
 
 Block World::getBlock(int32_t x, int32_t y, int32_t z) const
+{
+    if (const std::optional<Block> block = overriddenBlock(x, y, z))
+        return *block;
+    return generatedBlock(x, y, z);
+}
+
+std::optional<Block> World::overriddenBlock(int32_t x, int32_t y, int32_t z) const
 {
     const int32_t clusterX = floorDiv(x, OverrideCluster::Edge);
     const int32_t clusterY = floorDiv(y, OverrideCluster::Edge);
@@ -129,7 +165,7 @@ Block World::getBlock(int32_t x, int32_t y, int32_t z) const
                 return *stored;
         }
     }
-    return generatedBlock(x, y, z);
+    return std::nullopt;
 }
 
 void World::setBlock(int32_t x, int32_t y, int32_t z, Block block)
@@ -179,6 +215,103 @@ void World::setBlock(int32_t x, int32_t y, int32_t z, Block block)
 }
 
 bool World::isSolid(int32_t x, int32_t y, int32_t z) const { return getBlock(x, y, z) != Block::Air; }
+
+OverrideCluster::Mask World::generatedSolidColumnMask(
+    int32_t x, int32_t z, int32_t clusterY, int32_t localX, int32_t localZ, int32_t localMinY, int32_t localMaxY) const
+{
+    OverrideCluster::Mask mask = 0;
+    const int32_t clusterOriginY = clusterY * OverrideCluster::Edge;
+    for (int32_t localY = localMinY; localY <= localMaxY; ++localY) {
+        if (generatedBlock(x, clusterOriginY + localY, z) == Block::Air)
+            continue;
+        mask |= OverrideCluster::Mask { 1 } << static_cast<std::size_t>(overrideClusterIndex(localX, localY, localZ));
+    }
+    return mask;
+}
+
+bool World::hasSolidBlockInArea(IVec3 min, IVec3 max) const
+{
+    if (max.y < 0)
+        return true;
+    if (min.y >= Chunk::SizeY)
+        return false;
+
+    min.y = std::max(min.y, 0);
+    max.y = std::min(max.y, Chunk::SizeY - 1);
+
+    if (m_overrideCount == 0) {
+        for (int32_t z = min.z; z <= max.z; ++z) {
+            for (int32_t x = min.x; x <= max.x; ++x) {
+                for (int32_t y = min.y; y <= max.y; ++y) {
+                    if (generatedBlock(x, y, z) != Block::Air)
+                        return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    const int32_t startClusterY = floorDiv(min.y, OverrideCluster::Edge);
+    const int32_t endClusterY = floorDiv(max.y, OverrideCluster::Edge);
+
+    for (int32_t z = min.z; z <= max.z; ++z) {
+        const int32_t clusterZ = floorDiv(z, OverrideCluster::Edge);
+        const int32_t localZ = overrideClusterLocalCoord(z, clusterZ);
+        for (int32_t x = min.x; x <= max.x; ++x) {
+            const int32_t clusterX = floorDiv(x, OverrideCluster::Edge);
+            const int32_t localX = overrideClusterLocalCoord(x, clusterX);
+            const auto columnIt = m_overrideColumns.find(clusterX, clusterZ);
+
+            for (int32_t clusterY = startClusterY; clusterY <= endClusterY; ++clusterY) {
+                if (columnIt == m_overrideColumns.end())
+                    break;
+
+                const auto clusterIt = columnIt->clusters.find(clusterY);
+                if (clusterIt == columnIt->clusters.end())
+                    continue;
+
+                const int32_t clusterOriginY = clusterY * OverrideCluster::Edge;
+                const int32_t localMinY = std::max(0, min.y - clusterOriginY);
+                const int32_t localMaxY = std::min(OverrideCluster::Edge - 1, max.y - clusterOriginY);
+                const OverrideCluster::Mask queryMask = overrideClusterColumnMask(localX, localZ, localMinY, localMaxY);
+                if (clusterIt->second.hasSolidOverrideInMask(queryMask))
+                    return true;
+            }
+
+            for (int32_t clusterY = startClusterY; clusterY <= endClusterY; ++clusterY) {
+                const int32_t clusterOriginY = clusterY * OverrideCluster::Edge;
+                const int32_t localMinY = std::max(0, min.y - clusterOriginY);
+                const int32_t localMaxY = std::min(OverrideCluster::Edge - 1, max.y - clusterOriginY);
+                const OverrideCluster::Mask generatedMask
+                    = generatedSolidColumnMask(x, z, clusterY, localX, localZ, localMinY, localMaxY);
+                if (generatedMask == 0)
+                    continue;
+
+                OverrideCluster::Mask airOverrideMask = 0;
+                if (columnIt != m_overrideColumns.end()) {
+                    const auto clusterIt = columnIt->clusters.find(clusterY);
+                    if (clusterIt != columnIt->clusters.end()) {
+                        const OverrideCluster& cluster = clusterIt->second;
+                        airOverrideMask = (cluster.overrideMask() & ~cluster.solidMask()) & generatedMask;
+                    }
+                }
+                if ((generatedMask & ~airOverrideMask) != 0)
+                    return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+void World::updateCharacters(float dt, Vec3 threatPosition)
+{
+    for (std::unique_ptr<NPC>& character : m_characters) {
+        if (!character->isAlive())
+            continue;
+        character->update(*this, threatPosition, dt);
+    }
+}
 
 float World::groundHeight(float x, float z) const
 {
@@ -306,6 +439,27 @@ float World::terrainHeight(int32_t x, int32_t z) const
     const float diagonal = std::sin(static_cast<float>(x + z) * 0.08f + static_cast<float>(m_seed) * 0.001f) * 2.0f;
     const float rough = valueNoise(m_seed, x / 3, z / 3) * 0.55f;
     return 9.0f + low + high + diagonal + rough;
+}
+
+void World::spawnTestPigs()
+{
+    static constexpr int32_t PigCount = 32;
+    static constexpr float SpawnRadius = 14.0f;
+    static constexpr float MinAgentDistance = 3.5f;
+
+    for (int32_t i = 0; i < PigCount; ++i) {
+        const float angle = static_cast<float>(i) * 2.39996323f + static_cast<float>(m_seed % 97U) * 0.037f;
+        const float t = (static_cast<float>(i) + 0.5f) / static_cast<float>(PigCount);
+        const float radius = MinAgentDistance + std::sqrt(t) * (SpawnRadius - MinAgentDistance);
+        const float x = 0.5f + std::cos(angle) * radius;
+        const float z = 0.5f + std::sin(angle) * radius;
+        const Vec3 position {
+            x,
+            groundHeight(x, z) + 0.05f,
+            z,
+        };
+        m_characters.push_back(std::make_unique<PigCharacter>(m_nextEntityId++, position));
+    }
 }
 
 } // namespace blocklab

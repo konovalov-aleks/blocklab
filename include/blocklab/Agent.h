@@ -1,12 +1,11 @@
 #pragma once
 
 #include "blocklab/Math.h"
+#include "blocklab/characters/Character.h"
 
 #include <cstdint>
 
 namespace blocklab {
-
-class World;
 
 struct AgentAction {
     float forward = 0.0f;
@@ -28,8 +27,10 @@ struct AgentState {
     int32_t blocksPlaced = 0;
 };
 
-class Agent {
+class Agent final : public Character {
 public:
+    Agent();
+
     const AgentState& state() const { return m_state; }
     AgentState& mutableState() { return m_state; }
 
@@ -40,6 +41,7 @@ private:
     AgentState m_state;
 
     void interact(World& world, const AgentAction& action);
+    void syncStateFromBody();
 };
 
 } // namespace blocklab

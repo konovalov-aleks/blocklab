@@ -5,6 +5,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -24,16 +25,13 @@ namespace {
     constexpr uint32_t BytesPerBlock = sizeof(uint32_t);
     constexpr uint32_t VerticesPerBlock = 36;
     constexpr uint32_t MaxMeshVertices = RegionVolume * VerticesPerBlock;
+    constexpr uint32_t MaxEntityVertices = 8192;
+    constexpr uint32_t MaxEntityInstances = 256;
     constexpr uint32_t AtlasTileSize = 16;
     constexpr uint32_t AtlasColumns = 4;
     constexpr uint32_t AtlasRows = 2;
     constexpr uint32_t AtlasWidth = AtlasTileSize * AtlasColumns;
     constexpr uint32_t AtlasHeight = AtlasTileSize * AtlasRows;
-
-    struct MeshVertex {
-        Vec4 position;
-        Vec4 uvAndShade;
-    };
 
     struct Pixel {
         uint8_t r = 0;
@@ -47,10 +45,10 @@ namespace {
         Dirt = 1,
         Stone = 2,
         GrassSide = 3,
-        Sand = 4,
+        PigSkin = 4,
         Wood = 5,
         Leaves = 6,
-        Water = 7,
+        PigFace = 7,
     };
 
     struct ShaderBlob {
@@ -129,6 +127,18 @@ namespace {
 
     inline uint32_t tileIndex(AtlasTile tile) { return static_cast<uint32_t>(tile); }
 
+    Vec2 atlasUv(uint32_t tile, Vec2 uv)
+    {
+        const uint32_t tileX = tile % AtlasColumns;
+        const uint32_t tileY = tile / AtlasColumns;
+        const Vec2 tileOrigin {
+            static_cast<float>(tileX * AtlasTileSize),
+            static_cast<float>(tileY * AtlasTileSize),
+        };
+        return (tileOrigin + uv * static_cast<float>(AtlasTileSize - 1U) + Vec2 { 0.5f, 0.5f })
+            / Vec2 { static_cast<float>(AtlasWidth), static_cast<float>(AtlasHeight) };
+    }
+
     void setAtlasPixel(std::vector<Pixel>& pixels, AtlasTile tile, uint32_t x, uint32_t y, Pixel color)
     {
         const uint32_t index = tileIndex(tile);
@@ -158,10 +168,10 @@ namespace {
         fillNoisyTile(pixels, AtlasTile::Dirt, { 126, 86, 53, 255 }, 20);
         fillNoisyTile(pixels, AtlasTile::Stone, { 126, 130, 134, 255 }, 18);
         fillNoisyTile(pixels, AtlasTile::GrassSide, { 121, 83, 49, 255 }, 18);
-        fillNoisyTile(pixels, AtlasTile::Sand, { 198, 178, 106, 255 }, 13);
+        fillNoisyTile(pixels, AtlasTile::PigSkin, { 224, 143, 165, 255 }, 12);
         fillNoisyTile(pixels, AtlasTile::Wood, { 116, 76, 42, 255 }, 18);
         fillNoisyTile(pixels, AtlasTile::Leaves, { 65, 131, 67, 255 }, 24);
-        fillNoisyTile(pixels, AtlasTile::Water, { 72, 132, 204, 210 }, 16);
+        fillNoisyTile(pixels, AtlasTile::PigFace, { 224, 143, 165, 255 }, 10);
 
         for (uint32_t y = 0; y < AtlasTileSize; ++y) {
             for (uint32_t x = 0; x < AtlasTileSize; ++x) {
@@ -182,6 +192,21 @@ namespace {
             }
         }
 
+        for (uint32_t y = 0; y < AtlasTileSize; ++y) {
+            for (uint32_t x = 0; x < AtlasTileSize; ++x) {
+                const bool leftEye = x >= 4 && x <= 5 && y >= 5 && y <= 6;
+                const bool rightEye = x >= 10 && x <= 11 && y >= 5 && y <= 6;
+                const bool snout = x >= 5 && x <= 10 && y >= 9 && y <= 12;
+                const bool nostril = (x == 6 || x == 9) && y >= 10 && y <= 11;
+                if (leftEye || rightEye)
+                    setAtlasPixel(pixels, AtlasTile::PigFace, x, y, { 30, 24, 28, 255 });
+                else if (nostril)
+                    setAtlasPixel(pixels, AtlasTile::PigFace, x, y, { 106, 50, 68, 255 });
+                else if (snout)
+                    setAtlasPixel(pixels, AtlasTile::PigFace, x, y, { 238, 166, 186, 255 });
+            }
+        }
+
         return pixels;
     }
 
@@ -194,6 +219,8 @@ Renderer::Renderer(SDL_Window* window, RenderConfig config)
     , m_height(config.height)
 {
     m_gpuOverrides.reserve(MaxActiveOverrides);
+    m_entityVertices.reserve(MaxEntityVertices);
+    m_entityInstances.reserve(MaxEntityInstances);
     m_observation = {
         .width = m_config.width,
         .height = m_config.height,
@@ -342,6 +369,163 @@ void Renderer::rebuildMeshBuffer(const RenderParams& params, SDL_GPUCommandBuffe
     SDL_BindGPUComputeStorageBuffers(buildPass, 0, &blockBuffer, 1);
     SDL_DispatchGPUCompute(buildPass, (RegionVolume + GenerateThreadCount - 1) / GenerateThreadCount, 1, 1);
     SDL_EndGPUComputePass(buildPass);
+}
+
+void Renderer::appendEntityFace(
+    Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, uint32_t tile, float shade, float animationPhase, float animationYaw)
+{
+    const Vec2 uv0 = atlasUv(tile, { 0.0f, 0.0f });
+    const Vec2 uv1 = atlasUv(tile, { 0.0f, 1.0f });
+    const Vec2 uv2 = atlasUv(tile, { 1.0f, 1.0f });
+    const Vec2 uv3 = atlasUv(tile, { 1.0f, 0.0f });
+
+    m_entityVertices.push_back({ .position = { p0, animationPhase }, .uvAndShade = { uv0, shade, animationYaw } });
+    m_entityVertices.push_back({ .position = { p1, animationPhase }, .uvAndShade = { uv1, shade, animationYaw } });
+    m_entityVertices.push_back({ .position = { p2, animationPhase }, .uvAndShade = { uv2, shade, animationYaw } });
+    m_entityVertices.push_back({ .position = { p0, animationPhase }, .uvAndShade = { uv0, shade, animationYaw } });
+    m_entityVertices.push_back({ .position = { p2, animationPhase }, .uvAndShade = { uv2, shade, animationYaw } });
+    m_entityVertices.push_back({ .position = { p3, animationPhase }, .uvAndShade = { uv3, shade, animationYaw } });
+}
+
+void Renderer::appendEntityCuboid(Vec3 origin, Vec3 right, Vec3 forward, Vec3 min, Vec3 max, uint32_t sideTile,
+    uint32_t frontTile, float animationPhase, float animationYaw)
+{
+    const auto point
+        = [&](float x, float y, float z) { return origin + right * x + Vec3 { 0.0f, y, 0.0f } + forward * z; };
+
+    const Vec3 p000 = point(min.x, min.y, min.z);
+    const Vec3 p100 = point(max.x, min.y, min.z);
+    const Vec3 p010 = point(min.x, max.y, min.z);
+    const Vec3 p110 = point(max.x, max.y, min.z);
+    const Vec3 p001 = point(min.x, min.y, max.z);
+    const Vec3 p101 = point(max.x, min.y, max.z);
+    const Vec3 p011 = point(min.x, max.y, max.z);
+    const Vec3 p111 = point(max.x, max.y, max.z);
+
+    appendEntityFace(p010, p011, p111, p110, sideTile, 1.0f, animationPhase, animationYaw);
+    appendEntityFace(p000, p100, p101, p001, sideTile, 0.48f, animationPhase, animationYaw);
+    appendEntityFace(p110, p100, p101, p111, sideTile, 0.78f, animationPhase, animationYaw);
+    appendEntityFace(p010, p011, p001, p000, sideTile, 0.78f, animationPhase, animationYaw);
+    appendEntityFace(p011, p001, p101, p111, frontTile, 0.68f, animationPhase, animationYaw);
+    appendEntityFace(p110, p100, p000, p010, sideTile, 0.68f, animationPhase, animationYaw);
+}
+
+void Renderer::uploadStaticEntityMesh()
+{
+    m_entityVertices.clear();
+    const uint32_t pigSkinTile = tileIndex(AtlasTile::PigSkin);
+    const uint32_t pigFaceTile = tileIndex(AtlasTile::PigFace);
+    const Vec3 base { };
+    const Vec3 right { 1.0f, 0.0f, 0.0f };
+    const Vec3 forward { 0.0f, 0.0f, 1.0f };
+
+    appendEntityCuboid(
+        base, right, forward, { -0.36f, 0.24f, -0.58f }, { 0.36f, 0.78f, 0.58f }, pigSkinTile, pigSkinTile, 0.0f, 0.0f);
+    appendEntityCuboid(
+        base, right, forward, { -0.30f, 0.34f, 0.50f }, { 0.30f, 0.84f, 0.98f }, pigSkinTile, pigFaceTile, 0.0f, 0.0f);
+    appendEntityCuboid(base, right, forward, { -0.31f, 0.00f, -0.45f }, { -0.15f, 0.28f, -0.25f }, pigSkinTile,
+        pigSkinTile, 2.0f, 0.0f);
+    appendEntityCuboid(base, right, forward, { 0.15f, 0.00f, -0.45f }, { 0.31f, 0.28f, -0.25f }, pigSkinTile,
+        pigSkinTile, -2.0f, 0.0f);
+    appendEntityCuboid(base, right, forward, { -0.31f, 0.00f, 0.25f }, { -0.15f, 0.28f, 0.45f }, pigSkinTile,
+        pigSkinTile, -2.0f, 0.0f);
+    appendEntityCuboid(
+        base, right, forward, { 0.15f, 0.00f, 0.25f }, { 0.31f, 0.28f, 0.45f }, pigSkinTile, pigSkinTile, 2.0f, 0.0f);
+
+    m_entityVertexCount = static_cast<uint32_t>(m_entityVertices.size());
+    const uint32_t uploadSize = m_entityVertexCount * static_cast<uint32_t>(sizeof(MeshVertex));
+    const SDL_GPUTransferBufferCreateInfo transferBufferInfo {
+        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+        .size = uploadSize,
+    };
+    SDL_GPUTransferBuffer* transferBuffer = SDL_CreateGPUTransferBuffer(m_device, &transferBufferInfo);
+    if (!transferBuffer) [[unlikely]]
+        throw std::runtime_error(SDL_GetError());
+
+    void* mapped = SDL_MapGPUTransferBuffer(m_device, transferBuffer, true);
+    if (!mapped) [[unlikely]] {
+        SDL_ReleaseGPUTransferBuffer(m_device, transferBuffer);
+        throw std::runtime_error(SDL_GetError());
+    }
+    std::memcpy(mapped, m_entityVertices.data(), uploadSize);
+    SDL_UnmapGPUTransferBuffer(m_device, transferBuffer);
+
+    SDL_GPUCommandBuffer* commandBuffer = SDL_AcquireGPUCommandBuffer(m_device);
+    if (!commandBuffer) [[unlikely]] {
+        SDL_ReleaseGPUTransferBuffer(m_device, transferBuffer);
+        throw std::runtime_error(SDL_GetError());
+    }
+
+    SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(commandBuffer);
+    const SDL_GPUTransferBufferLocation source {
+        .transfer_buffer = transferBuffer,
+        .offset = 0,
+    };
+    const SDL_GPUBufferRegion destination {
+        .buffer = m_entityVertexBuffer,
+        .offset = 0,
+        .size = uploadSize,
+    };
+    SDL_UploadToGPUBuffer(copyPass, &source, &destination, false);
+    SDL_EndGPUCopyPass(copyPass);
+    SDL_SubmitGPUCommandBuffer(commandBuffer);
+    SDL_WaitForGPUIdle(m_device);
+    SDL_ReleaseGPUTransferBuffer(m_device, transferBuffer);
+}
+
+void Renderer::uploadEntityInstances(const World& world, SDL_GPUCommandBuffer* commandBuffer)
+{
+    m_entityInstances.clear();
+    m_entityInstances.push_back({
+        .positionAndYaw = { 0.0f, 0.0f, 0.0f, 0.0f },
+        .velocityAndKind = { 0.0f, 0.0f, 0.0f, 0.0f },
+    });
+
+    for (const std::unique_ptr<NPC>& character : world.characters()) {
+        if (!character->isAlive())
+            continue;
+
+        const CharacterSnapshot snapshot = character->snapshot();
+        if (snapshot.kind != CharacterKind::Pig)
+            continue;
+
+        const Vec3 forward = glm::normalize(Vec3 { snapshot.forward.x, 0.0f, snapshot.forward.z });
+        const float forwardYaw = std::atan2(forward.x, forward.z);
+        const float horizontalSpeed = glm::length(Vec2 { snapshot.velocity.x, snapshot.velocity.z });
+        m_entityInstances.push_back({
+            .positionAndYaw = { snapshot.position, forwardYaw },
+            .velocityAndKind = { horizontalSpeed, 0.0f, 0.0f, 1.0f },
+        });
+
+        if (m_entityInstances.size() >= MaxEntityInstances)
+            break;
+    }
+
+    m_entityInstanceCount = static_cast<uint32_t>(m_entityInstances.size() - 1);
+    if (m_entityInstances.empty())
+        return;
+
+    const uint32_t uploadSize = static_cast<uint32_t>(m_entityInstances.size() * sizeof(EntityInstance));
+    void* mapped = SDL_MapGPUTransferBuffer(m_device, m_entityInstanceTransferBuffer, true);
+    if (!mapped) [[unlikely]] {
+        m_entityInstanceCount = 0;
+        return;
+    }
+    std::memcpy(mapped, m_entityInstances.data(), uploadSize);
+    SDL_UnmapGPUTransferBuffer(m_device, m_entityInstanceTransferBuffer);
+
+    SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(commandBuffer);
+    const SDL_GPUTransferBufferLocation source {
+        .transfer_buffer = m_entityInstanceTransferBuffer,
+        .offset = 0,
+    };
+    const SDL_GPUBufferRegion destination {
+        .buffer = m_entityInstanceBuffer,
+        .offset = 0,
+        .size = uploadSize,
+    };
+    SDL_UploadToGPUBuffer(copyPass, &source, &destination, false);
+    SDL_EndGPUCopyPass(copyPass);
 }
 
 void Renderer::uploadBlockAtlas()
@@ -504,6 +688,31 @@ void Renderer::initializeGpuResources()
     if (!m_meshDrawBuffer) [[unlikely]]
         throw std::runtime_error(SDL_GetError());
 
+    const SDL_GPUBufferCreateInfo entityVertexBufferInfo {
+        .usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ,
+        .size = MaxEntityVertices * static_cast<uint32_t>(sizeof(MeshVertex)),
+    };
+    m_entityVertexBuffer = SDL_CreateGPUBuffer(m_device, &entityVertexBufferInfo);
+    if (!m_entityVertexBuffer) [[unlikely]]
+        throw std::runtime_error(SDL_GetError());
+
+    const SDL_GPUBufferCreateInfo entityInstanceBufferInfo {
+        .usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ,
+        .size = MaxEntityInstances * static_cast<uint32_t>(sizeof(EntityInstance)),
+    };
+    m_entityInstanceBuffer = SDL_CreateGPUBuffer(m_device, &entityInstanceBufferInfo);
+    if (!m_entityInstanceBuffer) [[unlikely]]
+        throw std::runtime_error(SDL_GetError());
+
+    const SDL_GPUTransferBufferCreateInfo entityInstanceTransferBufferInfo {
+        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+        .size = MaxEntityInstances * static_cast<uint32_t>(sizeof(EntityInstance)),
+    };
+    m_entityInstanceTransferBuffer = SDL_CreateGPUTransferBuffer(m_device, &entityInstanceTransferBufferInfo);
+    if (!m_entityInstanceTransferBuffer) [[unlikely]]
+        throw std::runtime_error(SDL_GetError());
+    uploadStaticEntityMesh();
+
     const ShaderBlob generateShader = loadShaderBlob("generate_region");
     const SDL_GPUComputePipelineCreateInfo generateInfo {
         .code_size = generateShader.code.size(),
@@ -593,7 +802,7 @@ void Renderer::initializeGpuResources()
         .stage = SDL_GPU_SHADERSTAGE_VERTEX,
         .num_samplers = 0,
         .num_storage_textures = 0,
-        .num_storage_buffers = 1,
+        .num_storage_buffers = 2,
         .num_uniform_buffers = 1,
     };
     SDL_GPUShader* meshVertexShader = SDL_CreateGPUShader(m_device, &meshVertexShaderInfo);
@@ -671,8 +880,14 @@ void Renderer::releaseGpuResources()
         SDL_ReleaseGPUComputePipeline(m_device, m_generatePipeline);
     if (m_overrideTransferBuffer)
         SDL_ReleaseGPUTransferBuffer(m_device, m_overrideTransferBuffer);
+    if (m_entityInstanceTransferBuffer)
+        SDL_ReleaseGPUTransferBuffer(m_device, m_entityInstanceTransferBuffer);
     if (m_overrideBuffer)
         SDL_ReleaseGPUBuffer(m_device, m_overrideBuffer);
+    if (m_entityInstanceBuffer)
+        SDL_ReleaseGPUBuffer(m_device, m_entityInstanceBuffer);
+    if (m_entityVertexBuffer)
+        SDL_ReleaseGPUBuffer(m_device, m_entityVertexBuffer);
     if (m_meshDrawBuffer)
         SDL_ReleaseGPUBuffer(m_device, m_meshDrawBuffer);
     if (m_meshVertexBuffer)
@@ -700,9 +915,11 @@ void Renderer::renderGpuFrame(const World& world, const AgentState& agent)
 
     RenderParams params = buildRenderParams(agent);
     params.overrideInfo.y = static_cast<int32_t>(world.seed());
+    params.overrideInfo.z = static_cast<int32_t>(SDL_GetTicks());
     const bool worldMeshChanged = updateBlockBuffer(world, params, commandBuffer);
     if (worldMeshChanged)
         rebuildMeshBuffer(params, commandBuffer);
+    uploadEntityInstances(world, commandBuffer);
     SDL_PushGPUVertexUniformData(commandBuffer, 0, &params, sizeof(params));
 
     const SDL_GPUColorTargetInfo colorTargetInfo {
@@ -726,13 +943,21 @@ void Renderer::renderGpuFrame(const World& world, const AgentState& agent)
     SDL_GPURenderPass* renderPass = SDL_BeginGPURenderPass(commandBuffer, &colorTargetInfo, 1, &depthTargetInfo);
     SDL_BindGPUGraphicsPipeline(renderPass, m_meshPipeline);
     SDL_GPUBuffer* meshVertexBuffer = m_meshVertexBuffer;
-    SDL_BindGPUVertexStorageBuffers(renderPass, 0, &meshVertexBuffer, 1);
+    SDL_GPUBuffer* entityInstanceBuffer = m_entityInstanceBuffer;
+    SDL_GPUBuffer* worldBuffers[] { meshVertexBuffer, entityInstanceBuffer };
+    SDL_BindGPUVertexStorageBuffers(renderPass, 0, worldBuffers, 2);
     const SDL_GPUTextureSamplerBinding blockAtlasBinding {
         .texture = m_blockAtlas,
         .sampler = m_blockSampler,
     };
     SDL_BindGPUFragmentSamplers(renderPass, 0, &blockAtlasBinding, 1);
     SDL_DrawGPUPrimitivesIndirect(renderPass, m_meshDrawBuffer, 0, 1);
+    if (m_entityVertexCount > 0 && m_entityInstanceCount > 0) {
+        SDL_GPUBuffer* entityVertexBuffer = m_entityVertexBuffer;
+        SDL_GPUBuffer* entityBuffers[] { entityVertexBuffer, entityInstanceBuffer };
+        SDL_BindGPUVertexStorageBuffers(renderPass, 0, entityBuffers, 2);
+        SDL_DrawGPUPrimitives(renderPass, m_entityVertexCount, m_entityInstanceCount, 0, 1);
+    }
     SDL_EndGPURenderPass(renderPass);
     SDL_SubmitGPUCommandBuffer(commandBuffer);
 
