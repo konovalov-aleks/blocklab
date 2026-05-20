@@ -130,132 +130,136 @@ int main(int argc, char** argv)
     int height = renderConfig.height;
     SDL_GetWindowSize(window, &width, &height);
 
-    blocklab::Environment env(4);
-    blocklab::Renderer renderer(window, renderConfig);
-    renderer.resize(width, height);
-    env.setObservationRenderer(&renderer);
-    env.reset();
-    std::array<bool, SDL_SCANCODE_COUNT> keys { };
-    SDL_SetWindowRelativeMouseMode(window, true);
+    {
+        blocklab::Environment env(4);
+        blocklab::Renderer renderer(window, renderConfig);
+        renderer.resize(width, height);
+        env.setObservationRenderer(&renderer);
+        env.reset();
+        std::array<bool, SDL_SCANCODE_COUNT> keys { };
+        SDL_SetWindowRelativeMouseMode(window, true);
 
-    using Clock = std::chrono::steady_clock;
-    bool running = true;
-    uint64_t previous = SDL_GetTicks();
-    float accumulator = 0.0f;
-    float pendingYawDelta = 0.0f;
-    float pendingPitchDelta = 0.0f;
-    bool digRequested = false;
-    bool placeRequested = false;
-    constexpr float fixedDt = 1.0f / 60.0f;
-    constexpr float mouseSensitivity = 0.0022f;
-    const auto visualInterval
-        = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / appConfig.visualFps));
-    auto lastVisualAt = Clock::now() - visualInterval;
-    auto lastStatsAt = Clock::now();
-    uint64_t statsSteps = 0;
-    uint64_t statsFrames = 0;
-    uint64_t totalSteps = 0;
+        using Clock = std::chrono::steady_clock;
+        bool running = true;
+        uint64_t previous = SDL_GetTicks();
+        float accumulator = 0.0f;
+        float pendingYawDelta = 0.0f;
+        float pendingPitchDelta = 0.0f;
+        bool digRequested = false;
+        bool placeRequested = false;
+        constexpr float fixedDt = 1.0f / 60.0f;
+        constexpr float mouseSensitivity = 0.0022f;
+        const auto visualInterval
+            = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / appConfig.visualFps));
+        auto lastVisualAt = Clock::now() - visualInterval;
+        auto lastStatsAt = Clock::now();
+        uint64_t statsSteps = 0;
+        uint64_t statsFrames = 0;
+        uint64_t totalSteps = 0;
 
-    while (running) {
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            switch (event.type) {
-            case SDL_EVENT_QUIT:
-                running = false;
-                break;
-            case SDL_EVENT_KEY_DOWN:
-                keys[static_cast<std::size_t>(event.key.scancode)] = true;
-                if (event.key.scancode == SDL_SCANCODE_ESCAPE)
+        while (running) {
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                switch (event.type) {
+                case SDL_EVENT_QUIT:
                     running = false;
-                if (event.key.scancode == SDL_SCANCODE_R)
+                    break;
+                case SDL_EVENT_KEY_DOWN:
+                    keys[static_cast<std::size_t>(event.key.scancode)] = true;
+                    if (event.key.scancode == SDL_SCANCODE_ESCAPE)
+                        running = false;
+                    if (event.key.scancode == SDL_SCANCODE_R)
+                        env.reset();
+                    break;
+                case SDL_EVENT_KEY_UP:
+                    keys[static_cast<std::size_t>(event.key.scancode)] = false;
+                    if (event.key.scancode == SDL_SCANCODE_Q)
+                        digRequested = true;
+                    if (event.key.scancode == SDL_SCANCODE_E)
+                        placeRequested = true;
+                    break;
+                case SDL_EVENT_MOUSE_MOTION:
+                    pendingYawDelta += event.motion.xrel * mouseSensitivity;
+                    pendingPitchDelta -= event.motion.yrel * mouseSensitivity;
+                    break;
+                case SDL_EVENT_WINDOW_RESIZED:
+                    renderer.resize(event.window.data1, event.window.data2);
+                    break;
+                default:
+                    break;
+                }
+            }
+
+            const uint64_t nowTicks = SDL_GetTicks();
+            const float frameDt = static_cast<float>(nowTicks - previous) / 1000.0f;
+            previous = nowTicks;
+            accumulator += frameDt;
+            bool consumedPendingInputThisFrame = false;
+
+            const auto stepEnvironment = [&](bool consumePendingInput) {
+                blocklab::AgentAction action;
+                action.forward
+                    = (keyDown(keys, SDL_SCANCODE_W) ? 1.0f : 0.0f) - (keyDown(keys, SDL_SCANCODE_S) ? 1.0f : 0.0f);
+                action.right
+                    = (keyDown(keys, SDL_SCANCODE_D) ? 1.0f : 0.0f) - (keyDown(keys, SDL_SCANCODE_A) ? 1.0f : 0.0f);
+                action.jump = keyDown(keys, SDL_SCANCODE_SPACE);
+                action.yawDelta = (keyDown(keys, SDL_SCANCODE_RIGHT) ? 0.045f : 0.0f)
+                    - (keyDown(keys, SDL_SCANCODE_LEFT) ? 0.045f : 0.0f);
+                if (consumePendingInput) {
+                    action.yawDelta += pendingYawDelta;
+                    action.pitchDelta += pendingPitchDelta;
+                    action.dig = digRequested;
+                    action.place = placeRequested;
+                    consumedPendingInputThisFrame = true;
+                }
+                const blocklab::StepResult result = env.step(action);
+                if (result.terminated || result.truncated)
                     env.reset();
-                break;
-            case SDL_EVENT_KEY_UP:
-                keys[static_cast<std::size_t>(event.key.scancode)] = false;
-                if (event.key.scancode == SDL_SCANCODE_Q)
-                    digRequested = true;
-                if (event.key.scancode == SDL_SCANCODE_E)
-                    placeRequested = true;
-                break;
-            case SDL_EVENT_MOUSE_MOTION:
-                pendingYawDelta += event.motion.xrel * mouseSensitivity;
-                pendingPitchDelta -= event.motion.yrel * mouseSensitivity;
-                break;
-            case SDL_EVENT_WINDOW_RESIZED:
-                renderer.resize(event.window.data1, event.window.data2);
-                break;
-            default:
-                break;
+
+                ++statsSteps;
+                ++totalSteps;
+            };
+
+            if (appConfig.unlocked)
+                stepEnvironment(true);
+            else {
+                bool consumedPendingInput = false;
+                while (accumulator >= fixedDt) {
+                    stepEnvironment(!consumedPendingInput);
+                    consumedPendingInput = true;
+                    accumulator -= fixedDt;
+                }
             }
-        }
 
-        const uint64_t nowTicks = SDL_GetTicks();
-        const float frameDt = static_cast<float>(nowTicks - previous) / 1000.0f;
-        previous = nowTicks;
-        accumulator += frameDt;
-        bool consumedPendingInputThisFrame = false;
-
-        const auto stepEnvironment = [&](bool consumePendingInput) {
-            blocklab::AgentAction action;
-            action.forward
-                = (keyDown(keys, SDL_SCANCODE_W) ? 1.0f : 0.0f) - (keyDown(keys, SDL_SCANCODE_S) ? 1.0f : 0.0f);
-            action.right
-                = (keyDown(keys, SDL_SCANCODE_D) ? 1.0f : 0.0f) - (keyDown(keys, SDL_SCANCODE_A) ? 1.0f : 0.0f);
-            action.jump = keyDown(keys, SDL_SCANCODE_SPACE);
-            action.yawDelta = (keyDown(keys, SDL_SCANCODE_RIGHT) ? 0.045f : 0.0f)
-                - (keyDown(keys, SDL_SCANCODE_LEFT) ? 0.045f : 0.0f);
-            if (consumePendingInput) {
-                action.yawDelta += pendingYawDelta;
-                action.pitchDelta += pendingPitchDelta;
-                action.dig = digRequested;
-                action.place = placeRequested;
-                consumedPendingInputThisFrame = true;
+            const auto now = Clock::now();
+            if (now - lastVisualAt >= visualInterval) {
+                renderer.present();
+                lastVisualAt = now;
+                ++statsFrames;
             }
-            const blocklab::StepResult result = env.step(action);
-            if (result.terminated || result.truncated)
-                env.reset();
 
-            ++statsSteps;
-            ++totalSteps;
-        };
-
-        if (appConfig.unlocked)
-            stepEnvironment(true);
-        else {
-            bool consumedPendingInput = false;
-            while (accumulator >= fixedDt) {
-                stepEnvironment(!consumedPendingInput);
-                consumedPendingInput = true;
-                accumulator -= fixedDt;
+            const double statsElapsed = std::chrono::duration<double>(now - lastStatsAt).count();
+            if (statsElapsed >= 1.0) {
+                std::printf("fps=%.1f sim_steps/s=%.1f total_steps=%llu observation_version=%llu mode=%s\n",
+                    static_cast<double>(statsFrames) / statsElapsed, static_cast<double>(statsSteps) / statsElapsed,
+                    static_cast<unsigned long long>(totalSteps), static_cast<unsigned long long>(env.observe().version),
+                    appConfig.unlocked ? "unlocked" : "fixed");
+                lastStatsAt = now;
+                statsFrames = 0;
+                statsSteps = 0;
             }
+
+            if (consumedPendingInputThisFrame) {
+                pendingYawDelta = 0.0f;
+                pendingPitchDelta = 0.0f;
+                digRequested = false;
+                placeRequested = false;
+            }
+            if (!appConfig.unlocked)
+                SDL_Delay(1);
         }
 
-        const auto now = Clock::now();
-        if (now - lastVisualAt >= visualInterval) {
-            renderer.present();
-            lastVisualAt = now;
-            ++statsFrames;
-        }
-
-        const double statsElapsed = std::chrono::duration<double>(now - lastStatsAt).count();
-        if (statsElapsed >= 1.0) {
-            std::printf("fps=%.1f sim_steps/s=%.1f total_steps=%llu observation_version=%llu mode=%s\n",
-                static_cast<double>(statsFrames) / statsElapsed, static_cast<double>(statsSteps) / statsElapsed,
-                static_cast<unsigned long long>(totalSteps), static_cast<unsigned long long>(env.observe().version),
-                appConfig.unlocked ? "unlocked" : "fixed");
-            lastStatsAt = now;
-            statsFrames = 0;
-            statsSteps = 0;
-        }
-
-        if (consumedPendingInputThisFrame) {
-            pendingYawDelta = 0.0f;
-            pendingPitchDelta = 0.0f;
-            digRequested = false;
-            placeRequested = false;
-        }
-        if (!appConfig.unlocked)
-            SDL_Delay(1);
+        env.setObservationRenderer(nullptr);
     }
 
     SDL_DestroyWindow(window);

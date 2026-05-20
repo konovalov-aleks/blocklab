@@ -439,6 +439,8 @@ int main(int argc, char** argv)
         static_cast<unsigned long long>(observation.version), static_cast<unsigned long long>(observation.handle));
 
     if (window) {
+        env.setObservationRenderer(nullptr);
+        renderer.reset();
         SDL_DestroyWindow(window);
         SDL_Quit();
     }

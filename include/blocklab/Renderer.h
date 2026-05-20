@@ -4,6 +4,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -74,6 +75,8 @@ private:
     SDL_GPUComputePipeline* m_resetMeshDrawPipeline = nullptr;
     SDL_GPUComputePipeline* m_buildMeshPipeline = nullptr;
     SDL_GPUGraphicsPipeline* m_meshPipeline = nullptr;
+    std::array<SDL_GPUFence*, 2> m_frameFences { };
+    std::size_t m_nextFrameFence = 0;
     int m_width = 1280;
     int m_height = 720;
     Observation m_observation;
@@ -100,6 +103,8 @@ private:
     void appendEntityFace(
         Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, uint32_t tile, float shade, float animationPhase, float animationYaw);
     void renderGpuFrame(const World& world, const AgentState& agent);
+    void submitFrameCommandBuffer(SDL_GPUCommandBuffer* commandBuffer);
+    void waitForFrameFences();
 };
 
 } // namespace blocklab

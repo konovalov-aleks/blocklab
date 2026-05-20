@@ -868,6 +868,9 @@ void Renderer::releaseGpuResources()
     if (!m_device)
         return;
 
+    waitForFrameFences();
+    SDL_WaitForGPUIdle(m_device);
+
     if (m_meshPipeline)
         SDL_ReleaseGPUGraphicsPipeline(m_device, m_meshPipeline);
     if (m_buildMeshPipeline)
@@ -905,6 +908,33 @@ void Renderer::releaseGpuResources()
 
     SDL_ReleaseWindowFromGPUDevice(m_device, m_window);
     SDL_DestroyGPUDevice(m_device);
+    m_device = nullptr;
+    m_window = nullptr;
+}
+
+void Renderer::submitFrameCommandBuffer(SDL_GPUCommandBuffer* commandBuffer)
+{
+    SDL_GPUFence*& fence = m_frameFences[m_nextFrameFence];
+    if (fence) {
+        SDL_WaitForGPUFences(m_device, true, &fence, 1);
+        SDL_ReleaseGPUFence(m_device, fence);
+        fence = nullptr;
+    }
+
+    fence = SDL_SubmitGPUCommandBufferAndAcquireFence(commandBuffer);
+    m_nextFrameFence = (m_nextFrameFence + 1) % m_frameFences.size();
+}
+
+void Renderer::waitForFrameFences()
+{
+    for (SDL_GPUFence*& fence : m_frameFences) {
+        if (!fence)
+            continue;
+
+        SDL_WaitForGPUFences(m_device, true, &fence, 1);
+        SDL_ReleaseGPUFence(m_device, fence);
+        fence = nullptr;
+    }
 }
 
 void Renderer::renderGpuFrame(const World& world, const AgentState& agent)
@@ -959,7 +989,7 @@ void Renderer::renderGpuFrame(const World& world, const AgentState& agent)
         SDL_DrawGPUPrimitives(renderPass, m_entityVertexCount, m_entityInstanceCount, 0, 1);
     }
     SDL_EndGPURenderPass(renderPass);
-    SDL_SubmitGPUCommandBuffer(commandBuffer);
+    submitFrameCommandBuffer(commandBuffer);
 
     ++m_observation.version;
     if (m_config.presentToWindow)
