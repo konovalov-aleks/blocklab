@@ -1,5 +1,6 @@
 #pragma once
 
+#include "blocklab/BlockTypes.h"
 #include "blocklab/Math.h"
 #include "blocklab/QuadTree.h"
 #include "blocklab/characters/NPC.h"
@@ -15,13 +16,6 @@
 #include <vector>
 
 namespace blocklab {
-
-enum class Block : uint8_t {
-    Air = 0,
-    Grass,
-    Dirt,
-    Stone,
-};
 
 class Chunk {
 public:
@@ -55,7 +49,7 @@ public:
 
     static constexpr int32_t Edge = 4;
     static constexpr int32_t Volume = Edge * Edge * Edge;
-    static constexpr uint8_t NoOverride = std::numeric_limits<uint8_t>::max();
+    static constexpr uint8_t NoOverride = BlockId::NoOverride;
 
     OverrideCluster();
     std::optional<Block> get(std::size_t index) const;
@@ -83,10 +77,10 @@ static_assert(OverrideCluster::Volume <= std::numeric_limits<OverrideCluster::Ma
 static_assert(sizeof(Block) == sizeof(uint8_t),
     "OverrideCluster stores dense uint8_t block ids. If Block becomes heavier, consider storing compact ids or "
     "pointers.");
-static_assert(static_cast<uint8_t>(Block::Air) != OverrideCluster::NoOverride);
-static_assert(static_cast<uint8_t>(Block::Grass) != OverrideCluster::NoOverride);
-static_assert(static_cast<uint8_t>(Block::Dirt) != OverrideCluster::NoOverride);
-static_assert(static_cast<uint8_t>(Block::Stone) != OverrideCluster::NoOverride);
+static_assert(BlockId::Air != OverrideCluster::NoOverride);
+static_assert(BlockId::Grass != OverrideCluster::NoOverride);
+static_assert(BlockId::Dirt != OverrideCluster::NoOverride);
+static_assert(BlockId::Stone != OverrideCluster::NoOverride);
 
 struct BlockOverride {
     BlockCoord coord;
