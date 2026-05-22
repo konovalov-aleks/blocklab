@@ -26,16 +26,16 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.35
         id: cuda-toolkit
         with:
-          cuda: '12.4.1'
-          method: network
-          sub-packages: '["nvcc", "cudart", "cudart-dev"]'
+          cuda: '13.2.0'
 
       - name: Show toolchain versions
         run: |
           cmake --version
           ninja --version
           glslc --version
-          nvcc --version
+          echo "Installed cuda version is: ${{ steps.cuda-toolkit.outputs.cuda }}"
+          echo "Cuda install location: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}"
+          nvcc -V
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
