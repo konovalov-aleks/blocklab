@@ -37,14 +37,16 @@ AppConfig parseAppConfig(int argc, char** argv)
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg(argv[i]);
         if (arg == "--resolution" || arg.starts_with("--resolution=")) {
-            const auto parsed = blocklab::cli::parseResolution(blocklab::cli::optionValue(i, argc, argv, arg, "--resolution"));
+            const auto parsed
+                = blocklab::cli::parseResolution(blocklab::cli::optionValue(i, argc, argv, arg, "--resolution"));
             if (!parsed) [[unlikely]] {
                 std::fprintf(stderr, "Invalid --resolution value. Expected WIDTHxHEIGHT.\n");
                 std::exit(EXIT_FAILURE);
             }
             config.renderConfig = *parsed;
         } else if (arg == "--visual-fps" || arg.starts_with("--visual-fps=")) {
-            const auto visualFps = blocklab::cli::parseDouble(blocklab::cli::optionValue(i, argc, argv, arg, "--visual-fps"));
+            const auto visualFps
+                = blocklab::cli::parseDouble(blocklab::cli::optionValue(i, argc, argv, arg, "--visual-fps"));
             if (!visualFps || *visualFps <= 0.0) [[unlikely]] {
                 std::fprintf(stderr, "Invalid --visual-fps value.\n");
                 std::exit(EXIT_FAILURE);
@@ -147,7 +149,8 @@ int main(int argc, char** argv)
             action.jump = keyDown(window, GLFW_KEY_SPACE);
             action.dig = input.digRequested;
             action.place = input.placeRequested;
-            action.yawDelta = (keyDown(window, GLFW_KEY_RIGHT) ? 0.045f : 0.0f) - (keyDown(window, GLFW_KEY_LEFT) ? 0.045f : 0.0f);
+            action.yawDelta
+                = (keyDown(window, GLFW_KEY_RIGHT) ? 0.045f : 0.0f) - (keyDown(window, GLFW_KEY_LEFT) ? 0.045f : 0.0f);
             action.yawDelta += input.mouse.pendingYawDelta;
             action.pitchDelta += input.mouse.pendingPitchDelta;
             input.mouse.pendingYawDelta = 0.0f;

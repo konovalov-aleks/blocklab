@@ -3,6 +3,7 @@
 #include "blocklab/CudaMeshBuilder.h"
 
 #include <memory>
+#include <utility>
 
 namespace blocklab {
 
@@ -14,11 +15,14 @@ MeshBuilder::MeshBuilder(MeshBuildConfig config)
 
 MeshBuilder::~MeshBuilder() = default;
 
-void MeshBuilder::rebuild(const World& world, const AgentState& agent)
+uint32_t MeshBuilder::rebuild(
+    const World& world, const AgentState& agent, MeshVertex* outVertices, uint32_t maxVertices)
 {
     const IVec3 center { floorToInt(agent.position.x), floorToInt(agent.position.y), floorToInt(agent.position.z) };
-    const IVec3 origin { center.x - m_config.radius, 0, center.z - m_config.radius };
-    const IVec3 size { m_config.radius * 2 + 1, Chunk::SizeY, m_config.radius * 2 + 1 };
+    const int32_t extent = m_config.halfExtent * 2;
+    // The cached/rendered area is half-open: [center - halfExtent, center + halfExtent).
+    const IVec3 origin { center.x - m_config.halfExtent, 0, center.z - m_config.halfExtent };
+    const IVec3 size { extent, Chunk::SizeY, extent };
     world.collectOverridesInRegion(origin, size, m_overrides);
     m_terrainOverrides.clear();
     m_terrainOverrides.reserve(m_overrides.size());
@@ -30,7 +34,17 @@ void MeshBuilder::rebuild(const World& world, const AgentState& agent)
             .block = blockId(blockOverride.block),
         });
     }
-    m_cudaTerrain->rebuild(world.seed(), center, m_config.radius, m_terrainOverrides, m_vertices);
+
+    World::BlocksCache& cache = world.collisionCacheMutable();
+    cache.origin = origin;
+    cache.size = size;
+    cache.version = world.version();
+
+    const uint32_t vertexCount = m_cudaTerrain->rebuild(
+        world.seed(), center, m_config.halfExtent, m_terrainOverrides, outVertices, maxVertices, cache.blocks);
+    assert(static_cast<std::size_t>(size.x) * static_cast<std::size_t>(size.y) * static_cast<std::size_t>(size.z)
+        == cache.blocks.size());
+    return vertexCount;
 }
 
 } // namespace blocklab

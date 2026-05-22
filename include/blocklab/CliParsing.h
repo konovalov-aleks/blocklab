@@ -71,8 +71,7 @@ inline std::string_view optionValue(int& index, int argc, char** argv, std::stri
     if (arg == name && index + 1 < argc)
         return argv[++index];
 
-    [[unlikely]]
-    std::fprintf(stderr, "Missing value for %.*s\n", static_cast<int>(name.size()), name.data());
+    [[unlikely]] std::fprintf(stderr, "Missing value for %.*s\n", static_cast<int>(name.size()), name.data());
     std::exit(EXIT_FAILURE);
 }
 

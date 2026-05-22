@@ -2,6 +2,7 @@
 
 #include "blocklab/Math.h"
 #include "blocklab/MeshTypes.h"
+#include "blocklab/PageLockedVector.h"
 
 #include <cstdint>
 #include <memory>
@@ -17,8 +18,9 @@ public:
     CudaTerrainMeshBuilder(const CudaTerrainMeshBuilder&) = delete;
     CudaTerrainMeshBuilder& operator=(const CudaTerrainMeshBuilder&) = delete;
 
-    void rebuild(uint32_t seed, IVec3 center, int32_t radius, const std::vector<TerrainBlockOverride>& overrides,
-        std::vector<MeshVertex>& outVertices);
+    uint32_t rebuild(uint32_t seed, IVec3 center, int32_t halfExtent,
+        const std::vector<TerrainBlockOverride>& overrides, MeshVertex* outVertices, uint32_t maxVertices,
+        PageLockedVector<uint8_t>& outBlocks);
 
 private:
     struct State;

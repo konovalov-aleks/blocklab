@@ -112,34 +112,42 @@ BenchmarkConfig parseArgs(int argc, char** argv)
         } else if (arg == "--no-render")
             config.renderObservation = false;
         else if (arg == "--seconds" || arg.starts_with("--seconds="))
-            config.seconds = blocklab::cli::parseDouble(blocklab::cli::optionValue(i, argc, argv, arg, "--seconds")).value_or(config.seconds);
+            config.seconds = blocklab::cli::parseDouble(blocklab::cli::optionValue(i, argc, argv, arg, "--seconds"))
+                                 .value_or(config.seconds);
         else if (arg == "--steps" || arg.starts_with("--steps="))
-            config.steps = blocklab::cli::parseInt<uint64_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--steps")).value_or(config.steps);
+            config.steps = blocklab::cli::parseInt<uint64_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--steps"))
+                               .value_or(config.steps);
         else if (arg == "--seed" || arg.starts_with("--seed="))
-            config.seed = static_cast<uint32_t>(blocklab::cli::parseInt<uint64_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--seed")).value_or(config.seed));
+            config.seed = static_cast<uint32_t>(
+                blocklab::cli::parseInt<uint64_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--seed"))
+                    .value_or(config.seed));
         else if (arg == "--world-radius" || arg.starts_with("--world-radius=")) {
-            const auto worldRadiusChunks = blocklab::cli::parseInt<int32_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--world-radius"));
+            const auto worldRadiusChunks
+                = blocklab::cli::parseInt<int32_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--world-radius"));
             if (!worldRadiusChunks || *worldRadiusChunks <= 0) [[unlikely]] {
                 std::fprintf(stderr, "Invalid --world-radius value.\n");
                 std::exit(EXIT_FAILURE);
             }
             config.worldRadiusChunks = *worldRadiusChunks;
         } else if (arg == "--report-interval" || arg.starts_with("--report-interval=")) {
-            const auto reportInterval = blocklab::cli::parseDouble(blocklab::cli::optionValue(i, argc, argv, arg, "--report-interval"));
+            const auto reportInterval
+                = blocklab::cli::parseDouble(blocklab::cli::optionValue(i, argc, argv, arg, "--report-interval"));
             if (!reportInterval || *reportInterval <= 0.0) [[unlikely]] {
                 std::fprintf(stderr, "Invalid --report-interval value.\n");
                 std::exit(EXIT_FAILURE);
             }
             config.reportInterval = *reportInterval;
         } else if (arg == "--visual-fps" || arg.starts_with("--visual-fps=")) {
-            const auto visualFps = blocklab::cli::parseDouble(blocklab::cli::optionValue(i, argc, argv, arg, "--visual-fps"));
+            const auto visualFps
+                = blocklab::cli::parseDouble(blocklab::cli::optionValue(i, argc, argv, arg, "--visual-fps"));
             if (!visualFps || *visualFps <= 0.0) [[unlikely]] {
                 std::fprintf(stderr, "Invalid --visual-fps value.\n");
                 std::exit(EXIT_FAILURE);
             }
             config.visualFps = *visualFps;
         } else if (arg == "--action-steps" || arg.starts_with("--action-steps=")) {
-            const auto actionSteps = blocklab::cli::parseActionSteps(blocklab::cli::optionValue(i, argc, argv, arg, "--action-steps"));
+            const auto actionSteps
+                = blocklab::cli::parseActionSteps(blocklab::cli::optionValue(i, argc, argv, arg, "--action-steps"));
             if (!actionSteps) [[unlikely]] {
                 std::fprintf(stderr, "Invalid --action-steps value. Expected MIN:MAX.\n");
                 std::exit(EXIT_FAILURE);
@@ -147,7 +155,8 @@ BenchmarkConfig parseArgs(int argc, char** argv)
             config.minActionSteps = actionSteps->first;
             config.maxActionSteps = actionSteps->second;
         } else if (arg == "--resolution" || arg.starts_with("--resolution=")) {
-            auto renderConfig = blocklab::cli::parseResolution(blocklab::cli::optionValue(i, argc, argv, arg, "--resolution"));
+            auto renderConfig
+                = blocklab::cli::parseResolution(blocklab::cli::optionValue(i, argc, argv, arg, "--resolution"));
             if (!renderConfig) [[unlikely]] {
                 std::fprintf(stderr, "Invalid --resolution value. Expected WIDTHxHEIGHT.\n");
                 std::exit(EXIT_FAILURE);
@@ -157,9 +166,9 @@ BenchmarkConfig parseArgs(int argc, char** argv)
             config.renderConfig = *renderConfig;
             config.visualConfig.width = renderConfig->width;
             config.visualConfig.height = renderConfig->height;
-        }
-        else if (arg == "--initial-overrides" || arg.starts_with("--initial-overrides="))
-            config.initialOverrides = blocklab::cli::parseInt<uint64_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--initial-overrides"))
+        } else if (arg == "--initial-overrides" || arg.starts_with("--initial-overrides="))
+            config.initialOverrides = blocklab::cli::parseInt<uint64_t>(
+                blocklab::cli::optionValue(i, argc, argv, arg, "--initial-overrides"))
                                           .value_or(config.initialOverrides);
         else
             usage(EXIT_FAILURE);
@@ -174,10 +183,13 @@ uint64_t applyInitialOverrides(blocklab::Environment& env, const BenchmarkConfig
     std::mt19937 rng(seed ^ 0x8f3d5b79U);
     std::normal_distribution<float> horizontal(0.0f, 8.0f);
     std::uniform_int_distribution<int32_t> verticalOffset(-8, 4);
-    for (uint64_t attempts = 0; world.overrideCount() - before < config.initialOverrides && attempts < config.initialOverrides * 64 + 1024; ++attempts) {
+    for (uint64_t attempts = 0;
+         world.overrideCount() - before < config.initialOverrides && attempts < config.initialOverrides * 64 + 1024;
+         ++attempts) {
         const int32_t x = std::clamp(static_cast<int32_t>(std::lround(horizontal(rng))), -28, 28);
         const int32_t z = std::clamp(static_cast<int32_t>(std::lround(horizontal(rng))), -28, 28);
-        const int32_t surfaceY = std::max(0, blocklab::floorToInt(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1);
+        const int32_t surfaceY
+            = std::max(0, blocklab::floorToInt(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1);
         const int32_t y = std::clamp(surfaceY + verticalOffset(rng), 0, blocklab::Chunk::SizeY - 1);
         const blocklab::Block current = world.getBlock(x, y, z);
         world.setBlock(x, y, z, current == blocklab::Block::Air ? blocklab::Block::Stone : blocklab::Block::Air);
@@ -240,7 +252,8 @@ int main(int argc, char** argv)
 
         if (result.terminated || result.truncated) {
             ++stats.episodes;
-            lastInitialOverridesApplied = resetEnvironment(env, config, config.seed + static_cast<uint32_t>(stats.episodes));
+            lastInitialOverridesApplied
+                = resetEnvironment(env, config, config.seed + static_cast<uint32_t>(stats.episodes));
             lastBlocksCollected = env.agent().state().blocksCollected;
             lastBlocksPlaced = env.agent().state().blocksPlaced;
         }
@@ -256,7 +269,8 @@ int main(int argc, char** argv)
             const uint64_t intervalSteps = stats.steps - lastReportSteps;
             std::printf("steps=%llu elapsed=%.2fs steps/s=%.0f avg_reward=%.4f episodes=%llu\n",
                 static_cast<unsigned long long>(stats.steps), elapsed, static_cast<double>(intervalSteps) / interval,
-                stats.reward / static_cast<double>(std::max<uint64_t>(1, stats.steps)), static_cast<unsigned long long>(stats.episodes));
+                stats.reward / static_cast<double>(std::max<uint64_t>(1, stats.steps)),
+                static_cast<unsigned long long>(stats.episodes));
             lastReportAt = now;
             lastReportSteps = stats.steps;
         }
@@ -280,9 +294,10 @@ int main(int argc, char** argv)
                 "  observation_version: %llu\n"
                 "  observation_handle: 0x%llx\n",
         static_cast<unsigned long long>(stats.steps), totalSeconds, static_cast<double>(stats.steps) / totalSeconds,
-        stats.reward / static_cast<double>(std::max<uint64_t>(1, stats.steps)), static_cast<unsigned long long>(stats.episodes),
-        static_cast<unsigned long long>(stats.blocksCollected), static_cast<unsigned long long>(stats.blocksPlaced),
-        static_cast<unsigned long long>(config.initialOverrides), static_cast<unsigned long long>(lastInitialOverridesApplied),
+        stats.reward / static_cast<double>(std::max<uint64_t>(1, stats.steps)),
+        static_cast<unsigned long long>(stats.episodes), static_cast<unsigned long long>(stats.blocksCollected),
+        static_cast<unsigned long long>(stats.blocksPlaced), static_cast<unsigned long long>(config.initialOverrides),
+        static_cast<unsigned long long>(lastInitialOverridesApplied),
         static_cast<unsigned long long>(env.world().overrideCount()),
         static_cast<unsigned long long>(observation.version), static_cast<unsigned long long>(observation.handle));
 }

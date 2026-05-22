@@ -17,10 +17,7 @@ enum class MeshMaterial : uint32_t {
     VertexColor = 8,
 };
 
-constexpr float meshMaterialId(MeshMaterial material)
-{
-    return static_cast<float>(static_cast<uint32_t>(material));
-}
+constexpr float meshMaterialId(MeshMaterial material) { return static_cast<float>(static_cast<uint32_t>(material)); }
 
 struct MeshVertex {
     Vec4 position;
@@ -29,7 +26,7 @@ struct MeshVertex {
 };
 
 struct MeshBuildConfig {
-    int32_t radius = 32;
+    int32_t halfExtent = 32;
 };
 
 struct TerrainBlockOverride {

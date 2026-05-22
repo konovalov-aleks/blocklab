@@ -47,7 +47,7 @@ void PigCharacter::updateState(World& world, Vec3 threatPosition, float dt)
     if (threatDistance < PigThreatDistance && m_state.kind != CharacterStateKind::Panic) {
         setState({
             .kind = CharacterStateKind::Panic,
-            .target = { },
+            .target = {},
             .timer = 1.5f,
         });
     }
@@ -76,14 +76,14 @@ void PigCharacter::updateState(World& world, Vec3 threatPosition, float dt)
         if (m_blockedTimer >= RetargetBlockedTime) {
             setState({
                 .kind = CharacterStateKind::Idle,
-                .target = { },
+                .target = {},
                 .timer = 0.2f,
             });
             m_blockedTimer = 0.0f;
         } else if (length2D(m_state.target - m_position) <= ArrivalDistance || m_state.timer <= 0.0f) {
             setState({
                 .kind = CharacterStateKind::Idle,
-                .target = { },
+                .target = {},
                 .timer = 1.25f,
             });
         }
@@ -93,7 +93,7 @@ void PigCharacter::updateState(World& world, Vec3 threatPosition, float dt)
         if (m_blockedTimer >= RetargetBlockedTime || m_state.timer <= 0.0f) {
             setState({
                 .kind = CharacterStateKind::Idle,
-                .target = { },
+                .target = {},
                 .timer = 1.0f,
             });
         }

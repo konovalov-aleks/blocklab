@@ -106,6 +106,29 @@ TEST_CASE("World collision queries respect air and solid override masks", "[worl
     CHECK(world.hasSolidBlockInArea(airBlock, airBlock));
 }
 
+TEST_CASE("World block cache uses local dense coordinates", "[world]")
+{
+    blocklab::World world(17);
+    blocklab::World::BlocksCache& cache = world.collisionCacheMutable();
+    cache.origin = { -4, 0, 8 };
+    cache.size = { 3, 4, 2 };
+    cache.version = world.version();
+    cache.blocks.resize(static_cast<std::size_t>(cache.size.x * cache.size.y * cache.size.z));
+    std::fill(cache.blocks.begin(), cache.blocks.end(), blocklab::BlockId::Air);
+
+    const blocklab::IVec3 stone { -3, 2, 9 };
+    const blocklab::IVec3 local = stone - cache.origin;
+    const std::size_t index = static_cast<std::size_t>(local.x)
+        + static_cast<std::size_t>(local.y) * static_cast<std::size_t>(cache.size.x)
+        + static_cast<std::size_t>(local.z) * static_cast<std::size_t>(cache.size.x)
+            * static_cast<std::size_t>(cache.size.y);
+    cache.blocks[index] = blocklab::BlockId::Stone;
+
+    CHECK(world.getBlock(stone.x, stone.y, stone.z) == blocklab::Block::Stone);
+    CHECK(world.hasSolidBlockInArea(stone, stone));
+    CHECK(!world.hasSolidBlockInArea({ -4, 0, 8 }, { -4, 0, 8 }));
+}
+
 TEST_CASE("OverrideCluster keeps count consistent with stored blocks", "[world]")
 {
     blocklab::OverrideCluster cluster;
@@ -274,7 +297,7 @@ TEST_CASE("Environment returns renderer observations when renderer is installed"
     CHECK(renderedReset.handle == 0x1234);
     CHECK(renderedReset.version != 0);
 
-    const blocklab::StepResult renderedStep = renderEnv.step({ });
+    const blocklab::StepResult renderedStep = renderEnv.step({});
     CHECK(renderedStep.observation.device == blocklab::ObservationDevice::Cpu);
     CHECK(renderedStep.observation.handle == 0x1234);
     CHECK(renderedStep.observation.version > renderedReset.version);

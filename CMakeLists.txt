@@ -78,7 +78,11 @@ target_include_directories(blocklab_env
 )
 
 target_compile_features(blocklab_env PUBLIC cxx_std_20)
-target_link_libraries(blocklab_env PUBLIC glm::glm)
+target_link_libraries(blocklab_env
+    PUBLIC
+        glm::glm
+        CUDA::cudart
+)
 
 blocklab_enable_strict_warnings(blocklab_env)
 
@@ -146,3 +150,13 @@ target_link_libraries(blocklab_quad_tree_test PRIVATE blocklab_env Catch2::Catch
 blocklab_enable_strict_warnings(blocklab_quad_tree_test)
 
 add_test(NAME blocklab_quad_tree_test COMMAND blocklab_quad_tree_test)
+
+add_executable(blocklab_page_locked_vector_test
+    tests/page_locked_vector_test.cpp
+)
+
+target_link_libraries(blocklab_page_locked_vector_test PRIVATE blocklab_env Catch2::Catch2WithMain)
+
+blocklab_enable_strict_warnings(blocklab_page_locked_vector_test)
+
+add_test(NAME blocklab_page_locked_vector_test COMMAND blocklab_page_locked_vector_test)

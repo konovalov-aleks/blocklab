@@ -16,14 +16,13 @@ public:
     explicit MeshBuilder(MeshBuildConfig config = {});
     ~MeshBuilder();
 
-    void rebuild(const World& world, const AgentState& agent);
-    const std::vector<MeshVertex>& vertices() const { return m_vertices; }
+    uint32_t rebuild(const World& world, const AgentState& agent, MeshVertex* outVertices, uint32_t maxVertices);
 
 private:
     MeshBuildConfig m_config;
-    std::vector<MeshVertex> m_vertices;
     std::vector<BlockOverride> m_overrides;
     std::vector<TerrainBlockOverride> m_terrainOverrides;
+    std::vector<uint8_t> m_solidBlocks;
     std::unique_ptr<blocklab::CudaTerrainMeshBuilder> m_cudaTerrain;
 };
 

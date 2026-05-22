@@ -213,7 +213,7 @@ public:
     }
     QuadTree(QuadTree&& other) noexcept
         : m_root(std::move(other.m_root))
-        , m_rootBounds(std::exchange(other.m_rootBounds, { }))
+        , m_rootBounds(std::exchange(other.m_rootBounds, {}))
         , m_size(std::exchange(other.m_size, 0))
     {
     }
@@ -234,7 +234,7 @@ public:
             return *this;
 
         m_root = std::move(other.m_root);
-        m_rootBounds = std::exchange(other.m_rootBounds, { });
+        m_rootBounds = std::exchange(other.m_rootBounds, {});
         m_size = std::exchange(other.m_size, 0);
         return *this;
     }
@@ -245,7 +245,7 @@ public:
     void clear()
     {
         m_root.reset();
-        m_rootBounds = { };
+        m_rootBounds = {};
         m_size = 0;
     }
 

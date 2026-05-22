@@ -17,10 +17,7 @@ enum class RenderEntityKind : uint32_t {
     Pig = 1,
 };
 
-constexpr float renderEntityKindId(RenderEntityKind kind)
-{
-    return static_cast<float>(static_cast<uint32_t>(kind));
-}
+constexpr float renderEntityKindId(RenderEntityKind kind) { return static_cast<float>(static_cast<uint32_t>(kind)); }
 
 struct RenderConfig {
     int32_t width = 320;
@@ -77,7 +74,6 @@ private:
     uint32_t m_instanceCount = 0;
 
     RenderParams buildRenderParams(const AgentState& agent) const;
-    void uploadMesh(std::span<const MeshVertex> vertices, std::size_t firstVertex = 0);
     void uploadInstances(const World& world);
     void drawFrame(const RenderParams& params);
 };

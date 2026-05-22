@@ -17,7 +17,7 @@ enum class CharacterStateKind : uint8_t {
 
 struct CharacterState {
     CharacterStateKind kind = CharacterStateKind::Idle;
-    Vec3 target { };
+    Vec3 target {};
     float timer = 0.0f;
 };
 
