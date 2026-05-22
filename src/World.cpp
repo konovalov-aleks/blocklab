@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace blocklab {
 
@@ -49,6 +50,12 @@ namespace {
         for (int32_t y = minY; y <= maxY; ++y)
             mask |= OverrideCluster::Mask { 1 } << static_cast<std::size_t>(overrideClusterIndex(x, y, z));
         return mask;
+    }
+
+    std::size_t denseBlockIndex(IVec3 local, IVec3 size)
+    {
+        return static_cast<std::size_t>(local.x) + static_cast<std::size_t>(local.y) * static_cast<std::size_t>(size.x)
+            + static_cast<std::size_t>(local.z) * static_cast<std::size_t>(size.x) * static_cast<std::size_t>(size.y);
     }
 
 } // namespace
@@ -134,6 +141,7 @@ void World::reset(uint32_t seed)
     m_seed = seed;
     m_overrideColumns.clear();
     m_overrideCount = 0;
+    m_blocksCache.clear();
     m_nextEntityId = 1;
     m_characters.clear();
     spawnTestPigs();
@@ -142,6 +150,16 @@ void World::reset(uint32_t seed)
 
 Block World::getBlock(int32_t x, int32_t y, int32_t z) const
 {
+
+    if (m_blocksCache.version == m_version && !m_blocksCache.blocks.empty() && x >= m_blocksCache.origin.x
+        && y >= m_blocksCache.origin.y && z >= m_blocksCache.origin.z
+        && x < m_blocksCache.origin.x + m_blocksCache.size.x && y < m_blocksCache.origin.y + m_blocksCache.size.y
+        && z < m_blocksCache.origin.z + m_blocksCache.size.z) [[likely]] {
+
+        const IVec3 local { x - m_blocksCache.origin.x, y - m_blocksCache.origin.y, z - m_blocksCache.origin.z };
+        return static_cast<Block>(m_blocksCache.blocks[denseBlockIndex(local, m_blocksCache.size)]);
+    }
+
     if (const std::optional<Block> block = overriddenBlock(x, y, z))
         return *block;
     return generatedBlock(x, y, z);
@@ -202,7 +220,7 @@ void World::setBlock(int32_t x, int32_t y, int32_t z, Block block)
     } else {
         auto columnIt = m_overrideColumns.find(clusterX, clusterZ);
         if (columnIt == m_overrideColumns.end()) {
-            m_overrideColumns.insert(clusterX, clusterZ, OverrideClusterColumn { });
+            m_overrideColumns.insert(clusterX, clusterZ, OverrideClusterColumn {});
             columnIt = m_overrideColumns.find(clusterX, clusterZ);
         }
 
@@ -238,6 +256,13 @@ bool World::hasSolidBlockInArea(IVec3 min, IVec3 max) const
 
     min.y = std::max(min.y, 0);
     max.y = std::min(max.y, Chunk::SizeY - 1);
+
+    if (m_blocksCache.version == m_version && !m_blocksCache.blocks.empty() && min.x >= m_blocksCache.origin.x
+        && min.y >= m_blocksCache.origin.y && min.z >= m_blocksCache.origin.z
+        && max.x < m_blocksCache.origin.x + m_blocksCache.size.x
+        && max.y < m_blocksCache.origin.y + m_blocksCache.size.y
+        && max.z < m_blocksCache.origin.z + m_blocksCache.size.z) [[likely]]
+        return cachedSolidBlockInArea(min, max);
 
     if (m_overrideCount == 0) {
         for (int32_t z = min.z; z <= max.z; ++z) {
@@ -301,6 +326,23 @@ bool World::hasSolidBlockInArea(IVec3 min, IVec3 max) const
         }
     }
 
+    return false;
+}
+
+bool World::cachedSolidBlockInArea(IVec3 min, IVec3 max) const
+{
+    const IVec3 localMin = min - m_blocksCache.origin;
+    const IVec3 localMax = max - m_blocksCache.origin;
+    for (int32_t y = localMin.y; y <= localMax.y; ++y) {
+        for (int32_t z = localMin.z; z <= localMax.z; ++z) {
+            for (int32_t x = localMin.x; x <= localMax.x; ++x) {
+                if (m_blocksCache.blocks[denseBlockIndex({ x, y, z }, m_blocksCache.size)]
+                    != static_cast<uint8_t>(Block::Air)) {
+                    return true;
+                }
+            }
+        }
+    }
     return false;
 }
 

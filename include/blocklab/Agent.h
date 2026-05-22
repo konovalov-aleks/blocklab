@@ -19,7 +19,7 @@ struct AgentAction {
 
 struct AgentState {
     Vec3 position { 0.0f, 14.0f, 0.0f };
-    Vec3 velocity { };
+    Vec3 velocity {};
     float yaw = 0.0f;
     float pitch = 0.0f;
     bool onGround = false;

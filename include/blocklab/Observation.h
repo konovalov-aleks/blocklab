@@ -7,7 +7,8 @@ namespace blocklab {
 enum class ObservationDevice {
     None,
     Cpu,
-    SdlGpuTexture,
+    VulkanSwapchain,
+    VulkanImage,
     Cuda,
 };
 

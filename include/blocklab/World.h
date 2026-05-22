@@ -1,6 +1,8 @@
 #pragma once
 
+#include "blocklab/BlockTypes.h"
 #include "blocklab/Math.h"
+#include "blocklab/PageLockedVector.h"
 #include "blocklab/QuadTree.h"
 #include "blocklab/characters/NPC.h"
 
@@ -16,13 +18,6 @@
 
 namespace blocklab {
 
-enum class Block : uint8_t {
-    Air = 0,
-    Grass,
-    Dirt,
-    Stone,
-};
-
 class Chunk {
 public:
     static constexpr int32_t SizeX = 16;
@@ -34,7 +29,7 @@ public:
     void set(int32_t x, int32_t y, int32_t z, Block block);
 
 private:
-    std::array<Block, Volume> m_blocks { };
+    std::array<Block, Volume> m_blocks {};
 };
 
 struct BlockCoord {
@@ -55,7 +50,7 @@ public:
 
     static constexpr int32_t Edge = 4;
     static constexpr int32_t Volume = Edge * Edge * Edge;
-    static constexpr uint8_t NoOverride = std::numeric_limits<uint8_t>::max();
+    static constexpr uint8_t NoOverride = BlockId::NoOverride;
 
     OverrideCluster();
     std::optional<Block> get(std::size_t index) const;
@@ -83,10 +78,10 @@ static_assert(OverrideCluster::Volume <= std::numeric_limits<OverrideCluster::Ma
 static_assert(sizeof(Block) == sizeof(uint8_t),
     "OverrideCluster stores dense uint8_t block ids. If Block becomes heavier, consider storing compact ids or "
     "pointers.");
-static_assert(static_cast<uint8_t>(Block::Air) != OverrideCluster::NoOverride);
-static_assert(static_cast<uint8_t>(Block::Grass) != OverrideCluster::NoOverride);
-static_assert(static_cast<uint8_t>(Block::Dirt) != OverrideCluster::NoOverride);
-static_assert(static_cast<uint8_t>(Block::Stone) != OverrideCluster::NoOverride);
+static_assert(BlockId::Air != OverrideCluster::NoOverride);
+static_assert(BlockId::Grass != OverrideCluster::NoOverride);
+static_assert(BlockId::Dirt != OverrideCluster::NoOverride);
+static_assert(BlockId::Stone != OverrideCluster::NoOverride);
 
 struct BlockOverride {
     BlockCoord coord;
@@ -101,6 +96,21 @@ struct OverrideClusterColumn {
 
 class World {
 public:
+    struct BlocksCache {
+        void clear()
+        {
+            origin = {};
+            size = {};
+            version = {};
+            blocks.clear();
+        }
+
+        IVec3 origin {};
+        IVec3 size {};
+        uint64_t version = 0;
+        PageLockedVector<uint8_t> blocks;
+    };
+
     explicit World(uint32_t seed = 1);
 
     void reset(uint32_t seed);
@@ -112,6 +122,8 @@ public:
     float groundHeight(float x, float z) const;
     std::vector<IVec3> visibleBlocksNear(Vec3 center, int32_t radius) const;
     void collectOverridesInRegion(IVec3 origin, IVec3 size, std::vector<BlockOverride>& out) const;
+
+    BlocksCache& collisionCacheMutable() const { return m_blocksCache; }
 
     uint32_t seed() const { return m_seed; }
     std::size_t overrideCount() const { return m_overrideCount; }
@@ -126,7 +138,10 @@ private:
     QuadTree<OverrideClusterColumn> m_overrideColumns;
     std::vector<std::unique_ptr<NPC>> m_characters;
 
+    mutable BlocksCache m_blocksCache;
+
     std::optional<Block> overriddenBlock(int32_t x, int32_t y, int32_t z) const;
+    bool cachedSolidBlockInArea(IVec3 min, IVec3 max) const;
     Block generatedBlock(int32_t x, int32_t y, int32_t z) const;
     OverrideCluster::Mask generatedSolidColumnMask(int32_t x, int32_t z, int32_t clusterY, int32_t localX,
         int32_t localZ, int32_t localMinY, int32_t localMaxY) const;

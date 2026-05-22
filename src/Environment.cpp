@@ -53,7 +53,7 @@ StepResult Environment::step(const AgentAction& action)
 Observation Environment::updateObservation()
 {
     if (!m_observationRenderer) {
-        m_observation = { };
+        m_observation = {};
         return m_observation;
     }
     m_observation = m_observationRenderer->renderObservation(m_world, m_agent.state());

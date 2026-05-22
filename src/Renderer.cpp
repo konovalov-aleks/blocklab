@@ -1,248 +1,1178 @@
 #include "blocklab/Renderer.h"
 
+#include "blocklab/CudaHelpers.h"
+#include "blocklab/Error.h"
+
+#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
+#include <cuda_runtime.h>
+
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
-#include <iterator>
-#include <memory>
+#include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
-#include <utility>
+#include <string_view>
+#include <vector>
 
 namespace blocklab {
-
 namespace {
 
     constexpr float Pi = 3.14159265358979323846f;
     constexpr float EyeHeight = 1.62f;
-    constexpr int32_t RegionSizeX = 64;
-    constexpr int32_t RegionSizeY = Chunk::SizeY;
-    constexpr int32_t RegionSizeZ = 64;
-    constexpr int32_t RegionVolume = RegionSizeX * RegionSizeY * RegionSizeZ;
-    constexpr uint32_t GenerateThreadCount = 256;
-    constexpr uint32_t MaxActiveOverrides = 8192;
-    constexpr uint32_t BytesPerBlock = sizeof(uint32_t);
-    constexpr uint32_t VerticesPerBlock = 36;
-    constexpr uint32_t MaxMeshVertices = RegionVolume * VerticesPerBlock;
-    constexpr uint32_t MaxEntityVertices = 8192;
+    constexpr VkFormat ColorFormat = VK_FORMAT_B8G8R8A8_UNORM;
+    constexpr uint32_t OffscreenFrameCount = 8;
     constexpr uint32_t MaxEntityInstances = 256;
-    constexpr uint32_t AtlasTileSize = 16;
-    constexpr uint32_t AtlasColumns = 4;
-    constexpr uint32_t AtlasRows = 2;
-    constexpr uint32_t AtlasWidth = AtlasTileSize * AtlasColumns;
-    constexpr uint32_t AtlasHeight = AtlasTileSize * AtlasRows;
-
-    struct Pixel {
-        uint8_t r = 0;
-        uint8_t g = 0;
-        uint8_t b = 0;
-        uint8_t a = 255;
-    };
-
-    enum class AtlasTile : uint32_t {
-        GrassTop = 0,
-        Dirt = 1,
-        Stone = 2,
-        GrassSide = 3,
-        PigSkin = 4,
-        Wood = 5,
-        Leaves = 6,
-        PigFace = 7,
-    };
-
-    struct ShaderBlob {
-        std::vector<Uint8> code;
-        SDL_GPUShaderFormat format = SDL_GPU_SHADERFORMAT_INVALID;
-    };
-
-    SDL_GPUShaderFormat shaderFormat()
-    {
-#if defined(BLOCKLAB_SHADER_FORMAT_MSL)
-        return SDL_GPU_SHADERFORMAT_MSL;
-#elif defined(BLOCKLAB_SHADER_FORMAT_DXIL)
-        return SDL_GPU_SHADERFORMAT_DXIL;
-#elif defined(BLOCKLAB_SHADER_FORMAT_SPIRV)
-        return SDL_GPU_SHADERFORMAT_SPIRV;
-#else
-        return SDL_GPU_SHADERFORMAT_INVALID;
-#endif
-    }
-
-    const char* shaderDriverName()
-    {
-#if defined(BLOCKLAB_SHADER_FORMAT_MSL)
-        return "metal";
-#else
-        return nullptr;
-#endif
-    }
-
-    ShaderBlob loadShaderBlob(const char* name)
-    {
-        const std::string path = std::string(BLOCKLAB_SHADER_DIR) + "/" + name + "." + BLOCKLAB_SHADER_EXTENSION;
-        std::ifstream input(path, std::ios::binary);
-        if (!input) [[unlikely]]
-            throw std::runtime_error("Failed to open shader: " + path);
-
-        std::vector<Uint8> code((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-        if (code.empty()) [[unlikely]]
-            throw std::runtime_error("Shader is empty: " + path);
-
-        return {
-            .code = std::move(code),
-            .format = shaderFormat(),
-        };
-    }
+    constexpr uint32_t MaxPigVertices = 1024;
+    constexpr int32_t TerrainMeshHalfExtent = 32;
+    constexpr uint32_t TerrainMeshExtent = TerrainMeshHalfExtent * 2;
+    constexpr uint32_t MaxTerrainVertices
+        = static_cast<uint32_t>(TerrainMeshExtent * Chunk::SizeY * TerrainMeshExtent * 36);
 
     Vec3 cameraForward(float yaw, float pitch)
     {
         const float pitchCos = std::cos(pitch);
-        return glm::normalize(Vec3 {
-            std::sin(yaw) * pitchCos,
-            std::sin(pitch),
-            std::cos(yaw) * pitchCos,
-        });
+        return glm::normalize(Vec3 { std::sin(yaw) * pitchCos, std::sin(pitch), std::cos(yaw) * pitchCos });
     }
 
-    uint32_t textureNoise(uint32_t tile, uint32_t x, uint32_t y)
+    std::vector<char> readFile(const std::filesystem::path path)
     {
-        uint32_t value = tile * 0x9e3779b9U ^ x * 0x85ebca6bU ^ y * 0xc2b2ae35U;
-        value ^= value >> 16U;
-        value *= 0x7feb352dU;
-        value ^= value >> 15U;
-        return value;
+        std::ifstream file(path, std::ios::ate | std::ios::binary);
+        if (!file) [[unlikely]]
+            fatalError("Failed to open", path);
+        const std::streamsize size = file.tellg();
+        std::vector<char> bytes(static_cast<std::size_t>(size));
+        file.seekg(0);
+        file.read(bytes.data(), size);
+        return bytes;
     }
 
-    Pixel shade(Pixel base, int32_t delta)
+    void vkCheck(VkResult result, const char* operation)
     {
-        const auto clampByte = [](int32_t value) { return static_cast<uint8_t>(std::clamp(value, 0, 255)); };
-        return {
-            .r = clampByte(static_cast<int32_t>(base.r) + delta),
-            .g = clampByte(static_cast<int32_t>(base.g) + delta),
-            .b = clampByte(static_cast<int32_t>(base.b) + delta),
-            .a = base.a,
+        if (result != VK_SUCCESS) [[unlikely]]
+            fatalError(operation, "failed with VkResult", result);
+    }
+
+    uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeBits, VkMemoryPropertyFlags flags)
+    {
+        VkPhysicalDeviceMemoryProperties properties {};
+        vkGetPhysicalDeviceMemoryProperties(physicalDevice, &properties);
+        for (uint32_t i = 0; i < properties.memoryTypeCount; ++i) {
+            if ((typeBits & (1U << i)) && (properties.memoryTypes[i].propertyFlags & flags) == flags)
+                return i;
+        }
+        fatalError("No compatible Vulkan memory type");
+    }
+
+    struct QueueFamilies {
+        std::optional<uint32_t> graphics;
+        std::optional<uint32_t> present;
+
+        bool complete(bool requirePresent) const { return graphics && (!requirePresent || present); }
+    };
+
+    QueueFamilies findQueueFamilies(VkPhysicalDevice device, VkSurfaceKHR surface)
+    {
+        uint32_t count = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
+        std::vector<VkQueueFamilyProperties> families(count);
+        vkGetPhysicalDeviceQueueFamilyProperties(device, &count, families.data());
+
+        QueueFamilies result;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+                result.graphics = i;
+            if (surface) {
+                VkBool32 present = VK_FALSE;
+                vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &present);
+                if (present)
+                    result.present = i;
+            }
+        }
+        return result;
+    }
+
+    struct Buffer {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkDeviceSize size = 0;
+        VkDeviceSize memorySize = 0;
+        cudaExternalMemory_t cudaMemory = nullptr;
+        void* cudaPtr = nullptr;
+    };
+
+    struct Image {
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+    };
+
+    struct OffscreenFrame {
+        Image color;
+        Image depth;
+        VkFramebuffer framebuffer = VK_NULL_HANDLE;
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        Buffer paramsBuffer;
+        VkDescriptorSet paramsDescriptorSet = VK_NULL_HANDLE;
+        VkFence fence = VK_NULL_HANDLE;
+    };
+
+    bool hasStencilComponent(VkFormat format)
+    {
+        return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
+    }
+
+    bool hasDeviceExtension(VkPhysicalDevice device, std::string_view name)
+    {
+        uint32_t extensionCount = 0;
+        vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
+        std::vector<VkExtensionProperties> extensions(extensionCount);
+        vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, extensions.data());
+        return std::any_of(extensions.begin(), extensions.end(),
+            [name](const VkExtensionProperties& extension) { return extension.extensionName == name; });
+    }
+
+    VkFormat findSupportedDepthFormat(VkPhysicalDevice physicalDevice)
+    {
+        const VkFormat candidates[] {
+            VK_FORMAT_D32_SFLOAT,
+            VK_FORMAT_D32_SFLOAT_S8_UINT,
+            VK_FORMAT_D24_UNORM_S8_UINT,
+            VK_FORMAT_D16_UNORM,
         };
-    }
 
-    inline uint32_t tileIndex(AtlasTile tile) { return static_cast<uint32_t>(tile); }
-
-    Vec2 atlasUv(uint32_t tile, Vec2 uv)
-    {
-        const uint32_t tileX = tile % AtlasColumns;
-        const uint32_t tileY = tile / AtlasColumns;
-        const Vec2 tileOrigin {
-            static_cast<float>(tileX * AtlasTileSize),
-            static_cast<float>(tileY * AtlasTileSize),
-        };
-        return (tileOrigin + uv * static_cast<float>(AtlasTileSize - 1U) + Vec2 { 0.5f, 0.5f })
-            / Vec2 { static_cast<float>(AtlasWidth), static_cast<float>(AtlasHeight) };
-    }
-
-    void setAtlasPixel(std::vector<Pixel>& pixels, AtlasTile tile, uint32_t x, uint32_t y, Pixel color)
-    {
-        const uint32_t index = tileIndex(tile);
-        const uint32_t tileX = index % AtlasColumns;
-        const uint32_t tileY = index / AtlasColumns;
-        const uint32_t atlasX = tileX * AtlasTileSize + x;
-        const uint32_t atlasY = tileY * AtlasTileSize + y;
-        pixels[atlasY * AtlasWidth + atlasX] = color;
-    }
-
-    void fillNoisyTile(std::vector<Pixel>& pixels, AtlasTile tile, Pixel base, int32_t amplitude)
-    {
-        for (uint32_t y = 0; y < AtlasTileSize; ++y) {
-            for (uint32_t x = 0; x < AtlasTileSize; ++x) {
-                const int32_t noise
-                    = static_cast<int32_t>(textureNoise(tileIndex(tile), x, y) % (amplitude * 2 + 1)) - amplitude;
-                setAtlasPixel(pixels, tile, x, y, shade(base, noise));
-            }
-        }
-    }
-
-    std::vector<Pixel> generateBlockAtlas()
-    {
-        std::vector<Pixel> pixels(AtlasWidth * AtlasHeight);
-
-        fillNoisyTile(pixels, AtlasTile::GrassTop, { 83, 166, 74, 255 }, 22);
-        fillNoisyTile(pixels, AtlasTile::Dirt, { 126, 86, 53, 255 }, 20);
-        fillNoisyTile(pixels, AtlasTile::Stone, { 126, 130, 134, 255 }, 18);
-        fillNoisyTile(pixels, AtlasTile::GrassSide, { 121, 83, 49, 255 }, 18);
-        fillNoisyTile(pixels, AtlasTile::PigSkin, { 224, 143, 165, 255 }, 12);
-        fillNoisyTile(pixels, AtlasTile::Wood, { 116, 76, 42, 255 }, 18);
-        fillNoisyTile(pixels, AtlasTile::Leaves, { 65, 131, 67, 255 }, 24);
-        fillNoisyTile(pixels, AtlasTile::PigFace, { 224, 143, 165, 255 }, 10);
-
-        for (uint32_t y = 0; y < AtlasTileSize; ++y) {
-            for (uint32_t x = 0; x < AtlasTileSize; ++x) {
-                if (y < 4 || ((textureNoise(tileIndex(AtlasTile::GrassSide), x, y) & 7U) == 0U && y < 7)) {
-                    const int32_t noise
-                        = static_cast<int32_t>(textureNoise(tileIndex(AtlasTile::GrassTop), x, y) % 29U) - 14;
-                    setAtlasPixel(pixels, AtlasTile::GrassSide, x, y, shade({ 75, 154, 69, 255 }, noise));
-                }
+        for (VkFormat format : candidates) {
+            VkFormatProperties properties {};
+            vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &properties);
+            if ((properties.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
+                == VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+                return format;
             }
         }
 
-        for (uint32_t y = 0; y < AtlasTileSize; ++y) {
-            for (uint32_t x = 0; x < AtlasTileSize; ++x) {
-                if ((textureNoise(tileIndex(AtlasTile::Wood), x / 2, 0) & 3U) == 0U) {
-                    setAtlasPixel(
-                        pixels, AtlasTile::Wood, x, y, shade({ 75, 47, 27, 255 }, static_cast<int32_t>(y % 3U) * 5));
-                }
-            }
-        }
-
-        for (uint32_t y = 0; y < AtlasTileSize; ++y) {
-            for (uint32_t x = 0; x < AtlasTileSize; ++x) {
-                const bool leftEye = x >= 4 && x <= 5 && y >= 5 && y <= 6;
-                const bool rightEye = x >= 10 && x <= 11 && y >= 5 && y <= 6;
-                const bool snout = x >= 5 && x <= 10 && y >= 9 && y <= 12;
-                const bool nostril = (x == 6 || x == 9) && y >= 10 && y <= 11;
-                if (leftEye || rightEye)
-                    setAtlasPixel(pixels, AtlasTile::PigFace, x, y, { 30, 24, 28, 255 });
-                else if (nostril)
-                    setAtlasPixel(pixels, AtlasTile::PigFace, x, y, { 106, 50, 68, 255 });
-                else if (snout)
-                    setAtlasPixel(pixels, AtlasTile::PigFace, x, y, { 238, 166, 186, 255 });
-            }
-        }
-
-        return pixels;
+        fatalError("No supported Vulkan depth format");
     }
 
 } // namespace
 
-Renderer::Renderer(SDL_Window* window, RenderConfig config)
+struct Renderer::VulkanState {
+    VkInstance instance = VK_NULL_HANDLE;
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+    VkDevice device = VK_NULL_HANDLE;
+    VkQueue graphicsQueue = VK_NULL_HANDLE;
+    VkQueue presentQueue = VK_NULL_HANDLE;
+    uint32_t graphicsFamily = 0;
+    VkExtent2D renderExtent {};
+    VkFormat colorFormat = ColorFormat;
+    VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;
+    VkExtent2D swapchainExtent {};
+    std::vector<VkImage> swapchainImages;
+    std::vector<VkImageView> swapchainImageViews;
+    Image depthImage;
+    std::vector<OffscreenFrame> offscreenFrames;
+    std::size_t nextOffscreenFrame = 0;
+    std::size_t lastSubmittedOffscreenFrame = 0;
+    VkRenderPass renderPass = VK_NULL_HANDLE;
+    VkDescriptorSetLayout vertexSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout paramsSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    std::vector<VkFramebuffer> framebuffers;
+    VkCommandPool commandPool = VK_NULL_HANDLE;
+    std::vector<VkCommandBuffer> commandBuffers;
+    VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSet vertexDescriptorSet = VK_NULL_HANDLE;
+    VkDescriptorSet paramsDescriptorSet = VK_NULL_HANDLE;
+    Buffer vertexBuffer;
+    Buffer instanceBuffer;
+    Buffer paramsBuffer;
+    VkSemaphore imageAvailable = VK_NULL_HANDLE;
+    VkSemaphore renderFinished = VK_NULL_HANDLE;
+    VkFence inFlight = VK_NULL_HANDLE;
+    VkDeviceSize vertexCapacityBytes = 0;
+};
+
+namespace {
+
+    Buffer createBuffer(Renderer::VulkanState& vk, VkDeviceSize size, VkBufferUsageFlags usage,
+        VkMemoryPropertyFlags properties, bool exportMemory = false)
+    {
+        Buffer buffer;
+        buffer.size = size;
+        const VkExternalMemoryBufferCreateInfo externalBufferInfo {
+            .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+        };
+        const VkBufferCreateInfo bufferInfo {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = exportMemory ? &externalBufferInfo : nullptr,
+            .size = size,
+            .usage = usage,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        };
+        vkCheck(vkCreateBuffer(vk.device, &bufferInfo, nullptr, &buffer.buffer), "vkCreateBuffer");
+
+        VkMemoryRequirements requirements {};
+        vkGetBufferMemoryRequirements(vk.device, buffer.buffer, &requirements);
+        buffer.memorySize = requirements.size;
+        const VkExportMemoryAllocateInfo exportAllocInfo {
+            .sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
+            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+        };
+        const VkMemoryAllocateInfo allocInfo {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = exportMemory ? &exportAllocInfo : nullptr,
+            .allocationSize = requirements.size,
+            .memoryTypeIndex = findMemoryType(vk.physicalDevice, requirements.memoryTypeBits, properties),
+        };
+        vkCheck(vkAllocateMemory(vk.device, &allocInfo, nullptr, &buffer.memory), "vkAllocateMemory");
+        vkCheck(vkBindBufferMemory(vk.device, buffer.buffer, buffer.memory, 0), "vkBindBufferMemory");
+        return buffer;
+    }
+
+    Buffer createHostBuffer(Renderer::VulkanState& vk, VkDeviceSize size, VkBufferUsageFlags usage)
+    {
+        return createBuffer(
+            vk, size, usage, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    }
+
+    Buffer createExportedDeviceBuffer(Renderer::VulkanState& vk, VkDeviceSize size, VkBufferUsageFlags usage)
+    {
+        Buffer buffer = createBuffer(vk, size, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, true);
+
+        auto vkGetMemoryFdKHRFn
+            = reinterpret_cast<PFN_vkGetMemoryFdKHR>(vkGetDeviceProcAddr(vk.device, "vkGetMemoryFdKHR"));
+        if (!vkGetMemoryFdKHRFn) [[unlikely]]
+            fatalError("vkGetMemoryFdKHR is unavailable");
+
+        const VkMemoryGetFdInfoKHR fdInfo {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
+            .memory = buffer.memory,
+            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+        };
+        int fd = -1;
+        vkCheck(vkGetMemoryFdKHRFn(vk.device, &fdInfo, &fd), "vkGetMemoryFdKHR");
+
+        cudaExternalMemoryHandleDesc externalMemoryDesc {};
+        externalMemoryDesc.type = cudaExternalMemoryHandleTypeOpaqueFd;
+        externalMemoryDesc.handle.fd = fd;
+        externalMemoryDesc.size = static_cast<unsigned long long>(buffer.memorySize);
+        cudaCheck(cudaImportExternalMemory(&buffer.cudaMemory, &externalMemoryDesc),
+            "cudaImportExternalMemory vertex buffer");
+
+        cudaExternalMemoryBufferDesc bufferDesc {};
+        bufferDesc.offset = 0;
+        bufferDesc.size = static_cast<unsigned long long>(buffer.size);
+        cudaCheck(cudaExternalMemoryGetMappedBuffer(&buffer.cudaPtr, buffer.cudaMemory, &bufferDesc),
+            "cudaExternalMemoryGetMappedBuffer vertex buffer");
+        return buffer;
+    }
+
+    void destroyBuffer(Renderer::VulkanState& vk, Buffer& buffer)
+    {
+        if (buffer.cudaPtr)
+            cudaCheck(cudaFree(buffer.cudaPtr), "cudaFree external buffer mapping");
+        if (buffer.cudaMemory)
+            cudaCheck(cudaDestroyExternalMemory(buffer.cudaMemory), "cudaDestroyExternalMemory");
+        if (buffer.buffer)
+            vkDestroyBuffer(vk.device, buffer.buffer, nullptr);
+        if (buffer.memory)
+            vkFreeMemory(vk.device, buffer.memory, nullptr);
+        buffer = {};
+    }
+
+    void appendMeshFace(std::vector<MeshVertex>& vertices, Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, Vec3 color, float shade,
+        MeshMaterial material)
+    {
+        const Vec4 packedColor { color, shade };
+        const float materialId = meshMaterialId(material);
+        vertices.push_back(
+            { .position = { p0, 1.0f }, .colorAndShade = packedColor, .uvMaterial = { 0.0f, 0.0f, materialId, 0.0f } });
+        vertices.push_back(
+            { .position = { p1, 1.0f }, .colorAndShade = packedColor, .uvMaterial = { 1.0f, 0.0f, materialId, 0.0f } });
+        vertices.push_back(
+            { .position = { p2, 1.0f }, .colorAndShade = packedColor, .uvMaterial = { 1.0f, 1.0f, materialId, 0.0f } });
+        vertices.push_back(
+            { .position = { p0, 1.0f }, .colorAndShade = packedColor, .uvMaterial = { 0.0f, 0.0f, materialId, 0.0f } });
+        vertices.push_back(
+            { .position = { p2, 1.0f }, .colorAndShade = packedColor, .uvMaterial = { 1.0f, 1.0f, materialId, 0.0f } });
+        vertices.push_back(
+            { .position = { p3, 1.0f }, .colorAndShade = packedColor, .uvMaterial = { 0.0f, 1.0f, materialId, 0.0f } });
+    }
+
+    void appendMeshCuboid(std::vector<MeshVertex>& vertices, Vec3 min, Vec3 max, Vec3 color)
+    {
+        const Vec3 p000 { min.x, min.y, min.z };
+        const Vec3 p100 { max.x, min.y, min.z };
+        const Vec3 p010 { min.x, max.y, min.z };
+        const Vec3 p110 { max.x, max.y, min.z };
+        const Vec3 p001 { min.x, min.y, max.z };
+        const Vec3 p101 { max.x, min.y, max.z };
+        const Vec3 p011 { min.x, max.y, max.z };
+        const Vec3 p111 { max.x, max.y, max.z };
+        const MeshMaterial material = color.g > 0.6f ? MeshMaterial::PigSnout : MeshMaterial::PigSkin;
+        appendMeshFace(vertices, p010, p011, p111, p110, color, 1.0f, material);
+        appendMeshFace(vertices, p000, p100, p101, p001, color, 0.48f, material);
+        appendMeshFace(vertices, p100, p110, p111, p101, color, 0.78f, material);
+        appendMeshFace(vertices, p000, p001, p011, p010, color, 0.78f, material);
+        appendMeshFace(vertices, p001, p101, p111, p011, color, 0.68f, material);
+        appendMeshFace(vertices, p000, p010, p110, p100, color, 0.68f, material);
+    }
+
+    void appendMeshPatch(std::vector<MeshVertex>& vertices, Vec3 min, Vec3 max, float z, Vec3 color)
+    {
+        appendMeshFace(vertices, { min.x, min.y, z }, { max.x, min.y, z }, { max.x, max.y, z }, { min.x, max.y, z },
+            color, 1.0f, MeshMaterial::VertexColor);
+    }
+
+    std::vector<MeshVertex> createPigMesh()
+    {
+        std::vector<MeshVertex> vertices;
+        vertices.reserve(420U);
+        const Vec3 skin { 0.88f, 0.56f, 0.65f };
+        const Vec3 snout { 0.96f, 0.66f, 0.73f };
+        const Vec3 dark { 0.08f, 0.06f, 0.07f };
+        appendMeshCuboid(vertices, { -0.36f, 0.24f, -0.58f }, { 0.36f, 0.78f, 0.58f }, skin);
+        appendMeshCuboid(vertices, { -0.30f, 0.34f, 0.50f }, { 0.30f, 0.84f, 0.98f }, skin);
+        appendMeshCuboid(vertices, { -0.16f, 0.48f, 0.94f }, { 0.16f, 0.66f, 1.08f }, snout);
+        appendMeshPatch(vertices, { -0.23f, 0.65f, 0.0f }, { -0.13f, 0.75f, 0.0f }, 0.982f, dark);
+        appendMeshPatch(vertices, { 0.13f, 0.65f, 0.0f }, { 0.23f, 0.75f, 0.0f }, 0.982f, dark);
+        appendMeshPatch(vertices, { -0.10f, 0.54f, 0.0f }, { -0.04f, 0.61f, 0.0f }, 1.082f, dark);
+        appendMeshPatch(vertices, { 0.04f, 0.54f, 0.0f }, { 0.10f, 0.61f, 0.0f }, 1.082f, dark);
+        appendMeshCuboid(vertices, { -0.31f, 0.00f, -0.45f }, { -0.15f, 0.28f, -0.25f }, skin);
+        appendMeshCuboid(vertices, { 0.15f, 0.00f, -0.45f }, { 0.31f, 0.28f, -0.25f }, skin);
+        appendMeshCuboid(vertices, { -0.31f, 0.00f, 0.25f }, { -0.15f, 0.28f, 0.45f }, skin);
+        appendMeshCuboid(vertices, { 0.15f, 0.00f, 0.25f }, { 0.31f, 0.28f, 0.45f }, skin);
+        return vertices;
+    }
+
+    void destroyImage(Renderer::VulkanState& vk, Image& image)
+    {
+        if (image.view)
+            vkDestroyImageView(vk.device, image.view, nullptr);
+        if (image.image)
+            vkDestroyImage(vk.device, image.image, nullptr);
+        if (image.memory)
+            vkFreeMemory(vk.device, image.memory, nullptr);
+        image = {};
+    }
+
+    Image createDepthImage(Renderer::VulkanState& vk)
+    {
+        Image image;
+        const VkImageCreateInfo imageInfo {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = vk.depthFormat,
+            .extent = { vk.renderExtent.width, vk.renderExtent.height, 1 },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+        vkCheck(vkCreateImage(vk.device, &imageInfo, nullptr, &image.image), "vkCreateImage depth");
+
+        VkMemoryRequirements requirements {};
+        vkGetImageMemoryRequirements(vk.device, image.image, &requirements);
+        const VkMemoryAllocateInfo allocInfo {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .allocationSize = requirements.size,
+            .memoryTypeIndex
+            = findMemoryType(vk.physicalDevice, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+        };
+        vkCheck(vkAllocateMemory(vk.device, &allocInfo, nullptr, &image.memory), "vkAllocateMemory depth");
+        vkCheck(vkBindImageMemory(vk.device, image.image, image.memory, 0), "vkBindImageMemory depth");
+
+        const VkImageViewCreateInfo viewInfo {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = image.image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = vk.depthFormat,
+            .subresourceRange = { static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT
+                                      | (hasStencilComponent(vk.depthFormat) ? VK_IMAGE_ASPECT_STENCIL_BIT : 0)),
+                0, 1, 0, 1 },
+        };
+        vkCheck(vkCreateImageView(vk.device, &viewInfo, nullptr, &image.view), "vkCreateImageView depth");
+        return image;
+    }
+
+    Image createColorImage(Renderer::VulkanState& vk)
+    {
+        Image image;
+        const VkImageCreateInfo imageInfo {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = vk.colorFormat,
+            .extent = { vk.renderExtent.width, vk.renderExtent.height, 1 },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+        vkCheck(vkCreateImage(vk.device, &imageInfo, nullptr, &image.image), "vkCreateImage color");
+
+        VkMemoryRequirements requirements {};
+        vkGetImageMemoryRequirements(vk.device, image.image, &requirements);
+        const VkMemoryAllocateInfo allocInfo {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .allocationSize = requirements.size,
+            .memoryTypeIndex
+            = findMemoryType(vk.physicalDevice, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+        };
+        vkCheck(vkAllocateMemory(vk.device, &allocInfo, nullptr, &image.memory), "vkAllocateMemory color");
+        vkCheck(vkBindImageMemory(vk.device, image.image, image.memory, 0), "vkBindImageMemory color");
+
+        const VkImageViewCreateInfo viewInfo {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = image.image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = vk.colorFormat,
+            .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
+        };
+        vkCheck(vkCreateImageView(vk.device, &viewInfo, nullptr, &image.view), "vkCreateImageView color");
+        return image;
+    }
+
+    VkShaderModule createShaderModule(VkDevice device, const std::vector<char>& bytes)
+    {
+        const VkShaderModuleCreateInfo info {
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = bytes.size(),
+            .pCode = reinterpret_cast<const uint32_t*>(bytes.data()),
+        };
+        VkShaderModule module = VK_NULL_HANDLE;
+        vkCheck(vkCreateShaderModule(device, &info, nullptr, &module), "vkCreateShaderModule");
+        return module;
+    }
+
+    VkSurfaceFormatKHR chooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats)
+    {
+        for (const VkSurfaceFormatKHR& format : formats) {
+            if (format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+                return format;
+        }
+        return formats.front();
+    }
+
+    VkPresentModeKHR choosePresentMode(const std::vector<VkPresentModeKHR>& modes)
+    {
+        for (VkPresentModeKHR mode : modes) {
+            if (mode == VK_PRESENT_MODE_IMMEDIATE_KHR)
+                return mode;
+        }
+        for (VkPresentModeKHR mode : modes) {
+            if (mode == VK_PRESENT_MODE_MAILBOX_KHR)
+                return mode;
+        }
+        return VK_PRESENT_MODE_FIFO_KHR;
+    }
+
+    VkExtent2D chooseExtent(GLFWwindow* window, const VkSurfaceCapabilitiesKHR& capabilities)
+    {
+        if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
+            return capabilities.currentExtent;
+
+        int width = 0;
+        int height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        return {
+            std::clamp(
+                static_cast<uint32_t>(width), capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+            std::clamp(
+                static_cast<uint32_t>(height), capabilities.minImageExtent.height, capabilities.maxImageExtent.height),
+        };
+    }
+
+} // namespace
+namespace {
+
+    void createInstance(Renderer::VulkanState& vk)
+    {
+        VkApplicationInfo appInfo {
+            .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+            .pApplicationName = "BlockLab",
+            .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
+            .pEngineName = "BlockLab",
+            .engineVersion = VK_MAKE_VERSION(0, 1, 0),
+            .apiVersion = VK_API_VERSION_1_2,
+        };
+
+        uint32_t extensionCount = 0;
+        const char** extensions = glfwGetRequiredInstanceExtensions(&extensionCount);
+        VkInstanceCreateInfo info {
+            .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+            .pApplicationInfo = &appInfo,
+            .enabledExtensionCount = extensionCount,
+            .ppEnabledExtensionNames = extensions,
+        };
+        vkCheck(vkCreateInstance(&info, nullptr, &vk.instance), "vkCreateInstance");
+    }
+
+    void pickDevice(Renderer::VulkanState& vk)
+    {
+        uint32_t deviceCount = 0;
+        vkEnumeratePhysicalDevices(vk.instance, &deviceCount, nullptr);
+        if (deviceCount == 0) [[unlikely]]
+            fatalError("No Vulkan physical devices found");
+        std::vector<VkPhysicalDevice> devices(deviceCount);
+        vkEnumeratePhysicalDevices(vk.instance, &deviceCount, devices.data());
+
+        for (VkPhysicalDevice device : devices) {
+            const QueueFamilies families = findQueueFamilies(device, vk.surface);
+            const bool hasSwapchain = !vk.surface || hasDeviceExtension(device, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+            const bool hasExternalMemory = hasDeviceExtension(device, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME)
+                && hasDeviceExtension(device, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+            if (families.complete(vk.surface != VK_NULL_HANDLE) && hasSwapchain && hasExternalMemory) {
+                vk.physicalDevice = device;
+                vk.graphicsFamily = *families.graphics;
+                return;
+            }
+        }
+        fatalError("No suitable Vulkan physical device found");
+    }
+
+    void createDevice(Renderer::VulkanState& vk)
+    {
+        const QueueFamilies families = findQueueFamilies(vk.physicalDevice, vk.surface);
+        std::vector<VkDeviceQueueCreateInfo> queueInfos;
+        std::array<uint32_t, 2> uniqueFamilies { *families.graphics, families.present.value_or(*families.graphics) };
+        const float priority = 1.0f;
+        for (uint32_t family : uniqueFamilies) {
+            if (!queueInfos.empty() && queueInfos.front().queueFamilyIndex == family)
+                continue;
+            queueInfos.push_back({
+                .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .queueFamilyIndex = family,
+                .queueCount = 1,
+                .pQueuePriorities = &priority,
+            });
+        }
+
+        std::vector<const char*> extensions {
+            VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
+            VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+        };
+        if (vk.surface)
+            extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+        VkPhysicalDeviceFeatures features {};
+        const VkDeviceCreateInfo info {
+            .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+            .queueCreateInfoCount = static_cast<uint32_t>(queueInfos.size()),
+            .pQueueCreateInfos = queueInfos.data(),
+            .enabledExtensionCount = static_cast<uint32_t>(extensions.size()),
+            .ppEnabledExtensionNames = extensions.data(),
+            .pEnabledFeatures = &features,
+        };
+        vkCheck(vkCreateDevice(vk.physicalDevice, &info, nullptr, &vk.device), "vkCreateDevice");
+        vkGetDeviceQueue(vk.device, *families.graphics, 0, &vk.graphicsQueue);
+        if (families.present)
+            vkGetDeviceQueue(vk.device, *families.present, 0, &vk.presentQueue);
+    }
+
+    void createSwapchain(Renderer::VulkanState& vk, GLFWwindow* window)
+    {
+        VkSurfaceCapabilitiesKHR capabilities {};
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vk.physicalDevice, vk.surface, &capabilities);
+
+        uint32_t formatCount = 0;
+        vkGetPhysicalDeviceSurfaceFormatsKHR(vk.physicalDevice, vk.surface, &formatCount, nullptr);
+        std::vector<VkSurfaceFormatKHR> formats(formatCount);
+        vkGetPhysicalDeviceSurfaceFormatsKHR(vk.physicalDevice, vk.surface, &formatCount, formats.data());
+
+        uint32_t modeCount = 0;
+        vkGetPhysicalDeviceSurfacePresentModesKHR(vk.physicalDevice, vk.surface, &modeCount, nullptr);
+        std::vector<VkPresentModeKHR> modes(modeCount);
+        vkGetPhysicalDeviceSurfacePresentModesKHR(vk.physicalDevice, vk.surface, &modeCount, modes.data());
+
+        const VkSurfaceFormatKHR surfaceFormat = chooseSurfaceFormat(formats);
+        const VkPresentModeKHR presentMode = choosePresentMode(modes);
+        const VkExtent2D extent = chooseExtent(window, capabilities);
+        uint32_t imageCount = capabilities.minImageCount + 1;
+        if (capabilities.maxImageCount > 0 && imageCount > capabilities.maxImageCount)
+            imageCount = capabilities.maxImageCount;
+
+        const QueueFamilies families = findQueueFamilies(vk.physicalDevice, vk.surface);
+        const uint32_t queueFamilyIndices[] { *families.graphics, *families.present };
+        const bool shared = *families.graphics != *families.present;
+        const VkSwapchainCreateInfoKHR info {
+            .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+            .surface = vk.surface,
+            .minImageCount = imageCount,
+            .imageFormat = surfaceFormat.format,
+            .imageColorSpace = surfaceFormat.colorSpace,
+            .imageExtent = extent,
+            .imageArrayLayers = 1,
+            .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            .imageSharingMode = shared ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = shared ? 2U : 0U,
+            .pQueueFamilyIndices = shared ? queueFamilyIndices : nullptr,
+            .preTransform = capabilities.currentTransform,
+            .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+            .presentMode = presentMode,
+            .clipped = VK_TRUE,
+        };
+        vkCheck(vkCreateSwapchainKHR(vk.device, &info, nullptr, &vk.swapchain), "vkCreateSwapchainKHR");
+        vk.swapchainFormat = surfaceFormat.format;
+        vk.swapchainExtent = extent;
+        vk.colorFormat = surfaceFormat.format;
+        vk.renderExtent = extent;
+
+        vkGetSwapchainImagesKHR(vk.device, vk.swapchain, &imageCount, nullptr);
+        vk.swapchainImages.resize(imageCount);
+        vkGetSwapchainImagesKHR(vk.device, vk.swapchain, &imageCount, vk.swapchainImages.data());
+        vk.swapchainImageViews.resize(imageCount);
+        for (std::size_t i = 0; i < vk.swapchainImages.size(); ++i) {
+            const VkImageViewCreateInfo viewInfo {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .image = vk.swapchainImages[i],
+                .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                .format = vk.swapchainFormat,
+                .components = { VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                    VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY },
+                .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
+            };
+            vkCheck(vkCreateImageView(vk.device, &viewInfo, nullptr, &vk.swapchainImageViews[i]), "vkCreateImageView");
+        }
+    }
+
+    void createRenderPass(Renderer::VulkanState& vk)
+    {
+        const VkAttachmentDescription colorAttachment {
+            .format = vk.colorFormat,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .finalLayout = vk.swapchain ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        };
+        const VkAttachmentDescription depthAttachment {
+            .format = vk.depthFormat,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+        const VkAttachmentDescription attachments[] { colorAttachment, depthAttachment };
+        const VkAttachmentReference colorRef { .attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+        const VkAttachmentReference depthRef {
+            .attachment = 1,
+            .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+        const VkSubpassDescription subpass {
+            .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &colorRef,
+            .pDepthStencilAttachment = &depthRef,
+        };
+        const VkSubpassDependency swapchainDependency {
+            .srcSubpass = VK_SUBPASS_EXTERNAL,
+            .dstSubpass = 0,
+            .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+            .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        };
+        const VkSubpassDependency offscreenDependencies[] {
+            {
+                .srcSubpass = VK_SUBPASS_EXTERNAL,
+                .dstSubpass = 0,
+                .srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+                    | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                .srcAccessMask = 0,
+                .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+                    | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                .dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT,
+            },
+            {
+                .srcSubpass = 0,
+                .dstSubpass = VK_SUBPASS_EXTERNAL,
+                .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+                    | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                .dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+                    | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT,
+                .dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT,
+            },
+        };
+        const bool offscreen = vk.swapchain == VK_NULL_HANDLE;
+        const VkRenderPassCreateInfo info {
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+            .attachmentCount = 2,
+            .pAttachments = attachments,
+            .subpassCount = 1,
+            .pSubpasses = &subpass,
+            .dependencyCount = offscreen ? 2U : 1U,
+            .pDependencies = offscreen ? offscreenDependencies : &swapchainDependency,
+        };
+        vkCheck(vkCreateRenderPass(vk.device, &info, nullptr, &vk.renderPass), "vkCreateRenderPass");
+    }
+
+} // namespace
+namespace {
+
+    void createPipeline(Renderer::VulkanState& vk)
+    {
+        const VkDescriptorSetLayoutBinding vertexBinding {
+            .binding = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        };
+        const VkDescriptorSetLayoutBinding instanceBinding {
+            .binding = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        };
+        const VkDescriptorSetLayoutBinding vertexBindings[] { vertexBinding, instanceBinding };
+        const VkDescriptorSetLayoutCreateInfo vertexLayoutInfo {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = 2,
+            .pBindings = vertexBindings,
+        };
+        vkCheck(vkCreateDescriptorSetLayout(vk.device, &vertexLayoutInfo, nullptr, &vk.vertexSetLayout),
+            "vkCreateDescriptorSetLayout vertices");
+
+        const VkDescriptorSetLayoutBinding paramsBinding {
+            .binding = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        };
+        const VkDescriptorSetLayoutCreateInfo paramsLayoutInfo {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = 1,
+            .pBindings = &paramsBinding,
+        };
+        vkCheck(vkCreateDescriptorSetLayout(vk.device, &paramsLayoutInfo, nullptr, &vk.paramsSetLayout),
+            "vkCreateDescriptorSetLayout params");
+
+        const VkDescriptorSetLayout layouts[] { vk.vertexSetLayout, vk.paramsSetLayout };
+        const VkPipelineLayoutCreateInfo pipelineLayoutInfo {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 2,
+            .pSetLayouts = layouts,
+        };
+        vkCheck(vkCreatePipelineLayout(vk.device, &pipelineLayoutInfo, nullptr, &vk.pipelineLayout),
+            "vkCreatePipelineLayout");
+
+        const VkShaderModule vertexShader
+            = createShaderModule(vk.device, readFile(std::filesystem::path(BLOCKLAB_SHADER_DIR) / "mesh_vertex.spv"));
+        const VkShaderModule fragmentShader
+            = createShaderModule(vk.device, readFile(std::filesystem::path(BLOCKLAB_SHADER_DIR) / "mesh_fragment.spv"));
+
+        const VkPipelineShaderStageCreateInfo stages[] {
+            {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage = VK_SHADER_STAGE_VERTEX_BIT,
+                .module = vertexShader,
+                .pName = "meshVertexMain",
+            },
+            {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+                .module = fragmentShader,
+                .pName = "meshFragmentMain",
+            },
+        };
+        const VkPipelineVertexInputStateCreateInfo vertexInput {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        };
+        const VkPipelineInputAssemblyStateCreateInfo inputAssembly {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        };
+        const VkViewport viewport {
+            .x = 0.0f,
+            .y = 0.0f,
+            .width = static_cast<float>(vk.renderExtent.width),
+            .height = static_cast<float>(vk.renderExtent.height),
+            .minDepth = 0.0f,
+            .maxDepth = 1.0f,
+        };
+        const VkRect2D scissor { .offset = { 0, 0 }, .extent = vk.renderExtent };
+        const VkPipelineViewportStateCreateInfo viewportState {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .viewportCount = 1,
+            .pViewports = &viewport,
+            .scissorCount = 1,
+            .pScissors = &scissor,
+        };
+        const VkPipelineRasterizationStateCreateInfo rasterizer {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .polygonMode = VK_POLYGON_MODE_FILL,
+            .cullMode = VK_CULL_MODE_NONE,
+            .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+            .lineWidth = 1.0f,
+        };
+        const VkPipelineMultisampleStateCreateInfo multisample {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        };
+        const VkPipelineDepthStencilStateCreateInfo depthStencil {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .depthTestEnable = VK_TRUE,
+            .depthWriteEnable = VK_TRUE,
+            .depthCompareOp = VK_COMPARE_OP_LESS,
+        };
+        const VkPipelineColorBlendAttachmentState colorBlendAttachment {
+            .colorWriteMask
+            = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+        };
+        const VkPipelineColorBlendStateCreateInfo colorBlend {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .attachmentCount = 1,
+            .pAttachments = &colorBlendAttachment,
+        };
+        const VkGraphicsPipelineCreateInfo pipelineInfo {
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .stageCount = 2,
+            .pStages = stages,
+            .pVertexInputState = &vertexInput,
+            .pInputAssemblyState = &inputAssembly,
+            .pViewportState = &viewportState,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisample,
+            .pDepthStencilState = &depthStencil,
+            .pColorBlendState = &colorBlend,
+            .layout = vk.pipelineLayout,
+            .renderPass = vk.renderPass,
+            .subpass = 0,
+        };
+        vkCheck(vkCreateGraphicsPipelines(vk.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vk.pipeline),
+            "vkCreateGraphicsPipelines");
+        vkDestroyShaderModule(vk.device, fragmentShader, nullptr);
+        vkDestroyShaderModule(vk.device, vertexShader, nullptr);
+    }
+
+    void createFramebuffers(Renderer::VulkanState& vk)
+    {
+        if (!vk.swapchain) {
+            vk.offscreenFrames.resize(OffscreenFrameCount);
+            for (OffscreenFrame& frame : vk.offscreenFrames) {
+                frame.color = createColorImage(vk);
+                frame.depth = createDepthImage(vk);
+                const VkImageView attachments[] { frame.color.view, frame.depth.view };
+                const VkFramebufferCreateInfo info {
+                    .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                    .renderPass = vk.renderPass,
+                    .attachmentCount = 2,
+                    .pAttachments = attachments,
+                    .width = vk.renderExtent.width,
+                    .height = vk.renderExtent.height,
+                    .layers = 1,
+                };
+                vkCheck(vkCreateFramebuffer(vk.device, &info, nullptr, &frame.framebuffer),
+                    "vkCreateFramebuffer offscreen");
+            }
+            return;
+        }
+
+        vk.framebuffers.resize(vk.swapchainImageViews.size());
+        for (std::size_t i = 0; i < vk.swapchainImageViews.size(); ++i) {
+            const VkImageView attachments[] { vk.swapchainImageViews[i], vk.depthImage.view };
+            const VkFramebufferCreateInfo info {
+                .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                .renderPass = vk.renderPass,
+                .attachmentCount = 2,
+                .pAttachments = attachments,
+                .width = vk.renderExtent.width,
+                .height = vk.renderExtent.height,
+                .layers = 1,
+            };
+            vkCheck(vkCreateFramebuffer(vk.device, &info, nullptr, &vk.framebuffers[i]), "vkCreateFramebuffer");
+        }
+    }
+
+    void createCommandsAndSync(Renderer::VulkanState& vk)
+    {
+        const VkCommandPoolCreateInfo poolInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .queueFamilyIndex = vk.graphicsFamily,
+        };
+        vkCheck(vkCreateCommandPool(vk.device, &poolInfo, nullptr, &vk.commandPool), "vkCreateCommandPool");
+        const uint32_t commandBufferCount = vk.swapchain ? static_cast<uint32_t>(vk.swapchainImages.size())
+                                                         : static_cast<uint32_t>(vk.offscreenFrames.size());
+        vk.commandBuffers.resize(commandBufferCount);
+        const VkCommandBufferAllocateInfo allocInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = vk.commandPool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = static_cast<uint32_t>(vk.commandBuffers.size()),
+        };
+        vkCheck(vkAllocateCommandBuffers(vk.device, &allocInfo, vk.commandBuffers.data()), "vkAllocateCommandBuffers");
+
+        const VkSemaphoreCreateInfo semaphoreInfo { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+        const VkFenceCreateInfo fenceInfo { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .flags = VK_FENCE_CREATE_SIGNALED_BIT };
+        if (vk.swapchain) {
+            vkCheck(
+                vkCreateSemaphore(vk.device, &semaphoreInfo, nullptr, &vk.imageAvailable), "vkCreateSemaphore image");
+            vkCheck(
+                vkCreateSemaphore(vk.device, &semaphoreInfo, nullptr, &vk.renderFinished), "vkCreateSemaphore render");
+            vkCheck(vkCreateFence(vk.device, &fenceInfo, nullptr, &vk.inFlight), "vkCreateFence");
+        } else {
+            for (std::size_t i = 0; i < vk.offscreenFrames.size(); ++i) {
+                vk.offscreenFrames[i].commandBuffer = vk.commandBuffers[i];
+                vkCheck(vkCreateFence(vk.device, &fenceInfo, nullptr, &vk.offscreenFrames[i].fence),
+                    "vkCreateFence offscreen");
+            }
+        }
+    }
+
+} // namespace
+namespace {
+
+    void createDescriptors(Renderer::VulkanState& vk)
+    {
+        vk.vertexCapacityBytes = (static_cast<VkDeviceSize>(MaxTerrainVertices) + MaxPigVertices) * sizeof(MeshVertex);
+        vk.vertexBuffer = createExportedDeviceBuffer(vk, vk.vertexCapacityBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        vk.instanceBuffer = createHostBuffer(
+            vk, sizeof(Renderer::EntityInstance) * MaxEntityInstances, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (vk.swapchain)
+            vk.paramsBuffer = createHostBuffer(vk, sizeof(Renderer::RenderParams), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+        else {
+            for (OffscreenFrame& frame : vk.offscreenFrames)
+                frame.paramsBuffer
+                    = createHostBuffer(vk, sizeof(Renderer::RenderParams), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+        }
+
+        const uint32_t paramsSetCount = vk.swapchain ? 1U : static_cast<uint32_t>(vk.offscreenFrames.size());
+        const VkDescriptorPoolSize poolSizes[] {
+            { .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 2 },
+            { .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = paramsSetCount },
+        };
+        const VkDescriptorPoolCreateInfo poolInfo {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .maxSets = 1U + paramsSetCount,
+            .poolSizeCount = 2,
+            .pPoolSizes = poolSizes,
+        };
+        vkCheck(vkCreateDescriptorPool(vk.device, &poolInfo, nullptr, &vk.descriptorPool), "vkCreateDescriptorPool");
+
+        std::vector<VkDescriptorSetLayout> layouts;
+        layouts.reserve(1U + paramsSetCount);
+        layouts.push_back(vk.vertexSetLayout);
+        for (uint32_t i = 0; i < paramsSetCount; ++i)
+            layouts.push_back(vk.paramsSetLayout);
+        std::vector<VkDescriptorSet> sets(layouts.size());
+        const VkDescriptorSetAllocateInfo allocInfo {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool = vk.descriptorPool,
+            .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+            .pSetLayouts = layouts.data(),
+        };
+        vkCheck(vkAllocateDescriptorSets(vk.device, &allocInfo, sets.data()), "vkAllocateDescriptorSets");
+        vk.vertexDescriptorSet = sets[0];
+        if (vk.swapchain)
+            vk.paramsDescriptorSet = sets[1];
+        else {
+            for (std::size_t i = 0; i < vk.offscreenFrames.size(); ++i)
+                vk.offscreenFrames[i].paramsDescriptorSet = sets[i + 1U];
+        }
+
+        const VkDescriptorBufferInfo vertexInfo {
+            .buffer = vk.vertexBuffer.buffer, .offset = 0, .range = vk.vertexBuffer.size
+        };
+        const VkDescriptorBufferInfo instanceInfo {
+            .buffer = vk.instanceBuffer.buffer, .offset = 0, .range = vk.instanceBuffer.size
+        };
+        const VkWriteDescriptorSet vertexWrite {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = vk.vertexDescriptorSet,
+            .dstBinding = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &vertexInfo,
+        };
+        const VkWriteDescriptorSet instanceWrite {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = vk.vertexDescriptorSet,
+            .dstBinding = 1,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &instanceInfo,
+        };
+        const VkWriteDescriptorSet storageWrites[] { vertexWrite, instanceWrite };
+        vkUpdateDescriptorSets(vk.device, 2, storageWrites, 0, nullptr);
+
+        std::vector<VkDescriptorBufferInfo> paramsInfos(paramsSetCount);
+        std::vector<VkWriteDescriptorSet> writes(paramsSetCount);
+        for (uint32_t i = 0; i < paramsSetCount; ++i) {
+            Buffer& paramsBuffer = vk.swapchain ? vk.paramsBuffer : vk.offscreenFrames[i].paramsBuffer;
+            VkDescriptorSet paramsSet
+                = vk.swapchain ? vk.paramsDescriptorSet : vk.offscreenFrames[i].paramsDescriptorSet;
+            paramsInfos[i] = { .buffer = paramsBuffer.buffer, .offset = 0, .range = paramsBuffer.size };
+            writes[i] = {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = paramsSet,
+                .dstBinding = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .pBufferInfo = &paramsInfos[i],
+            };
+        }
+        vkUpdateDescriptorSets(vk.device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
+
+    void initVulkan(Renderer::VulkanState& vk, GLFWwindow* window, RenderConfig config)
+    {
+        createInstance(vk);
+        if (window)
+            vkCheck(glfwCreateWindowSurface(vk.instance, window, nullptr, &vk.surface), "glfwCreateWindowSurface");
+        pickDevice(vk);
+        createDevice(vk);
+        if (window)
+            createSwapchain(vk, window);
+        else {
+            vk.renderExtent = { static_cast<uint32_t>(config.width), static_cast<uint32_t>(config.height) };
+            vk.colorFormat = ColorFormat;
+        }
+        vk.depthFormat = findSupportedDepthFormat(vk.physicalDevice);
+        createRenderPass(vk);
+        if (vk.swapchain)
+            vk.depthImage = createDepthImage(vk);
+        createPipeline(vk);
+        createFramebuffers(vk);
+        createCommandsAndSync(vk);
+        createDescriptors(vk);
+    }
+
+    void destroyVulkan(Renderer::VulkanState& vk)
+    {
+        if (!vk.device)
+            return;
+        vkDeviceWaitIdle(vk.device);
+        for (OffscreenFrame& frame : vk.offscreenFrames) {
+            destroyBuffer(vk, frame.paramsBuffer);
+            if (frame.fence)
+                vkDestroyFence(vk.device, frame.fence, nullptr);
+            if (frame.framebuffer)
+                vkDestroyFramebuffer(vk.device, frame.framebuffer, nullptr);
+            destroyImage(vk, frame.depth);
+            destroyImage(vk, frame.color);
+        }
+        destroyBuffer(vk, vk.paramsBuffer);
+        destroyBuffer(vk, vk.instanceBuffer);
+        destroyBuffer(vk, vk.vertexBuffer);
+        if (vk.descriptorPool)
+            vkDestroyDescriptorPool(vk.device, vk.descriptorPool, nullptr);
+        if (vk.inFlight)
+            vkDestroyFence(vk.device, vk.inFlight, nullptr);
+        if (vk.renderFinished)
+            vkDestroySemaphore(vk.device, vk.renderFinished, nullptr);
+        if (vk.imageAvailable)
+            vkDestroySemaphore(vk.device, vk.imageAvailable, nullptr);
+        if (vk.commandPool)
+            vkDestroyCommandPool(vk.device, vk.commandPool, nullptr);
+        for (VkFramebuffer framebuffer : vk.framebuffers)
+            vkDestroyFramebuffer(vk.device, framebuffer, nullptr);
+        if (vk.pipeline)
+            vkDestroyPipeline(vk.device, vk.pipeline, nullptr);
+        if (vk.pipelineLayout)
+            vkDestroyPipelineLayout(vk.device, vk.pipelineLayout, nullptr);
+        if (vk.paramsSetLayout)
+            vkDestroyDescriptorSetLayout(vk.device, vk.paramsSetLayout, nullptr);
+        if (vk.vertexSetLayout)
+            vkDestroyDescriptorSetLayout(vk.device, vk.vertexSetLayout, nullptr);
+        if (vk.renderPass)
+            vkDestroyRenderPass(vk.device, vk.renderPass, nullptr);
+        destroyImage(vk, vk.depthImage);
+        for (VkImageView view : vk.swapchainImageViews)
+            vkDestroyImageView(vk.device, view, nullptr);
+        if (vk.swapchain)
+            vkDestroySwapchainKHR(vk.device, vk.swapchain, nullptr);
+        vkDestroyDevice(vk.device, nullptr);
+        vk.device = VK_NULL_HANDLE;
+        if (vk.surface)
+            vkDestroySurfaceKHR(vk.instance, vk.surface, nullptr);
+        if (vk.instance)
+            vkDestroyInstance(vk.instance, nullptr);
+    }
+
+} // namespace
+Renderer::Renderer(RenderConfig config)
     : m_config(config)
-    , m_window(window)
-    , m_width(config.width)
-    , m_height(config.height)
+    , m_meshBuilder({ .halfExtent = TerrainMeshHalfExtent })
+    , m_pigMesh(createPigMesh())
 {
-    m_gpuOverrides.reserve(MaxActiveOverrides);
-    m_entityVertices.reserve(MaxEntityVertices);
-    m_entityInstances.reserve(MaxEntityInstances);
+    if (m_pigMesh.size() > MaxPigVertices) [[unlikely]]
+        fatalError("Pig mesh exceeds reserved Vulkan/CUDA vertex buffer capacity");
+    if (!glfwInit()) [[unlikely]]
+        fatalError("glfwInit failed");
+    if (!glfwVulkanSupported()) [[unlikely]]
+        fatalError("GLFW reports Vulkan is not supported");
+
+    if (m_config.visible) {
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+        glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
+        m_window = glfwCreateWindow(m_config.width, m_config.height, "BlockLab", nullptr, nullptr);
+        if (!m_window) [[unlikely]]
+            fatalError("glfwCreateWindow failed");
+    }
+
+    m_vk = new VulkanState();
+    initVulkan(*m_vk, m_window, m_config);
     m_observation = {
-        .width = m_config.width,
-        .height = m_config.height,
+        .width = static_cast<int32_t>(m_vk->renderExtent.width),
+        .height = static_cast<int32_t>(m_vk->renderExtent.height),
         .channels = 4,
-        .device = ObservationDevice::SdlGpuTexture,
+        .device = m_vk->swapchain ? ObservationDevice::VulkanSwapchain : ObservationDevice::VulkanImage,
         .format = ObservationFormat::RGBA8,
+        .handle
+        = reinterpret_cast<uintptr_t>(m_vk->swapchain ? reinterpret_cast<void*>(m_vk->swapchain)
+                                                      : reinterpret_cast<void*>(m_vk->offscreenFrames[0].color.image)),
     };
-    initializeGpuResources();
 }
 
-Renderer::~Renderer() { releaseGpuResources(); }
-
-void Renderer::resize(int width, int height)
+Renderer::~Renderer()
 {
-    m_width = std::max(1, width);
-    m_height = std::max(1, height);
+    if (m_vk) {
+        destroyVulkan(*m_vk);
+        delete m_vk;
+        m_vk = nullptr;
+    }
+    if (m_window) {
+        glfwDestroyWindow(m_window);
+        m_window = nullptr;
+    }
+    glfwTerminate();
 }
 
-Observation Renderer::renderObservation(const World& world, const AgentState& agent)
+bool Renderer::shouldClose() const { return m_window && glfwWindowShouldClose(m_window); }
+
+void Renderer::pollEvents()
 {
-    renderGpuFrame(world, agent);
-    return m_observation;
+    if (m_window)
+        glfwPollEvents();
+}
+
+void Renderer::resize(int32_t width, int32_t height)
+{
+    m_config.width = std::max(1, width);
+    m_config.height = std::max(1, height);
 }
 
 Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent) const
@@ -251,780 +1181,165 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent) cons
     const Vec3 forward = cameraForward(agent.yaw, agent.pitch);
     const Vec3 right = glm::normalize(Vec3 { std::cos(agent.yaw), 0.0f, -std::sin(agent.yaw) });
     const Vec3 up = glm::normalize(glm::cross(forward, right));
-    const int32_t originX = floorToInt(agent.position.x) - RegionSizeX / 2;
-    const int32_t originZ = floorToInt(agent.position.z) - RegionSizeZ / 2;
-
     return {
         .origin = { origin.x, origin.y, origin.z, 0.0f },
         .forward = { forward.x, forward.y, forward.z, 0.0f },
         .right = { right.x, right.y, right.z, 0.0f },
         .up = { up.x, up.y, up.z, 0.0f },
-        .worldOriginAndWidth = { originX, 0, originZ, m_config.width },
-        .regionAndHeight = { RegionSizeX, RegionSizeY, RegionSizeZ, m_config.height },
+        .worldOriginAndWidth = { 0, 0, 0, static_cast<int32_t>(m_vk->renderExtent.width) },
+        .regionAndHeight = { 0, 0, 0, static_cast<int32_t>(m_vk->renderExtent.height) },
         .overrideInfo = { 0, 0, 0, 0 },
         .tuning = { 48.0f, Pi / 2.25f, 10.0f, 28.0f },
     };
 }
 
-bool Renderer::updateBlockBuffer(const World& world, const RenderParams& params, SDL_GPUCommandBuffer* commandBuffer)
+void Renderer::uploadInstances(const World& world)
 {
-    const int32_t originX = params.worldOriginAndWidth.x;
-    const int32_t originZ = params.worldOriginAndWidth.z;
-    const IVec3 regionOrigin { originX, 0, originZ };
-    if (m_blockBufferValid && m_cachedRegionOrigin == regionOrigin && m_cachedWorldVersion == world.version())
-        return false;
-
-    const SDL_GPUStorageBufferReadWriteBinding blockBufferBinding {
-        .buffer = m_blockBuffer,
-        .cycle = false,
-    };
-    SDL_PushGPUComputeUniformData(commandBuffer, 0, &params, sizeof(params));
-    SDL_GPUComputePass* generatePass = SDL_BeginGPUComputePass(commandBuffer, nullptr, 0, &blockBufferBinding, 1);
-    SDL_BindGPUComputePipeline(generatePass, m_generatePipeline);
-    SDL_DispatchGPUCompute(generatePass, (RegionVolume + GenerateThreadCount - 1) / GenerateThreadCount, 1, 1);
-    SDL_EndGPUComputePass(generatePass);
-
-    world.collectOverridesInRegion(regionOrigin, { RegionSizeX, RegionSizeY, RegionSizeZ }, m_activeOverrides);
-    if (m_activeOverrides.size() > MaxActiveOverrides)
-        m_activeOverrides.resize(MaxActiveOverrides);
-
-    m_gpuOverrides.clear();
-    m_gpuOverrides.reserve(m_activeOverrides.size());
-    for (const BlockOverride& edit : m_activeOverrides) {
-        m_gpuOverrides.push_back({
-            .x = edit.coord.x,
-            .y = edit.coord.y,
-            .z = edit.coord.z,
-            .block = static_cast<int32_t>(edit.block),
-        });
-    }
-
-    if (!m_gpuOverrides.empty()) {
-        void* mapped = SDL_MapGPUTransferBuffer(m_device, m_overrideTransferBuffer, true);
-        if (mapped) {
-            const uint32_t uploadSize = static_cast<uint32_t>(m_gpuOverrides.size() * sizeof(GpuBlockOverride));
-            std::memcpy(mapped, m_gpuOverrides.data(), uploadSize);
-            SDL_UnmapGPUTransferBuffer(m_device, m_overrideTransferBuffer);
-
-            SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(commandBuffer);
-            const SDL_GPUTransferBufferLocation source {
-                .transfer_buffer = m_overrideTransferBuffer,
-                .offset = 0,
-            };
-            const SDL_GPUBufferRegion destination {
-                .buffer = m_overrideBuffer,
-                .offset = 0,
-                .size = uploadSize,
-            };
-            SDL_UploadToGPUBuffer(copyPass, &source, &destination, false);
-            SDL_EndGPUCopyPass(copyPass);
-
-            RenderParams overrideParams = params;
-            overrideParams.overrideInfo.x = static_cast<int32_t>(m_gpuOverrides.size());
-            SDL_PushGPUComputeUniformData(commandBuffer, 0, &overrideParams, sizeof(overrideParams));
-            SDL_GPUComputePass* overridePass
-                = SDL_BeginGPUComputePass(commandBuffer, nullptr, 0, &blockBufferBinding, 1);
-            SDL_BindGPUComputePipeline(overridePass, m_applyOverridesPipeline);
-            SDL_GPUBuffer* overrideBuffer = m_overrideBuffer;
-            SDL_BindGPUComputeStorageBuffers(overridePass, 0, &overrideBuffer, 1);
-            SDL_DispatchGPUCompute(overridePass,
-                (static_cast<uint32_t>(m_gpuOverrides.size()) + GenerateThreadCount - 1) / GenerateThreadCount, 1, 1);
-            SDL_EndGPUComputePass(overridePass);
-        }
-    }
-
-    m_cachedRegionOrigin = regionOrigin;
-    m_cachedWorldVersion = world.version();
-    m_blockBufferValid = true;
-    return true;
-}
-
-void Renderer::rebuildMeshBuffer(const RenderParams& params, SDL_GPUCommandBuffer* commandBuffer)
-{
-    const SDL_GPUStorageBufferReadWriteBinding resetBindings[] {
-        {
-            .buffer = m_meshDrawBuffer,
-            .cycle = false,
-        },
-    };
-    SDL_GPUComputePass* resetPass = SDL_BeginGPUComputePass(commandBuffer, nullptr, 0, resetBindings, 1);
-    SDL_BindGPUComputePipeline(resetPass, m_resetMeshDrawPipeline);
-    SDL_DispatchGPUCompute(resetPass, 1, 1, 1);
-    SDL_EndGPUComputePass(resetPass);
-
-    const SDL_GPUStorageBufferReadWriteBinding buildBindings[] {
-        {
-            .buffer = m_meshVertexBuffer,
-            .cycle = false,
-        },
-        {
-            .buffer = m_meshDrawBuffer,
-            .cycle = false,
-        },
-    };
-    SDL_PushGPUComputeUniformData(commandBuffer, 0, &params, sizeof(params));
-    SDL_GPUComputePass* buildPass = SDL_BeginGPUComputePass(commandBuffer, nullptr, 0, buildBindings, 2);
-    SDL_BindGPUComputePipeline(buildPass, m_buildMeshPipeline);
-    SDL_GPUBuffer* blockBuffer = m_blockBuffer;
-    SDL_BindGPUComputeStorageBuffers(buildPass, 0, &blockBuffer, 1);
-    SDL_DispatchGPUCompute(buildPass, (RegionVolume + GenerateThreadCount - 1) / GenerateThreadCount, 1, 1);
-    SDL_EndGPUComputePass(buildPass);
-}
-
-void Renderer::appendEntityFace(
-    Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, uint32_t tile, float shade, float animationPhase, float animationYaw)
-{
-    const Vec2 uv0 = atlasUv(tile, { 0.0f, 0.0f });
-    const Vec2 uv1 = atlasUv(tile, { 0.0f, 1.0f });
-    const Vec2 uv2 = atlasUv(tile, { 1.0f, 1.0f });
-    const Vec2 uv3 = atlasUv(tile, { 1.0f, 0.0f });
-
-    m_entityVertices.push_back({ .position = { p0, animationPhase }, .uvAndShade = { uv0, shade, animationYaw } });
-    m_entityVertices.push_back({ .position = { p1, animationPhase }, .uvAndShade = { uv1, shade, animationYaw } });
-    m_entityVertices.push_back({ .position = { p2, animationPhase }, .uvAndShade = { uv2, shade, animationYaw } });
-    m_entityVertices.push_back({ .position = { p0, animationPhase }, .uvAndShade = { uv0, shade, animationYaw } });
-    m_entityVertices.push_back({ .position = { p2, animationPhase }, .uvAndShade = { uv2, shade, animationYaw } });
-    m_entityVertices.push_back({ .position = { p3, animationPhase }, .uvAndShade = { uv3, shade, animationYaw } });
-}
-
-void Renderer::appendEntityCuboid(Vec3 origin, Vec3 right, Vec3 forward, Vec3 min, Vec3 max, uint32_t sideTile,
-    uint32_t frontTile, float animationPhase, float animationYaw)
-{
-    const auto point
-        = [&](float x, float y, float z) { return origin + right * x + Vec3 { 0.0f, y, 0.0f } + forward * z; };
-
-    const Vec3 p000 = point(min.x, min.y, min.z);
-    const Vec3 p100 = point(max.x, min.y, min.z);
-    const Vec3 p010 = point(min.x, max.y, min.z);
-    const Vec3 p110 = point(max.x, max.y, min.z);
-    const Vec3 p001 = point(min.x, min.y, max.z);
-    const Vec3 p101 = point(max.x, min.y, max.z);
-    const Vec3 p011 = point(min.x, max.y, max.z);
-    const Vec3 p111 = point(max.x, max.y, max.z);
-
-    appendEntityFace(p010, p011, p111, p110, sideTile, 1.0f, animationPhase, animationYaw);
-    appendEntityFace(p000, p100, p101, p001, sideTile, 0.48f, animationPhase, animationYaw);
-    appendEntityFace(p110, p100, p101, p111, sideTile, 0.78f, animationPhase, animationYaw);
-    appendEntityFace(p010, p011, p001, p000, sideTile, 0.78f, animationPhase, animationYaw);
-    appendEntityFace(p011, p001, p101, p111, frontTile, 0.68f, animationPhase, animationYaw);
-    appendEntityFace(p110, p100, p000, p010, sideTile, 0.68f, animationPhase, animationYaw);
-}
-
-void Renderer::uploadStaticEntityMesh()
-{
-    m_entityVertices.clear();
-    const uint32_t pigSkinTile = tileIndex(AtlasTile::PigSkin);
-    const uint32_t pigFaceTile = tileIndex(AtlasTile::PigFace);
-    const Vec3 base { };
-    const Vec3 right { 1.0f, 0.0f, 0.0f };
-    const Vec3 forward { 0.0f, 0.0f, 1.0f };
-
-    appendEntityCuboid(
-        base, right, forward, { -0.36f, 0.24f, -0.58f }, { 0.36f, 0.78f, 0.58f }, pigSkinTile, pigSkinTile, 0.0f, 0.0f);
-    appendEntityCuboid(
-        base, right, forward, { -0.30f, 0.34f, 0.50f }, { 0.30f, 0.84f, 0.98f }, pigSkinTile, pigFaceTile, 0.0f, 0.0f);
-    appendEntityCuboid(base, right, forward, { -0.31f, 0.00f, -0.45f }, { -0.15f, 0.28f, -0.25f }, pigSkinTile,
-        pigSkinTile, 2.0f, 0.0f);
-    appendEntityCuboid(base, right, forward, { 0.15f, 0.00f, -0.45f }, { 0.31f, 0.28f, -0.25f }, pigSkinTile,
-        pigSkinTile, -2.0f, 0.0f);
-    appendEntityCuboid(base, right, forward, { -0.31f, 0.00f, 0.25f }, { -0.15f, 0.28f, 0.45f }, pigSkinTile,
-        pigSkinTile, -2.0f, 0.0f);
-    appendEntityCuboid(
-        base, right, forward, { 0.15f, 0.00f, 0.25f }, { 0.31f, 0.28f, 0.45f }, pigSkinTile, pigSkinTile, 2.0f, 0.0f);
-
-    m_entityVertexCount = static_cast<uint32_t>(m_entityVertices.size());
-    const uint32_t uploadSize = m_entityVertexCount * static_cast<uint32_t>(sizeof(MeshVertex));
-    const SDL_GPUTransferBufferCreateInfo transferBufferInfo {
-        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-        .size = uploadSize,
-    };
-    SDL_GPUTransferBuffer* transferBuffer = SDL_CreateGPUTransferBuffer(m_device, &transferBufferInfo);
-    if (!transferBuffer) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    void* mapped = SDL_MapGPUTransferBuffer(m_device, transferBuffer, true);
-    if (!mapped) [[unlikely]] {
-        SDL_ReleaseGPUTransferBuffer(m_device, transferBuffer);
-        throw std::runtime_error(SDL_GetError());
-    }
-    std::memcpy(mapped, m_entityVertices.data(), uploadSize);
-    SDL_UnmapGPUTransferBuffer(m_device, transferBuffer);
-
-    SDL_GPUCommandBuffer* commandBuffer = SDL_AcquireGPUCommandBuffer(m_device);
-    if (!commandBuffer) [[unlikely]] {
-        SDL_ReleaseGPUTransferBuffer(m_device, transferBuffer);
-        throw std::runtime_error(SDL_GetError());
-    }
-
-    SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(commandBuffer);
-    const SDL_GPUTransferBufferLocation source {
-        .transfer_buffer = transferBuffer,
-        .offset = 0,
-    };
-    const SDL_GPUBufferRegion destination {
-        .buffer = m_entityVertexBuffer,
-        .offset = 0,
-        .size = uploadSize,
-    };
-    SDL_UploadToGPUBuffer(copyPass, &source, &destination, false);
-    SDL_EndGPUCopyPass(copyPass);
-    SDL_SubmitGPUCommandBuffer(commandBuffer);
-    SDL_WaitForGPUIdle(m_device);
-    SDL_ReleaseGPUTransferBuffer(m_device, transferBuffer);
-}
-
-void Renderer::uploadEntityInstances(const World& world, SDL_GPUCommandBuffer* commandBuffer)
-{
-    m_entityInstances.clear();
-    m_entityInstances.push_back({
-        .positionAndYaw = { 0.0f, 0.0f, 0.0f, 0.0f },
-        .velocityAndKind = { 0.0f, 0.0f, 0.0f, 0.0f },
-    });
-
+    m_instances.clear();
+    m_instances.reserve(world.characters().size() + 1U);
+    m_instances.push_back({});
     for (const std::unique_ptr<NPC>& character : world.characters()) {
         if (!character->isAlive())
             continue;
-
         const CharacterSnapshot snapshot = character->snapshot();
         if (snapshot.kind != CharacterKind::Pig)
             continue;
-
-        const Vec3 forward = glm::normalize(Vec3 { snapshot.forward.x, 0.0f, snapshot.forward.z });
-        const float forwardYaw = std::atan2(forward.x, forward.z);
-        const float horizontalSpeed = glm::length(Vec2 { snapshot.velocity.x, snapshot.velocity.z });
-        m_entityInstances.push_back({
-            .positionAndYaw = { snapshot.position, forwardYaw },
-            .velocityAndKind = { horizontalSpeed, 0.0f, 0.0f, 1.0f },
+        const float yaw = std::atan2(snapshot.forward.x, snapshot.forward.z);
+        const float speed
+            = std::sqrt(snapshot.velocity.x * snapshot.velocity.x + snapshot.velocity.z * snapshot.velocity.z);
+        m_instances.push_back({
+            .positionAndYaw = { snapshot.position.x, snapshot.position.y, snapshot.position.z, yaw },
+            .velocityAndKind = { speed, 0.0f, 0.0f, renderEntityKindId(RenderEntityKind::Pig) },
         });
-
-        if (m_entityInstances.size() >= MaxEntityInstances)
+        if (m_instances.size() >= MaxEntityInstances)
             break;
     }
+    m_instanceCount = static_cast<uint32_t>(m_instances.size() - 1U);
 
-    m_entityInstanceCount = static_cast<uint32_t>(m_entityInstances.size() - 1);
-    if (m_entityInstances.empty())
-        return;
-
-    const uint32_t uploadSize = static_cast<uint32_t>(m_entityInstances.size() * sizeof(EntityInstance));
-    void* mapped = SDL_MapGPUTransferBuffer(m_device, m_entityInstanceTransferBuffer, true);
-    if (!mapped) [[unlikely]] {
-        m_entityInstanceCount = 0;
-        return;
-    }
-    std::memcpy(mapped, m_entityInstances.data(), uploadSize);
-    SDL_UnmapGPUTransferBuffer(m_device, m_entityInstanceTransferBuffer);
-
-    SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(commandBuffer);
-    const SDL_GPUTransferBufferLocation source {
-        .transfer_buffer = m_entityInstanceTransferBuffer,
-        .offset = 0,
-    };
-    const SDL_GPUBufferRegion destination {
-        .buffer = m_entityInstanceBuffer,
-        .offset = 0,
-        .size = uploadSize,
-    };
-    SDL_UploadToGPUBuffer(copyPass, &source, &destination, false);
-    SDL_EndGPUCopyPass(copyPass);
+    VulkanState& vk = *m_vk;
+    void* mapped = nullptr;
+    const VkDeviceSize uploadBytes = sizeof(EntityInstance) * m_instances.size();
+    vkCheck(vkMapMemory(vk.device, vk.instanceBuffer.memory, 0, uploadBytes, 0, &mapped), "vkMapMemory instances");
+    std::memcpy(mapped, m_instances.data(), static_cast<std::size_t>(uploadBytes));
+    vkUnmapMemory(vk.device, vk.instanceBuffer.memory);
 }
 
-void Renderer::uploadBlockAtlas()
+void Renderer::drawFrame(const RenderParams& params)
 {
-    const std::vector<Pixel> pixels = generateBlockAtlas();
-    const uint32_t uploadSize = static_cast<uint32_t>(pixels.size() * sizeof(Pixel));
-    const SDL_GPUTransferBufferCreateInfo transferBufferInfo {
-        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-        .size = uploadSize,
-    };
-    SDL_GPUTransferBuffer* transferBuffer = SDL_CreateGPUTransferBuffer(m_device, &transferBufferInfo);
-    if (!transferBuffer) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
+    VulkanState& vk = *m_vk;
+    OffscreenFrame* offscreenFrame = nullptr;
+    VkFence submitFence = vk.inFlight;
 
-    void* mapped = SDL_MapGPUTransferBuffer(m_device, transferBuffer, true);
-    if (!mapped) [[unlikely]] {
-        SDL_ReleaseGPUTransferBuffer(m_device, transferBuffer);
-        throw std::runtime_error(SDL_GetError());
-    }
-    std::memcpy(mapped, pixels.data(), uploadSize);
-    SDL_UnmapGPUTransferBuffer(m_device, transferBuffer);
-
-    SDL_GPUCommandBuffer* commandBuffer = SDL_AcquireGPUCommandBuffer(m_device);
-    if (!commandBuffer) [[unlikely]] {
-        SDL_ReleaseGPUTransferBuffer(m_device, transferBuffer);
-        throw std::runtime_error(SDL_GetError());
-    }
-
-    SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(commandBuffer);
-    const SDL_GPUTextureTransferInfo source {
-        .transfer_buffer = transferBuffer,
-        .offset = 0,
-        .pixels_per_row = AtlasWidth,
-        .rows_per_layer = AtlasHeight,
-    };
-    const SDL_GPUTextureRegion destination {
-        .texture = m_blockAtlas,
-        .mip_level = 0,
-        .layer = 0,
-        .x = 0,
-        .y = 0,
-        .z = 0,
-        .w = AtlasWidth,
-        .h = AtlasHeight,
-        .d = 1,
-    };
-    SDL_UploadToGPUTexture(copyPass, &source, &destination, false);
-    SDL_EndGPUCopyPass(copyPass);
-    SDL_SubmitGPUCommandBuffer(commandBuffer);
-    SDL_WaitForGPUIdle(m_device);
-    SDL_ReleaseGPUTransferBuffer(m_device, transferBuffer);
-}
-
-void Renderer::initializeGpuResources()
-{
-    const SDL_GPUShaderFormat format = shaderFormat();
-    m_device = SDL_CreateGPUDevice(format, true, shaderDriverName());
-    if (!m_device) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    if (!SDL_ClaimWindowForGPUDevice(m_device, m_window)) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    SDL_SetGPUAllowedFramesInFlight(m_device, 2);
-
-    const SDL_GPUTextureCreateInfo textureInfo {
-        .type = SDL_GPU_TEXTURETYPE_2D,
-        .format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-        .usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
-        .width = static_cast<Uint32>(m_config.width),
-        .height = static_cast<Uint32>(m_config.height),
-        .layer_count_or_depth = 1,
-        .num_levels = 1,
-        .sample_count = SDL_GPU_SAMPLECOUNT_1,
-    };
-    m_observationTarget = SDL_CreateGPUTexture(m_device, &textureInfo);
-    if (!m_observationTarget) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    m_observation.handle = reinterpret_cast<uintptr_t>(m_observationTarget);
-
-    const SDL_GPUTextureCreateInfo depthTextureInfo {
-        .type = SDL_GPU_TEXTURETYPE_2D,
-        .format = SDL_GPU_TEXTUREFORMAT_D16_UNORM,
-        .usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
-        .width = static_cast<Uint32>(m_config.width),
-        .height = static_cast<Uint32>(m_config.height),
-        .layer_count_or_depth = 1,
-        .num_levels = 1,
-        .sample_count = SDL_GPU_SAMPLECOUNT_1,
-    };
-    m_depthTarget = SDL_CreateGPUTexture(m_device, &depthTextureInfo);
-    if (!m_depthTarget) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    const SDL_GPUTextureCreateInfo blockAtlasInfo {
-        .type = SDL_GPU_TEXTURETYPE_2D,
-        .format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-        .usage = SDL_GPU_TEXTUREUSAGE_SAMPLER,
-        .width = AtlasWidth,
-        .height = AtlasHeight,
-        .layer_count_or_depth = 1,
-        .num_levels = 1,
-        .sample_count = SDL_GPU_SAMPLECOUNT_1,
-    };
-    m_blockAtlas = SDL_CreateGPUTexture(m_device, &blockAtlasInfo);
-    if (!m_blockAtlas) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    const SDL_GPUSamplerCreateInfo blockSamplerInfo {
-        .min_filter = SDL_GPU_FILTER_NEAREST,
-        .mag_filter = SDL_GPU_FILTER_NEAREST,
-        .mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST,
-        .address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
-        .address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
-        .address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
-    };
-    m_blockSampler = SDL_CreateGPUSampler(m_device, &blockSamplerInfo);
-    if (!m_blockSampler) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-    uploadBlockAtlas();
-
-    const SDL_GPUBufferCreateInfo blockBufferInfo {
-        .usage = SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_READ | SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_WRITE,
-        .size = RegionVolume * BytesPerBlock,
-    };
-    m_blockBuffer = SDL_CreateGPUBuffer(m_device, &blockBufferInfo);
-    if (!m_blockBuffer) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    const SDL_GPUBufferCreateInfo overrideBufferInfo {
-        .usage = SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_READ,
-        .size = MaxActiveOverrides * static_cast<uint32_t>(sizeof(GpuBlockOverride)),
-    };
-    m_overrideBuffer = SDL_CreateGPUBuffer(m_device, &overrideBufferInfo);
-    if (!m_overrideBuffer) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    const SDL_GPUTransferBufferCreateInfo overrideTransferBufferInfo {
-        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-        .size = MaxActiveOverrides * static_cast<uint32_t>(sizeof(GpuBlockOverride)),
-    };
-    m_overrideTransferBuffer = SDL_CreateGPUTransferBuffer(m_device, &overrideTransferBufferInfo);
-    if (!m_overrideTransferBuffer) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    const SDL_GPUBufferCreateInfo meshVertexBufferInfo {
-        .usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ | SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_WRITE,
-        .size = MaxMeshVertices * static_cast<uint32_t>(sizeof(MeshVertex)),
-    };
-    m_meshVertexBuffer = SDL_CreateGPUBuffer(m_device, &meshVertexBufferInfo);
-    if (!m_meshVertexBuffer) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    const SDL_GPUBufferCreateInfo meshDrawBufferInfo {
-        .usage = SDL_GPU_BUFFERUSAGE_INDIRECT | SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_WRITE,
-        .size = static_cast<uint32_t>(sizeof(SDL_GPUIndirectDrawCommand)),
-    };
-    m_meshDrawBuffer = SDL_CreateGPUBuffer(m_device, &meshDrawBufferInfo);
-    if (!m_meshDrawBuffer) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    const SDL_GPUBufferCreateInfo entityVertexBufferInfo {
-        .usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ,
-        .size = MaxEntityVertices * static_cast<uint32_t>(sizeof(MeshVertex)),
-    };
-    m_entityVertexBuffer = SDL_CreateGPUBuffer(m_device, &entityVertexBufferInfo);
-    if (!m_entityVertexBuffer) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    const SDL_GPUBufferCreateInfo entityInstanceBufferInfo {
-        .usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ,
-        .size = MaxEntityInstances * static_cast<uint32_t>(sizeof(EntityInstance)),
-    };
-    m_entityInstanceBuffer = SDL_CreateGPUBuffer(m_device, &entityInstanceBufferInfo);
-    if (!m_entityInstanceBuffer) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    const SDL_GPUTransferBufferCreateInfo entityInstanceTransferBufferInfo {
-        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-        .size = MaxEntityInstances * static_cast<uint32_t>(sizeof(EntityInstance)),
-    };
-    m_entityInstanceTransferBuffer = SDL_CreateGPUTransferBuffer(m_device, &entityInstanceTransferBufferInfo);
-    if (!m_entityInstanceTransferBuffer) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-    uploadStaticEntityMesh();
-
-    const ShaderBlob generateShader = loadShaderBlob("generate_region");
-    const SDL_GPUComputePipelineCreateInfo generateInfo {
-        .code_size = generateShader.code.size(),
-        .code = generateShader.code.data(),
-        .entrypoint = "generateMain",
-        .format = generateShader.format,
-        .num_samplers = 0,
-        .num_readonly_storage_textures = 0,
-        .num_readonly_storage_buffers = 0,
-        .num_readwrite_storage_textures = 0,
-        .num_readwrite_storage_buffers = 1,
-        .num_uniform_buffers = 1,
-        .threadcount_x = GenerateThreadCount,
-        .threadcount_y = 1,
-        .threadcount_z = 1,
-    };
-    m_generatePipeline = SDL_CreateGPUComputePipeline(m_device, &generateInfo);
-    if (!m_generatePipeline) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    const ShaderBlob applyOverridesShader = loadShaderBlob("apply_overrides");
-    const SDL_GPUComputePipelineCreateInfo applyOverridesInfo {
-        .code_size = applyOverridesShader.code.size(),
-        .code = applyOverridesShader.code.data(),
-        .entrypoint = "applyOverridesMain",
-        .format = applyOverridesShader.format,
-        .num_samplers = 0,
-        .num_readonly_storage_textures = 0,
-        .num_readonly_storage_buffers = 1,
-        .num_readwrite_storage_textures = 0,
-        .num_readwrite_storage_buffers = 1,
-        .num_uniform_buffers = 1,
-        .threadcount_x = GenerateThreadCount,
-        .threadcount_y = 1,
-        .threadcount_z = 1,
-    };
-    m_applyOverridesPipeline = SDL_CreateGPUComputePipeline(m_device, &applyOverridesInfo);
-    if (!m_applyOverridesPipeline) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    const ShaderBlob resetMeshDrawShader = loadShaderBlob("reset_mesh_draw");
-    const SDL_GPUComputePipelineCreateInfo resetMeshDrawInfo {
-        .code_size = resetMeshDrawShader.code.size(),
-        .code = resetMeshDrawShader.code.data(),
-        .entrypoint = "resetMeshDrawMain",
-        .format = resetMeshDrawShader.format,
-        .num_samplers = 0,
-        .num_readonly_storage_textures = 0,
-        .num_readonly_storage_buffers = 0,
-        .num_readwrite_storage_textures = 0,
-        .num_readwrite_storage_buffers = 1,
-        .num_uniform_buffers = 0,
-        .threadcount_x = 1,
-        .threadcount_y = 1,
-        .threadcount_z = 1,
-    };
-    m_resetMeshDrawPipeline = SDL_CreateGPUComputePipeline(m_device, &resetMeshDrawInfo);
-    if (!m_resetMeshDrawPipeline) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    const ShaderBlob buildMeshShader = loadShaderBlob("build_mesh");
-    const SDL_GPUComputePipelineCreateInfo buildMeshInfo {
-        .code_size = buildMeshShader.code.size(),
-        .code = buildMeshShader.code.data(),
-        .entrypoint = "buildMeshMain",
-        .format = buildMeshShader.format,
-        .num_samplers = 0,
-        .num_readonly_storage_textures = 0,
-        .num_readonly_storage_buffers = 1,
-        .num_readwrite_storage_textures = 0,
-        .num_readwrite_storage_buffers = 2,
-        .num_uniform_buffers = 1,
-        .threadcount_x = GenerateThreadCount,
-        .threadcount_y = 1,
-        .threadcount_z = 1,
-    };
-    m_buildMeshPipeline = SDL_CreateGPUComputePipeline(m_device, &buildMeshInfo);
-    if (!m_buildMeshPipeline) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    const ShaderBlob meshVertexShaderBlob = loadShaderBlob("mesh_vertex");
-    const SDL_GPUShaderCreateInfo meshVertexShaderInfo {
-        .code_size = meshVertexShaderBlob.code.size(),
-        .code = meshVertexShaderBlob.code.data(),
-        .entrypoint = "meshVertexMain",
-        .format = meshVertexShaderBlob.format,
-        .stage = SDL_GPU_SHADERSTAGE_VERTEX,
-        .num_samplers = 0,
-        .num_storage_textures = 0,
-        .num_storage_buffers = 2,
-        .num_uniform_buffers = 1,
-    };
-    SDL_GPUShader* meshVertexShader = SDL_CreateGPUShader(m_device, &meshVertexShaderInfo);
-    if (!meshVertexShader) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-
-    const ShaderBlob meshFragmentShaderBlob = loadShaderBlob("mesh_fragment");
-    const SDL_GPUShaderCreateInfo meshFragmentShaderInfo {
-        .code_size = meshFragmentShaderBlob.code.size(),
-        .code = meshFragmentShaderBlob.code.data(),
-        .entrypoint = "meshFragmentMain",
-        .format = meshFragmentShaderBlob.format,
-        .stage = SDL_GPU_SHADERSTAGE_FRAGMENT,
-        .num_samplers = 1,
-        .num_storage_textures = 0,
-        .num_storage_buffers = 0,
-        .num_uniform_buffers = 0,
-    };
-    SDL_GPUShader* meshFragmentShader = SDL_CreateGPUShader(m_device, &meshFragmentShaderInfo);
-    if (!meshFragmentShader) [[unlikely]] {
-        SDL_ReleaseGPUShader(m_device, meshVertexShader);
-        throw std::runtime_error(SDL_GetError());
+    uint32_t imageIndex = 0;
+    if (vk.swapchain) {
+        if (!m_config.present)
+            return;
+        vkWaitForFences(vk.device, 1, &vk.inFlight, VK_TRUE, UINT64_MAX);
+        vkResetFences(vk.device, 1, &vk.inFlight);
+        VkResult acquire = vkAcquireNextImageKHR(
+            vk.device, vk.swapchain, UINT64_MAX, vk.imageAvailable, VK_NULL_HANDLE, &imageIndex);
+        if (acquire != VK_SUCCESS)
+            return;
+    } else {
+        offscreenFrame = &vk.offscreenFrames[vk.nextOffscreenFrame];
+        vkWaitForFences(vk.device, 1, &offscreenFrame->fence, VK_TRUE, UINT64_MAX);
+        vkResetFences(vk.device, 1, &offscreenFrame->fence);
+        submitFence = offscreenFrame->fence;
+        vk.lastSubmittedOffscreenFrame = vk.nextOffscreenFrame;
+        vk.nextOffscreenFrame = (vk.nextOffscreenFrame + 1U) % vk.offscreenFrames.size();
+        m_observation.handle = reinterpret_cast<uintptr_t>(offscreenFrame->color.image);
     }
 
-    const SDL_GPUColorTargetDescription colorTargetDescription {
-        .format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+    void* mapped = nullptr;
+    Buffer& paramsBuffer = offscreenFrame ? offscreenFrame->paramsBuffer : vk.paramsBuffer;
+    vkCheck(vkMapMemory(vk.device, paramsBuffer.memory, 0, sizeof(params), 0, &mapped), "vkMapMemory params");
+    std::memcpy(mapped, &params, sizeof(params));
+    vkUnmapMemory(vk.device, paramsBuffer.memory);
+
+    VkCommandBuffer commandBuffer = offscreenFrame ? offscreenFrame->commandBuffer : vk.commandBuffers[imageIndex];
+    vkResetCommandBuffer(commandBuffer, 0);
+    const VkCommandBufferBeginInfo beginInfo { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+    vkCheck(vkBeginCommandBuffer(commandBuffer, &beginInfo), "vkBeginCommandBuffer");
+    const VkClearValue clearValues[] {
+        { .color = { { 0.42f, 0.64f, 0.86f, 1.0f } } },
+        { .depthStencil = { 1.0f, 0 } },
     };
-    const SDL_GPUGraphicsPipelineCreateInfo meshPipelineInfo {
-        .vertex_shader = meshVertexShader,
-        .fragment_shader = meshFragmentShader,
-        .vertex_input_state = {},
-        .primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
-        .rasterizer_state = {
-            .fill_mode = SDL_GPU_FILLMODE_FILL,
-            .cull_mode = SDL_GPU_CULLMODE_NONE,
-            .front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE,
-            .enable_depth_clip = true,
-        },
-        .multisample_state = {
-            .sample_count = SDL_GPU_SAMPLECOUNT_1,
-        },
-        .depth_stencil_state = {
-            .compare_op = SDL_GPU_COMPAREOP_LESS,
-            .enable_depth_test = true,
-            .enable_depth_write = true,
-        },
-        .target_info = {
-            .color_target_descriptions = &colorTargetDescription,
-            .num_color_targets = 1,
-            .depth_stencil_format = SDL_GPU_TEXTUREFORMAT_D16_UNORM,
-            .has_depth_stencil_target = true,
-        },
+    const VkRenderPassBeginInfo renderPassInfo {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass = vk.renderPass,
+        .framebuffer = offscreenFrame ? offscreenFrame->framebuffer : vk.framebuffers[imageIndex],
+        .renderArea = { { 0, 0 }, vk.renderExtent },
+        .clearValueCount = 2,
+        .pClearValues = clearValues,
     };
-    m_meshPipeline = SDL_CreateGPUGraphicsPipeline(m_device, &meshPipelineInfo);
-    SDL_ReleaseGPUShader(m_device, meshFragmentShader);
-    SDL_ReleaseGPUShader(m_device, meshVertexShader);
-    if (!m_meshPipeline) [[unlikely]]
-        throw std::runtime_error(SDL_GetError());
-}
+    vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipeline);
+    const VkDescriptorSet sets[] { vk.vertexDescriptorSet,
+        offscreenFrame ? offscreenFrame->paramsDescriptorSet : vk.paramsDescriptorSet };
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipelineLayout, 0, 2, sets, 0, nullptr);
+    if (m_terrainVertexCount > 0)
+        vkCmdDraw(commandBuffer, m_terrainVertexCount, 1, 0, 0);
+    if (m_pigVertexCount > 0 && m_instanceCount > 0)
+        vkCmdDraw(commandBuffer, m_pigVertexCount, m_instanceCount, m_pigVertexOffset, 1);
+    vkCmdEndRenderPass(commandBuffer);
+    vkCheck(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
 
-void Renderer::releaseGpuResources()
-{
-    if (!m_device)
-        return;
-
-    waitForFrameFences();
-    SDL_WaitForGPUIdle(m_device);
-
-    if (m_meshPipeline)
-        SDL_ReleaseGPUGraphicsPipeline(m_device, m_meshPipeline);
-    if (m_buildMeshPipeline)
-        SDL_ReleaseGPUComputePipeline(m_device, m_buildMeshPipeline);
-    if (m_resetMeshDrawPipeline)
-        SDL_ReleaseGPUComputePipeline(m_device, m_resetMeshDrawPipeline);
-    if (m_applyOverridesPipeline)
-        SDL_ReleaseGPUComputePipeline(m_device, m_applyOverridesPipeline);
-    if (m_generatePipeline)
-        SDL_ReleaseGPUComputePipeline(m_device, m_generatePipeline);
-    if (m_overrideTransferBuffer)
-        SDL_ReleaseGPUTransferBuffer(m_device, m_overrideTransferBuffer);
-    if (m_entityInstanceTransferBuffer)
-        SDL_ReleaseGPUTransferBuffer(m_device, m_entityInstanceTransferBuffer);
-    if (m_overrideBuffer)
-        SDL_ReleaseGPUBuffer(m_device, m_overrideBuffer);
-    if (m_entityInstanceBuffer)
-        SDL_ReleaseGPUBuffer(m_device, m_entityInstanceBuffer);
-    if (m_entityVertexBuffer)
-        SDL_ReleaseGPUBuffer(m_device, m_entityVertexBuffer);
-    if (m_meshDrawBuffer)
-        SDL_ReleaseGPUBuffer(m_device, m_meshDrawBuffer);
-    if (m_meshVertexBuffer)
-        SDL_ReleaseGPUBuffer(m_device, m_meshVertexBuffer);
-    if (m_blockSampler)
-        SDL_ReleaseGPUSampler(m_device, m_blockSampler);
-    if (m_blockAtlas)
-        SDL_ReleaseGPUTexture(m_device, m_blockAtlas);
-    if (m_blockBuffer)
-        SDL_ReleaseGPUBuffer(m_device, m_blockBuffer);
-    if (m_depthTarget)
-        SDL_ReleaseGPUTexture(m_device, m_depthTarget);
-    if (m_observationTarget)
-        SDL_ReleaseGPUTexture(m_device, m_observationTarget);
-
-    SDL_ReleaseWindowFromGPUDevice(m_device, m_window);
-    SDL_DestroyGPUDevice(m_device);
-    m_device = nullptr;
-    m_window = nullptr;
-}
-
-void Renderer::submitFrameCommandBuffer(SDL_GPUCommandBuffer* commandBuffer)
-{
-    SDL_GPUFence*& fence = m_frameFences[m_nextFrameFence];
-    if (fence) {
-        SDL_WaitForGPUFences(m_device, true, &fence, 1);
-        SDL_ReleaseGPUFence(m_device, fence);
-        fence = nullptr;
-    }
-
-    fence = SDL_SubmitGPUCommandBufferAndAcquireFence(commandBuffer);
-    m_nextFrameFence = (m_nextFrameFence + 1) % m_frameFences.size();
-}
-
-void Renderer::waitForFrameFences()
-{
-    for (SDL_GPUFence*& fence : m_frameFences) {
-        if (!fence)
-            continue;
-
-        SDL_WaitForGPUFences(m_device, true, &fence, 1);
-        SDL_ReleaseGPUFence(m_device, fence);
-        fence = nullptr;
-    }
-}
-
-void Renderer::renderGpuFrame(const World& world, const AgentState& agent)
-{
-    SDL_GPUCommandBuffer* commandBuffer = SDL_AcquireGPUCommandBuffer(m_device);
-    if (!commandBuffer) [[unlikely]]
-        return;
-
-    RenderParams params = buildRenderParams(agent);
-    params.overrideInfo.y = static_cast<int32_t>(world.seed());
-    params.overrideInfo.z = static_cast<int32_t>(SDL_GetTicks());
-    const bool worldMeshChanged = updateBlockBuffer(world, params, commandBuffer);
-    if (worldMeshChanged)
-        rebuildMeshBuffer(params, commandBuffer);
-    uploadEntityInstances(world, commandBuffer);
-    SDL_PushGPUVertexUniformData(commandBuffer, 0, &params, sizeof(params));
-
-    const SDL_GPUColorTargetInfo colorTargetInfo {
-        .texture = m_observationTarget,
-        .mip_level = 0,
-        .layer_or_depth_plane = 0,
-        .clear_color = { 0.42f, 0.64f, 0.86f, 1.0f },
-        .load_op = SDL_GPU_LOADOP_CLEAR,
-        .store_op = SDL_GPU_STOREOP_STORE,
-        .cycle = false,
+    const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    const VkSubmitInfo submitInfo {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .waitSemaphoreCount = vk.swapchain ? 1U : 0U,
+        .pWaitSemaphores = vk.swapchain ? &vk.imageAvailable : nullptr,
+        .pWaitDstStageMask = vk.swapchain ? &waitStage : nullptr,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &commandBuffer,
+        .signalSemaphoreCount = vk.swapchain ? 1U : 0U,
+        .pSignalSemaphores = vk.swapchain ? &vk.renderFinished : nullptr,
     };
-    const SDL_GPUDepthStencilTargetInfo depthTargetInfo {
-        .texture = m_depthTarget,
-        .clear_depth = 1.0f,
-        .load_op = SDL_GPU_LOADOP_CLEAR,
-        .store_op = SDL_GPU_STOREOP_DONT_CARE,
-        .stencil_load_op = SDL_GPU_LOADOP_DONT_CARE,
-        .stencil_store_op = SDL_GPU_STOREOP_DONT_CARE,
-        .cycle = false,
-    };
-    SDL_GPURenderPass* renderPass = SDL_BeginGPURenderPass(commandBuffer, &colorTargetInfo, 1, &depthTargetInfo);
-    SDL_BindGPUGraphicsPipeline(renderPass, m_meshPipeline);
-    SDL_GPUBuffer* meshVertexBuffer = m_meshVertexBuffer;
-    SDL_GPUBuffer* entityInstanceBuffer = m_entityInstanceBuffer;
-    SDL_GPUBuffer* worldBuffers[] { meshVertexBuffer, entityInstanceBuffer };
-    SDL_BindGPUVertexStorageBuffers(renderPass, 0, worldBuffers, 2);
-    const SDL_GPUTextureSamplerBinding blockAtlasBinding {
-        .texture = m_blockAtlas,
-        .sampler = m_blockSampler,
-    };
-    SDL_BindGPUFragmentSamplers(renderPass, 0, &blockAtlasBinding, 1);
-    SDL_DrawGPUPrimitivesIndirect(renderPass, m_meshDrawBuffer, 0, 1);
-    if (m_entityVertexCount > 0 && m_entityInstanceCount > 0) {
-        SDL_GPUBuffer* entityVertexBuffer = m_entityVertexBuffer;
-        SDL_GPUBuffer* entityBuffers[] { entityVertexBuffer, entityInstanceBuffer };
-        SDL_BindGPUVertexStorageBuffers(renderPass, 0, entityBuffers, 2);
-        SDL_DrawGPUPrimitives(renderPass, m_entityVertexCount, m_entityInstanceCount, 0, 1);
-    }
-    SDL_EndGPURenderPass(renderPass);
-    submitFrameCommandBuffer(commandBuffer);
+    vkCheck(vkQueueSubmit(vk.graphicsQueue, 1, &submitInfo, submitFence), "vkQueueSubmit");
 
-    ++m_observation.version;
-    if (m_config.presentToWindow)
-        present();
-}
-
-void Renderer::present()
-{
-    SDL_GPUCommandBuffer* commandBuffer = SDL_AcquireGPUCommandBuffer(m_device);
-    if (!commandBuffer) [[unlikely]]
-        return;
-
-    SDL_GPUTexture* swapchainTexture = nullptr;
-    uint32_t swapchainWidth = 0;
-    uint32_t swapchainHeight = 0;
-    if (SDL_WaitAndAcquireGPUSwapchainTexture(
-            commandBuffer, m_window, &swapchainTexture, &swapchainWidth, &swapchainHeight)
-        && swapchainTexture) {
-        const SDL_GPUBlitInfo blitInfo {
-            .source = {
-                .texture = m_observationTarget,
-                .w = static_cast<Uint32>(m_config.width),
-                .h = static_cast<Uint32>(m_config.height),
-            },
-            .destination = {
-                .texture = swapchainTexture,
-                .w = swapchainWidth,
-                .h = swapchainHeight,
-            },
-            .load_op = SDL_GPU_LOADOP_DONT_CARE,
-            .filter = SDL_GPU_FILTER_NEAREST,
+    if (vk.swapchain) {
+        const VkPresentInfoKHR presentInfo {
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &vk.renderFinished,
+            .swapchainCount = 1,
+            .pSwapchains = &vk.swapchain,
+            .pImageIndices = &imageIndex,
         };
-        SDL_BlitGPUTexture(commandBuffer, &blitInfo);
+        vkQueuePresentKHR(vk.presentQueue, &presentInfo);
     }
-    SDL_SubmitGPUCommandBuffer(commandBuffer);
+}
+
+Observation Renderer::renderObservation(const World& world, const AgentState& agent)
+{
+    const IVec3 agentBlock { floorToInt(agent.position.x), floorToInt(agent.position.y), floorToInt(agent.position.z) };
+    constexpr int32_t MeshCacheStride = 12;
+    const IVec3 meshDelta = glm::abs(agentBlock - m_lastMeshCenter);
+    const bool agentLeftMeshCache
+        = meshDelta.x > MeshCacheStride || meshDelta.y > MeshCacheStride || meshDelta.z > MeshCacheStride;
+    if (m_lastWorldVersion != world.version() || agentLeftMeshCache) {
+        if (!m_vk->swapchain) {
+            for (OffscreenFrame& frame : m_vk->offscreenFrames)
+                vkWaitForFences(m_vk->device, 1, &frame.fence, VK_TRUE, UINT64_MAX);
+        } else
+            vkWaitForFences(m_vk->device, 1, &m_vk->inFlight, VK_TRUE, UINT64_MAX);
+
+        MeshVertex* const vertices = static_cast<MeshVertex*>(m_vk->vertexBuffer.cudaPtr);
+        m_terrainVertexCount = m_meshBuilder.rebuild(world, agent, vertices, MaxTerrainVertices);
+        m_pigVertexOffset = m_terrainVertexCount;
+        m_pigVertexCount = static_cast<uint32_t>(m_pigMesh.size());
+        cudaCheck(cudaMemcpy(vertices + m_pigVertexOffset, m_pigMesh.data(), sizeof(MeshVertex) * m_pigMesh.size(),
+                      cudaMemcpyHostToDevice),
+            "cudaMemcpy pig mesh to Vulkan vertex buffer");
+        cudaCheck(cudaDeviceSynchronize(), "cudaDeviceSynchronize mesh upload");
+        m_lastWorldVersion = world.version();
+        m_lastMeshCenter = agentBlock;
+    }
+    uploadInstances(world);
+
+    drawFrame(buildRenderParams(agent));
+    ++m_observation.version;
+    return m_observation;
 }
 
 } // namespace blocklab

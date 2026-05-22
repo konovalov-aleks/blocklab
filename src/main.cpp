@@ -1,17 +1,13 @@
+#include "blocklab/CliParsing.h"
 #include "blocklab/Environment.h"
 #include "blocklab/Renderer.h"
 
-#include <SDL3/SDL.h>
+#include <GLFW/glfw3.h>
 
-#include <array>
-#include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <optional>
-#include <string>
 #include <string_view>
-#include <system_error>
 
 namespace {
 
@@ -21,58 +17,19 @@ struct AppConfig {
     bool unlocked = false;
 };
 
-bool keyDown(const std::array<bool, SDL_SCANCODE_COUNT>& keys, SDL_Scancode code)
-{
-    return keys[static_cast<std::size_t>(code)];
-}
+struct MouseLookState {
+    bool initialized = false;
+    double lastX = 0.0;
+    double lastY = 0.0;
+    float pendingYawDelta = 0.0f;
+    float pendingPitchDelta = 0.0f;
+};
 
-std::optional<int> parsePositiveInt(std::string_view text)
-{
-    const char* begin = text.data();
-    const char* end = text.data() + text.size();
-    int parsed = 0;
-    const auto result = std::from_chars(begin, end, parsed);
-    if (result.ec != std::errc { } || result.ptr != end || parsed <= 0)
-        return std::nullopt;
-    return parsed;
-}
-
-std::optional<double> parseDouble(std::string_view text)
-{
-    const std::string copy(text);
-    char* end = nullptr;
-    const double parsed = std::strtod(copy.c_str(), &end);
-    if (end != copy.c_str() + copy.size())
-        return std::nullopt;
-    return parsed;
-}
-
-std::optional<blocklab::RenderConfig> parseResolution(std::string_view text)
-{
-    const std::size_t separator = text.find('x');
-    if (separator == std::string_view::npos)
-        return std::nullopt;
-
-    const std::optional<int> width = parsePositiveInt(text.substr(0, separator));
-    const std::optional<int> height = parsePositiveInt(text.substr(separator + 1));
-    if (!width || !height)
-        return std::nullopt;
-
-    blocklab::RenderConfig config;
-    config.width = *width;
-    config.height = *height;
-    return config;
-}
-
-std::string_view optionValue(int& index, int argc, char** argv, std::string_view arg, std::string_view name)
-{
-    if (arg.size() > name.size() && arg.starts_with(name) && arg[name.size()] == '=')
-        return arg.substr(name.size() + 1);
-    if (arg == name && index + 1 < argc)
-        return argv[++index];
-    std::fprintf(stderr, "Missing value for %.*s\n", static_cast<int>(name.size()), name.data());
-    std::exit(EXIT_FAILURE);
-}
+struct InputState {
+    MouseLookState mouse;
+    bool digRequested = false;
+    bool placeRequested = false;
+};
 
 AppConfig parseAppConfig(int argc, char** argv)
 {
@@ -80,24 +37,27 @@ AppConfig parseAppConfig(int argc, char** argv)
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg(argv[i]);
         if (arg == "--resolution" || arg.starts_with("--resolution=")) {
-            if (auto renderConfig = parseResolution(optionValue(i, argc, argv, arg, "--resolution")); !renderConfig) {
-                std::fprintf(stderr, "Invalid --resolution value. Expected WIDTHxHEIGHT, for example 640x360.\n");
+            const auto parsed
+                = blocklab::cli::parseResolution(blocklab::cli::optionValue(i, argc, argv, arg, "--resolution"));
+            if (!parsed) [[unlikely]] {
+                std::fprintf(stderr, "Invalid --resolution value. Expected WIDTHxHEIGHT.\n");
                 std::exit(EXIT_FAILURE);
-            } else
-                config.renderConfig = *renderConfig;
+            }
+            config.renderConfig = *parsed;
         } else if (arg == "--visual-fps" || arg.starts_with("--visual-fps=")) {
-            if (auto visualFps = parseDouble(optionValue(i, argc, argv, arg, "--visual-fps"));
-                !visualFps || *visualFps <= 0.0) {
+            const auto visualFps
+                = blocklab::cli::parseDouble(blocklab::cli::optionValue(i, argc, argv, arg, "--visual-fps"));
+            if (!visualFps || *visualFps <= 0.0) [[unlikely]] {
                 std::fprintf(stderr, "Invalid --visual-fps value.\n");
                 std::exit(EXIT_FAILURE);
-            } else
-                config.visualFps = *visualFps;
+            }
+            config.visualFps = *visualFps;
         } else if (arg == "--unlocked")
             config.unlocked = true;
         else if (arg == "--help" || arg == "-h") {
             std::printf("Usage: blocklab [--resolution WIDTHxHEIGHT] [--visual-fps N] [--unlocked]\n");
             std::exit(EXIT_SUCCESS);
-        } else {
+        } else [[unlikely]] {
             std::fprintf(stderr, "Unknown argument: %.*s\n", static_cast<int>(arg.size()), arg.data());
             std::exit(EXIT_FAILURE);
         }
@@ -105,163 +65,128 @@ AppConfig parseAppConfig(int argc, char** argv)
     return config;
 }
 
+bool keyDown(GLFWwindow* window, int key) { return glfwGetKey(window, key) == GLFW_PRESS; }
+
+void cursorPositionCallback(GLFWwindow* window, double x, double y)
+{
+    auto* input = static_cast<InputState*>(glfwGetWindowUserPointer(window));
+    if (!input)
+        return;
+
+    MouseLookState& mouse = input->mouse;
+    if (!mouse.initialized) {
+        mouse.initialized = true;
+        mouse.lastX = x;
+        mouse.lastY = y;
+        return;
+    }
+
+    constexpr float mouseSensitivity = 0.0022f;
+    mouse.pendingYawDelta += static_cast<float>(x - mouse.lastX) * mouseSensitivity;
+    mouse.pendingPitchDelta -= static_cast<float>(y - mouse.lastY) * mouseSensitivity;
+    mouse.lastX = x;
+    mouse.lastY = y;
+}
+
+void keyCallback(GLFWwindow* window, int key, int, int action, int)
+{
+    auto* input = static_cast<InputState*>(glfwGetWindowUserPointer(window));
+    if (!input || action != GLFW_RELEASE)
+        return;
+
+    if (key == GLFW_KEY_Q)
+        input->digRequested = true;
+    else if (key == GLFW_KEY_E)
+        input->placeRequested = true;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
     const AppConfig appConfig = parseAppConfig(argc, argv);
-    blocklab::RenderConfig renderConfig = appConfig.renderConfig;
-    renderConfig.presentToWindow = false;
+    blocklab::Environment env(4);
+    blocklab::Renderer renderer(appConfig.renderConfig);
+    env.setObservationRenderer(&renderer);
+    env.reset();
+    InputState input;
+    GLFWwindow* window = renderer.window();
+    glfwSetWindowUserPointer(window, &input);
+    glfwSetCursorPosCallback(window, cursorPositionCallback);
+    glfwSetKeyCallback(window, keyCallback);
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    if (glfwRawMouseMotionSupported())
+        glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
 
-    if (!SDL_Init(SDL_INIT_VIDEO)) [[unlikely]] {
-        std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
-        return EXIT_FAILURE;
-    }
+    using Clock = std::chrono::steady_clock;
+    constexpr float fixedDt = 1.0f / 60.0f;
+    uint64_t totalSteps = 0;
+    uint64_t statsFrames = 0;
+    auto previous = Clock::now();
+    auto lastVisualAt = previous;
+    auto lastStatsAt = previous;
+    float accumulator = 0.0f;
+    uint64_t statsSteps = 0;
+    const auto visualInterval
+        = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / appConfig.visualFps));
 
-    SDL_Window* window
-        = SDL_CreateWindow("BlockLab RL Environment", renderConfig.width, renderConfig.height, SDL_WINDOW_RESIZABLE);
-    if (!window) [[unlikely]] {
-        std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
-        SDL_Quit();
-        return EXIT_FAILURE;
-    }
+    while (!renderer.shouldClose()) {
+        renderer.pollEvents();
+        if (keyDown(window, GLFW_KEY_ESCAPE))
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        if (keyDown(window, GLFW_KEY_R))
+            env.reset();
 
-    int width = renderConfig.width;
-    int height = renderConfig.height;
-    SDL_GetWindowSize(window, &width, &height);
+        const auto now = Clock::now();
+        const float frameDt = std::chrono::duration<float>(now - previous).count();
+        previous = now;
+        accumulator += frameDt;
 
-    {
-        blocklab::Environment env(4);
-        blocklab::Renderer renderer(window, renderConfig);
-        renderer.resize(width, height);
-        env.setObservationRenderer(&renderer);
-        env.reset();
-        std::array<bool, SDL_SCANCODE_COUNT> keys { };
-        SDL_SetWindowRelativeMouseMode(window, true);
+        const auto stepEnvironment = [&] {
+            blocklab::AgentAction action;
+            action.forward = (keyDown(window, GLFW_KEY_W) ? 1.0f : 0.0f) - (keyDown(window, GLFW_KEY_S) ? 1.0f : 0.0f);
+            action.right = (keyDown(window, GLFW_KEY_D) ? 1.0f : 0.0f) - (keyDown(window, GLFW_KEY_A) ? 1.0f : 0.0f);
+            action.jump = keyDown(window, GLFW_KEY_SPACE);
+            action.dig = input.digRequested;
+            action.place = input.placeRequested;
+            action.yawDelta
+                = (keyDown(window, GLFW_KEY_RIGHT) ? 0.045f : 0.0f) - (keyDown(window, GLFW_KEY_LEFT) ? 0.045f : 0.0f);
+            action.yawDelta += input.mouse.pendingYawDelta;
+            action.pitchDelta += input.mouse.pendingPitchDelta;
+            input.mouse.pendingYawDelta = 0.0f;
+            input.mouse.pendingPitchDelta = 0.0f;
+            input.digRequested = false;
+            input.placeRequested = false;
+            const blocklab::StepResult result = env.step(action);
+            if (result.terminated || result.truncated)
+                env.reset();
+            ++statsSteps;
+            ++totalSteps;
+        };
 
-        using Clock = std::chrono::steady_clock;
-        bool running = true;
-        uint64_t previous = SDL_GetTicks();
-        float accumulator = 0.0f;
-        float pendingYawDelta = 0.0f;
-        float pendingPitchDelta = 0.0f;
-        bool digRequested = false;
-        bool placeRequested = false;
-        constexpr float fixedDt = 1.0f / 60.0f;
-        constexpr float mouseSensitivity = 0.0022f;
-        const auto visualInterval
-            = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / appConfig.visualFps));
-        auto lastVisualAt = Clock::now() - visualInterval;
-        auto lastStatsAt = Clock::now();
-        uint64_t statsSteps = 0;
-        uint64_t statsFrames = 0;
-        uint64_t totalSteps = 0;
-
-        while (running) {
-            SDL_Event event;
-            while (SDL_PollEvent(&event)) {
-                switch (event.type) {
-                case SDL_EVENT_QUIT:
-                    running = false;
-                    break;
-                case SDL_EVENT_KEY_DOWN:
-                    keys[static_cast<std::size_t>(event.key.scancode)] = true;
-                    if (event.key.scancode == SDL_SCANCODE_ESCAPE)
-                        running = false;
-                    if (event.key.scancode == SDL_SCANCODE_R)
-                        env.reset();
-                    break;
-                case SDL_EVENT_KEY_UP:
-                    keys[static_cast<std::size_t>(event.key.scancode)] = false;
-                    if (event.key.scancode == SDL_SCANCODE_Q)
-                        digRequested = true;
-                    if (event.key.scancode == SDL_SCANCODE_E)
-                        placeRequested = true;
-                    break;
-                case SDL_EVENT_MOUSE_MOTION:
-                    pendingYawDelta += event.motion.xrel * mouseSensitivity;
-                    pendingPitchDelta -= event.motion.yrel * mouseSensitivity;
-                    break;
-                case SDL_EVENT_WINDOW_RESIZED:
-                    renderer.resize(event.window.data1, event.window.data2);
-                    break;
-                default:
-                    break;
-                }
+        if (appConfig.unlocked)
+            stepEnvironment();
+        else {
+            while (accumulator >= fixedDt) {
+                stepEnvironment();
+                accumulator -= fixedDt;
             }
-
-            const uint64_t nowTicks = SDL_GetTicks();
-            const float frameDt = static_cast<float>(nowTicks - previous) / 1000.0f;
-            previous = nowTicks;
-            accumulator += frameDt;
-            bool consumedPendingInputThisFrame = false;
-
-            const auto stepEnvironment = [&](bool consumePendingInput) {
-                blocklab::AgentAction action;
-                action.forward
-                    = (keyDown(keys, SDL_SCANCODE_W) ? 1.0f : 0.0f) - (keyDown(keys, SDL_SCANCODE_S) ? 1.0f : 0.0f);
-                action.right
-                    = (keyDown(keys, SDL_SCANCODE_D) ? 1.0f : 0.0f) - (keyDown(keys, SDL_SCANCODE_A) ? 1.0f : 0.0f);
-                action.jump = keyDown(keys, SDL_SCANCODE_SPACE);
-                action.yawDelta = (keyDown(keys, SDL_SCANCODE_RIGHT) ? 0.045f : 0.0f)
-                    - (keyDown(keys, SDL_SCANCODE_LEFT) ? 0.045f : 0.0f);
-                if (consumePendingInput) {
-                    action.yawDelta += pendingYawDelta;
-                    action.pitchDelta += pendingPitchDelta;
-                    action.dig = digRequested;
-                    action.place = placeRequested;
-                    consumedPendingInputThisFrame = true;
-                }
-                const blocklab::StepResult result = env.step(action);
-                if (result.terminated || result.truncated)
-                    env.reset();
-
-                ++statsSteps;
-                ++totalSteps;
-            };
-
-            if (appConfig.unlocked)
-                stepEnvironment(true);
-            else {
-                bool consumedPendingInput = false;
-                while (accumulator >= fixedDt) {
-                    stepEnvironment(!consumedPendingInput);
-                    consumedPendingInput = true;
-                    accumulator -= fixedDt;
-                }
-            }
-
-            const auto now = Clock::now();
-            if (now - lastVisualAt >= visualInterval) {
-                renderer.present();
-                lastVisualAt = now;
-                ++statsFrames;
-            }
-
-            const double statsElapsed = std::chrono::duration<double>(now - lastStatsAt).count();
-            if (statsElapsed >= 1.0) {
-                std::printf("fps=%.1f sim_steps/s=%.1f total_steps=%llu observation_version=%llu mode=%s\n",
-                    static_cast<double>(statsFrames) / statsElapsed, static_cast<double>(statsSteps) / statsElapsed,
-                    static_cast<unsigned long long>(totalSteps), static_cast<unsigned long long>(env.observe().version),
-                    appConfig.unlocked ? "unlocked" : "fixed");
-                lastStatsAt = now;
-                statsFrames = 0;
-                statsSteps = 0;
-            }
-
-            if (consumedPendingInputThisFrame) {
-                pendingYawDelta = 0.0f;
-                pendingPitchDelta = 0.0f;
-                digRequested = false;
-                placeRequested = false;
-            }
-            if (!appConfig.unlocked)
-                SDL_Delay(1);
         }
 
-        env.setObservationRenderer(nullptr);
-    }
+        if (env.observe().version > 0 && now - lastVisualAt >= visualInterval) {
+            lastVisualAt = now;
+            ++statsFrames;
+        }
 
-    SDL_DestroyWindow(window);
-    SDL_Quit();
+        const double statsElapsed = std::chrono::duration<double>(now - lastStatsAt).count();
+        if (statsElapsed >= 1.0) {
+            std::printf("fps=%.1f sim_steps/s=%.1f total_steps=%llu observation_version=%llu mode=%s\n",
+                static_cast<double>(statsFrames) / statsElapsed, static_cast<double>(statsSteps) / statsElapsed,
+                static_cast<unsigned long long>(totalSteps), static_cast<unsigned long long>(env.observe().version),
+                appConfig.unlocked ? "unlocked" : "fixed");
+            lastStatsAt = now;
+            statsFrames = 0;
+            statsSteps = 0;
+        }
+    }
 }

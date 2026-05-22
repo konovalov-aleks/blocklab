@@ -1,0 +1,44 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ubuntu-cuda:
+    name: Ubuntu CUDA/Vulkan build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            glslc \
+            libglfw3-dev \
+            libvulkan-dev \
+            ninja-build
+
+      - name: Install CUDA toolkit
+        uses: Jimver/cuda-toolkit@v0.2.35
+        id: cuda-toolkit
+        with:
+          cuda: '13.2.0'
+
+      - name: Show toolchain versions
+        run: |
+          cmake --version
+          ninja --version
+          glslc --version
+          echo "Installed cuda version is: ${{ steps.cuda-toolkit.outputs.cuda }}"
+          echo "Cuda install location: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}"
+          nvcc -V
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel

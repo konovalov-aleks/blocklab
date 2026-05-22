@@ -25,7 +25,7 @@ namespace {
     {
         const float length = length2D(value);
         if (length <= 0.0001f)
-            return { };
+            return {};
         return { value.x / length, 0.0f, value.z / length };
     }
 
@@ -81,7 +81,7 @@ void Character::dampHorizontalMovement(float dt)
 void Character::resetBody(Vec3 position)
 {
     m_position = position;
-    m_velocity = { };
+    m_velocity = {};
     m_onGround = false;
     m_hasHorizontalMovement = false;
     m_horizontalBlocked = false;
