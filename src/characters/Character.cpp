@@ -1,5 +1,6 @@
 #include "blocklab/characters/Character.h"
 
+#include "blocklab/Math.h"
 #include "blocklab/World.h"
 
 #include <algorithm>
@@ -13,7 +14,6 @@ namespace {
 
     float wrapAngle(float angle)
     {
-        constexpr float Pi = 3.14159265358979323846f;
         while (angle > Pi)
             angle -= 2.0f * Pi;
         while (angle < -Pi)

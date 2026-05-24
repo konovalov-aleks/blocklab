@@ -43,21 +43,30 @@ public:
 
     struct VulkanState;
     struct RenderParams {
+        struct alignas(16) FrameInfo {
+            int32_t animationTimeMs = 0;
+        };
+
         Vec4 origin;
         Vec4 forward;
         Vec4 right;
         Vec4 up;
         IVec4 worldOriginAndWidth;
         IVec4 regionAndHeight;
-        IVec4 overrideInfo;
+        FrameInfo frameInfo;
         Vec4 tuning;
     };
     struct EntityInstance {
         Vec4 positionAndYaw;
         Vec4 velocityAndKind;
     };
+    static_assert(sizeof(RenderParams::FrameInfo) == sizeof(IVec4));
 
 private:
+    RenderParams buildRenderParams(const AgentState&, const World&) const;
+    void uploadInstances(const World&);
+    void drawFrame(const RenderParams&);
+
     RenderConfig m_config;
     GLFWwindow* m_window = nullptr;
     VulkanState* m_vk = nullptr;
@@ -72,10 +81,6 @@ private:
     uint32_t m_pigVertexOffset = 0;
     uint32_t m_pigVertexCount = 0;
     uint32_t m_instanceCount = 0;
-
-    RenderParams buildRenderParams(const AgentState& agent) const;
-    void uploadInstances(const World& world);
-    void drawFrame(const RenderParams& params);
 };
 
 } // namespace blocklab

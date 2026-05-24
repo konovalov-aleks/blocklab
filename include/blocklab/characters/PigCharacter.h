@@ -11,6 +11,7 @@ public:
 private:
     void updateState(World& world, Vec3 threatPosition, float dt) override;
 
+    uint32_t m_walkSeed = 0;
     int32_t m_walkStep = 0;
     float m_blockedTimer = 0.0f;
 };

@@ -1,5 +1,6 @@
 #include "blocklab/World.h"
 
+#include "blocklab/Hash.h"
 #include "blocklab/characters/PigCharacter.h"
 
 #include <algorithm>
@@ -10,20 +11,9 @@ namespace blocklab {
 
 namespace {
 
-    uint32_t mixBits(uint32_t value)
-    {
-        value ^= value >> 16U;
-        value *= 0x7feb352dU;
-        value ^= value >> 15U;
-        value *= 0x846ca68bU;
-        value ^= value >> 16U;
-        return value;
-    }
-
     float valueNoise(uint32_t seed, int32_t x, int32_t z)
     {
-        const uint32_t hash
-            = mixBits(seed ^ static_cast<uint32_t>(x) * 0x9e3779b9U ^ static_cast<uint32_t>(z) * 0x85ebca6bU);
+        const uint32_t hash = hashCombine(seed, x, z);
         return static_cast<float>(hash & 0x00ffffffU) / static_cast<float>(0x00ffffffU) * 2.0f - 1.0f;
     }
 
@@ -78,10 +68,7 @@ void Chunk::set(int32_t x, int32_t y, int32_t z, Block block)
 
 std::size_t BlockCoordHash::operator()(const BlockCoord& coord) const noexcept
 {
-    uint32_t hash = mixBits(static_cast<uint32_t>(coord.x));
-    hash ^= mixBits(static_cast<uint32_t>(coord.y) + 0x9e3779b9U);
-    hash ^= mixBits(static_cast<uint32_t>(coord.z) + 0x85ebca6bU);
-    return static_cast<std::size_t>(hash);
+    return static_cast<std::size_t>(hashCombine(coord.x, coord.y, coord.z));
 }
 
 OverrideCluster::OverrideCluster() { m_blocks.fill(NoOverride); }
@@ -344,6 +331,12 @@ bool World::cachedSolidBlockInArea(IVec3 min, IVec3 max) const
         }
     }
     return false;
+}
+
+void World::update(float dt, Vec3 threatPosition)
+{
+    updateCharacters(dt, threatPosition);
+    m_logicalTimeMs += static_cast<uint64_t>(dt * 1000.0f);
 }
 
 void World::updateCharacters(float dt, Vec3 threatPosition)

@@ -1,5 +1,6 @@
 #include "blocklab/Agent.h"
 
+#include "blocklab/Math.h"
 #include "blocklab/World.h"
 
 #include <algorithm>
@@ -9,8 +10,6 @@ namespace blocklab {
 
 namespace {
 
-    constexpr float Pi = 3.14159265358979323846f;
-    constexpr float HalfPi = Pi * 0.5f;
     constexpr float EyeHeight = 1.62f;
     constexpr float AgentHeight = 1.8f;
     constexpr float Radius = 0.32f;
@@ -47,7 +46,7 @@ void Agent::reset(Vec3 position)
 void Agent::step(World& world, const AgentAction& action, float dt)
 {
     m_state.yaw += action.yawDelta;
-    m_state.pitch = std::clamp(m_state.pitch + action.pitchDelta, -HalfPi + 0.05f, HalfPi - 0.05f);
+    m_state.pitch = std::clamp(m_state.pitch + action.pitchDelta, -Pi / 2.0f + 0.05f, Pi / 2.0f - 0.05f);
     if (m_state.yaw > Pi)
         m_state.yaw -= 2.0f * Pi;
     else if (m_state.yaw < -Pi)

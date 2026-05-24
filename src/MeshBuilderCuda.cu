@@ -1,6 +1,7 @@
 #include "blocklab/CudaMeshBuilder.h"
 
 #include "blocklab/CudaHelpers.h"
+#include "blocklab/Hash.h"
 
 #include <cuda_runtime.h>
 
@@ -51,16 +52,6 @@ namespace {
             | (int64_t { z + CoordBias } & CoordMask);
     }
 
-    __host__ __device__ uint32_t mixBits(uint32_t value)
-    {
-        value ^= value >> 16U;
-        value *= 0x7feb352dU;
-        value ^= value >> 15U;
-        value *= 0x846ca68bU;
-        value ^= value >> 16U;
-        return value;
-    }
-
     __device__ int64_t packKeyDevice(int32_t x, int32_t y, int32_t z)
     {
         return ((int64_t { x + CoordBias } & CoordMask) << 42) | ((int64_t { y + CoordBias } & CoordMask) << 21)
@@ -69,8 +60,7 @@ namespace {
 
     __device__ float valueNoise(uint32_t seed, int32_t x, int32_t z)
     {
-        const uint32_t hash
-            = mixBits(seed ^ static_cast<uint32_t>(x) * 0x9e3779b9U ^ static_cast<uint32_t>(z) * 0x85ebca6bU);
+        const uint32_t hash = hashCombine(seed, x, z);
         return static_cast<float>(hash & 0x00ffffffU) / static_cast<float>(0x00ffffffU) * 2.0f - 1.0f;
     }
 

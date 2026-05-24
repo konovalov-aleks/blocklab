@@ -30,7 +30,7 @@ StepResult Environment::step(const AgentAction& action)
 {
     const AgentState before = m_agent.state();
     m_agent.step(m_world, action, s_fixedDt);
-    m_world.updateCharacters(s_fixedDt, m_agent.state().position);
+    m_world.update(s_fixedDt, m_agent.state().position);
     ++m_stepCount;
 
     const AgentState& after = m_agent.state();

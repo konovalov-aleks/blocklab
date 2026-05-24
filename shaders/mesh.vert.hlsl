@@ -1,3 +1,7 @@
+struct RenderFrameInfo {
+    int animationTimeMs;
+};
+
 struct RenderParams {
     float4 origin;
     float4 forward;
@@ -5,7 +9,7 @@ struct RenderParams {
     float4 up;
     int4 worldOriginAndWidth;
     int4 regionAndHeight;
-    int4 overrideInfo;
+    RenderFrameInfo frameInfo;
     float4 tuning;
 };
 
@@ -35,10 +39,7 @@ struct VertexOutput {
 StructuredBuffer<MeshVertex> vertices : register(t0, space0);
 StructuredBuffer<EntityInstance> instances : register(t1, space0);
 
-cbuffer Params : register(b0, space1)
-{
-    RenderParams params;
-};
+cbuffer Params : register(b0, space1) { RenderParams params; };
 
 VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
 {
@@ -50,10 +51,17 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
         float yaw = instance.positionAndYaw.w;
         float3 entityRight = float3(cos(yaw), 0.0, -sin(yaw));
         float3 entityForward = float3(sin(yaw), 0.0, cos(yaw));
-        worldPosition = instance.positionAndYaw.xyz
-            + entityRight * vertex.position.x
-            + float3(0.0, vertex.position.y, 0.0)
-            + entityForward * vertex.position.z;
+        worldPosition = instance.positionAndYaw.xyz + entityRight * vertex.position.x
+            + float3(0.0, vertex.position.y, 0.0) + entityForward * vertex.position.z;
+        // Pig mesh uses position.w as a leg animation marker: 0 disables it, sign selects the stride phase.
+        float legPhaseMarker = vertex.position.w;
+        float stridePhase = legPhaseMarker > 0.0 ? 0.0 : 3.14159265;
+        float animationTime = float(params.frameInfo.animationTimeMs) * 0.001;
+        float stride = sin(animationTime * 9.0 + stridePhase);
+        if (abs(legPhaseMarker) > 1.5 && instance.velocityAndKind.x > 0.05) {
+            worldPosition += entityForward * (stride * 0.08);
+            worldPosition.y += max(0.0, -stride) * 0.05;
+        }
     }
     float3 relative = worldPosition - params.origin.xyz;
     float viewX = dot(relative, params.right.xyz);

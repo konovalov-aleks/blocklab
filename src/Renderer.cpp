@@ -9,8 +9,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -24,7 +27,6 @@
 namespace blocklab {
 namespace {
 
-    constexpr float Pi = 3.14159265358979323846f;
     constexpr float EyeHeight = 1.62f;
     constexpr VkFormat ColorFormat = VK_FORMAT_B8G8R8A8_UNORM;
     constexpr uint32_t OffscreenFrameCount = 8;
@@ -291,25 +293,32 @@ namespace {
     }
 
     void appendMeshFace(std::vector<MeshVertex>& vertices, Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, Vec3 color, float shade,
-        MeshMaterial material)
+        MeshMaterial material, float animationPhase)
     {
         const Vec4 packedColor { color, shade };
         const float materialId = meshMaterialId(material);
-        vertices.push_back(
-            { .position = { p0, 1.0f }, .colorAndShade = packedColor, .uvMaterial = { 0.0f, 0.0f, materialId, 0.0f } });
-        vertices.push_back(
-            { .position = { p1, 1.0f }, .colorAndShade = packedColor, .uvMaterial = { 1.0f, 0.0f, materialId, 0.0f } });
-        vertices.push_back(
-            { .position = { p2, 1.0f }, .colorAndShade = packedColor, .uvMaterial = { 1.0f, 1.0f, materialId, 0.0f } });
-        vertices.push_back(
-            { .position = { p0, 1.0f }, .colorAndShade = packedColor, .uvMaterial = { 0.0f, 0.0f, materialId, 0.0f } });
-        vertices.push_back(
-            { .position = { p2, 1.0f }, .colorAndShade = packedColor, .uvMaterial = { 1.0f, 1.0f, materialId, 0.0f } });
-        vertices.push_back(
-            { .position = { p3, 1.0f }, .colorAndShade = packedColor, .uvMaterial = { 0.0f, 1.0f, materialId, 0.0f } });
+        vertices.push_back({ .position = { p0, animationPhase },
+            .colorAndShade = packedColor,
+            .uvMaterial = { 0.0f, 0.0f, materialId, 0.0f } });
+        vertices.push_back({ .position = { p1, animationPhase },
+            .colorAndShade = packedColor,
+            .uvMaterial = { 1.0f, 0.0f, materialId, 0.0f } });
+        vertices.push_back({ .position = { p2, animationPhase },
+            .colorAndShade = packedColor,
+            .uvMaterial = { 1.0f, 1.0f, materialId, 0.0f } });
+        vertices.push_back({ .position = { p0, animationPhase },
+            .colorAndShade = packedColor,
+            .uvMaterial = { 0.0f, 0.0f, materialId, 0.0f } });
+        vertices.push_back({ .position = { p2, animationPhase },
+            .colorAndShade = packedColor,
+            .uvMaterial = { 1.0f, 1.0f, materialId, 0.0f } });
+        vertices.push_back({ .position = { p3, animationPhase },
+            .colorAndShade = packedColor,
+            .uvMaterial = { 0.0f, 1.0f, materialId, 0.0f } });
     }
 
-    void appendMeshCuboid(std::vector<MeshVertex>& vertices, Vec3 min, Vec3 max, Vec3 color)
+    void appendMeshCuboid(
+        std::vector<MeshVertex>& vertices, Vec3 min, Vec3 max, Vec3 color, float animationPhase = 0.0f)
     {
         const Vec3 p000 { min.x, min.y, min.z };
         const Vec3 p100 { max.x, min.y, min.z };
@@ -320,18 +329,18 @@ namespace {
         const Vec3 p011 { min.x, max.y, max.z };
         const Vec3 p111 { max.x, max.y, max.z };
         const MeshMaterial material = color.g > 0.6f ? MeshMaterial::PigSnout : MeshMaterial::PigSkin;
-        appendMeshFace(vertices, p010, p011, p111, p110, color, 1.0f, material);
-        appendMeshFace(vertices, p000, p100, p101, p001, color, 0.48f, material);
-        appendMeshFace(vertices, p100, p110, p111, p101, color, 0.78f, material);
-        appendMeshFace(vertices, p000, p001, p011, p010, color, 0.78f, material);
-        appendMeshFace(vertices, p001, p101, p111, p011, color, 0.68f, material);
-        appendMeshFace(vertices, p000, p010, p110, p100, color, 0.68f, material);
+        appendMeshFace(vertices, p010, p011, p111, p110, color, 1.0f, material, animationPhase);
+        appendMeshFace(vertices, p000, p100, p101, p001, color, 0.48f, material, animationPhase);
+        appendMeshFace(vertices, p100, p110, p111, p101, color, 0.78f, material, animationPhase);
+        appendMeshFace(vertices, p000, p001, p011, p010, color, 0.78f, material, animationPhase);
+        appendMeshFace(vertices, p001, p101, p111, p011, color, 0.68f, material, animationPhase);
+        appendMeshFace(vertices, p000, p010, p110, p100, color, 0.68f, material, animationPhase);
     }
 
     void appendMeshPatch(std::vector<MeshVertex>& vertices, Vec3 min, Vec3 max, float z, Vec3 color)
     {
         appendMeshFace(vertices, { min.x, min.y, z }, { max.x, min.y, z }, { max.x, max.y, z }, { min.x, max.y, z },
-            color, 1.0f, MeshMaterial::VertexColor);
+            color, 1.0f, MeshMaterial::VertexColor, 0.0f);
     }
 
     std::vector<MeshVertex> createPigMesh()
@@ -348,10 +357,10 @@ namespace {
         appendMeshPatch(vertices, { 0.13f, 0.65f, 0.0f }, { 0.23f, 0.75f, 0.0f }, 0.982f, dark);
         appendMeshPatch(vertices, { -0.10f, 0.54f, 0.0f }, { -0.04f, 0.61f, 0.0f }, 1.082f, dark);
         appendMeshPatch(vertices, { 0.04f, 0.54f, 0.0f }, { 0.10f, 0.61f, 0.0f }, 1.082f, dark);
-        appendMeshCuboid(vertices, { -0.31f, 0.00f, -0.45f }, { -0.15f, 0.28f, -0.25f }, skin);
-        appendMeshCuboid(vertices, { 0.15f, 0.00f, -0.45f }, { 0.31f, 0.28f, -0.25f }, skin);
-        appendMeshCuboid(vertices, { -0.31f, 0.00f, 0.25f }, { -0.15f, 0.28f, 0.45f }, skin);
-        appendMeshCuboid(vertices, { 0.15f, 0.00f, 0.25f }, { 0.31f, 0.28f, 0.45f }, skin);
+        appendMeshCuboid(vertices, { -0.31f, 0.00f, -0.45f }, { -0.15f, 0.28f, -0.25f }, skin, 2.0f);
+        appendMeshCuboid(vertices, { 0.15f, 0.00f, -0.45f }, { 0.31f, 0.28f, -0.25f }, skin, -2.0f);
+        appendMeshCuboid(vertices, { -0.31f, 0.00f, 0.25f }, { -0.15f, 0.28f, 0.45f }, skin, -2.0f);
+        appendMeshCuboid(vertices, { 0.15f, 0.00f, 0.25f }, { 0.31f, 0.28f, 0.45f }, skin, 2.0f);
         return vertices;
     }
 
@@ -1175,12 +1184,15 @@ void Renderer::resize(int32_t width, int32_t height)
     m_config.height = std::max(1, height);
 }
 
-Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent) const
+Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, const World& world) const
 {
     const Vec3 origin = agent.position + Vec3 { 0.0f, EyeHeight, 0.0f };
     const Vec3 forward = cameraForward(agent.yaw, agent.pitch);
     const Vec3 right = glm::normalize(Vec3 { std::cos(agent.yaw), 0.0f, -std::sin(agent.yaw) });
     const Vec3 up = glm::normalize(glm::cross(forward, right));
+    // TODO is it practically possible for logicalTimeMs to exceed int32_t max? If so, we should probably wrap it
+    // instead of clamping to max.
+    assert(world.logicalTimeMs() <= static_cast<uint64_t>(std::numeric_limits<int32_t>::max()));
     return {
         .origin = { origin.x, origin.y, origin.z, 0.0f },
         .forward = { forward.x, forward.y, forward.z, 0.0f },
@@ -1188,7 +1200,7 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent) cons
         .up = { up.x, up.y, up.z, 0.0f },
         .worldOriginAndWidth = { 0, 0, 0, static_cast<int32_t>(m_vk->renderExtent.width) },
         .regionAndHeight = { 0, 0, 0, static_cast<int32_t>(m_vk->renderExtent.height) },
-        .overrideInfo = { 0, 0, 0, 0 },
+        .frameInfo = { .animationTimeMs = static_cast<int32_t>(world.logicalTimeMs()) },
         .tuning = { 48.0f, Pi / 2.25f, 10.0f, 28.0f },
     };
 }
@@ -1337,7 +1349,7 @@ Observation Renderer::renderObservation(const World& world, const AgentState& ag
     }
     uploadInstances(world);
 
-    drawFrame(buildRenderParams(agent));
+    drawFrame(buildRenderParams(agent, world));
     ++m_observation.version;
     return m_observation;
 }

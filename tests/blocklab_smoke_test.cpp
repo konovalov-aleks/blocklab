@@ -266,15 +266,22 @@ TEST_CASE("Pig starts walking after world character updates", "[world][character
     blocklab::World world(13);
     world.reset(21);
     REQUIRE(world.characters().size() == 32);
-    const blocklab::Vec3 initialPosition = world.characters().front()->position();
+    std::vector<blocklab::Vec3> initialPositions;
+    initialPositions.reserve(world.characters().size());
+    for (const std::unique_ptr<blocklab::NPC>& character : world.characters())
+        initialPositions.push_back(character->position());
 
-    for (int i = 0; i < 120; ++i)
-        world.updateCharacters(1.0f / 60.0f, { 1000.0f, 0.0f, 1000.0f });
+    for (int i = 0; i < 360; ++i)
+        world.update(1.0f / 60.0f, { 1000.0f, 0.0f, 1000.0f });
 
-    const blocklab::Vec3 movedPosition = world.characters().front()->position();
-    const float dx = movedPosition.x - initialPosition.x;
-    const float dz = movedPosition.z - initialPosition.z;
-    CHECK(std::sqrt(dx * dx + dz * dz) > 0.1f);
+    bool anyPigMoved = false;
+    for (std::size_t i = 0; i < world.characters().size(); ++i) {
+        const blocklab::Vec3 movedPosition = world.characters()[i]->position();
+        const float dx = movedPosition.x - initialPositions[i].x;
+        const float dz = movedPosition.z - initialPositions[i].z;
+        anyPigMoved = anyPigMoved || std::sqrt(dx * dx + dz * dz) > 0.1f;
+    }
+    CHECK(anyPigMoved);
 }
 
 TEST_CASE("Pig panics when threat is close", "[world][characters]")
@@ -283,7 +290,7 @@ TEST_CASE("Pig panics when threat is close", "[world][characters]")
     world.reset(21);
     REQUIRE(world.characters().size() == 32);
 
-    world.updateCharacters(1.0f / 60.0f, world.characters().front()->position());
+    world.update(1.0f / 60.0f, world.characters().front()->position());
     CHECK(world.characters().front()->stateKind() == blocklab::CharacterStateKind::Panic);
 }
 

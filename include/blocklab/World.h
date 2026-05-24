@@ -113,10 +113,11 @@ public:
 
     explicit World(uint32_t seed = 1);
 
+    void update(float dt, Vec3 threatPosition);
+
     void reset(uint32_t seed);
     Block getBlock(int32_t x, int32_t y, int32_t z) const;
     void setBlock(int32_t x, int32_t y, int32_t z, Block block);
-    void updateCharacters(float dt, Vec3 threatPosition);
     bool isSolid(int32_t x, int32_t y, int32_t z) const;
     bool hasSolidBlockInArea(IVec3 min, IVec3 max) const;
     float groundHeight(float x, float z) const;
@@ -129,10 +130,12 @@ public:
     std::size_t overrideCount() const { return m_overrideCount; }
     const std::vector<std::unique_ptr<NPC>>& characters() const { return m_characters; }
     uint64_t version() const { return m_version; }
+    uint64_t logicalTimeMs() const { return m_logicalTimeMs; }
 
 private:
     uint32_t m_seed = 1;
     uint64_t m_version = 1;
+    uint64_t m_logicalTimeMs = 0;
     std::size_t m_overrideCount = 0;
     EntityId m_nextEntityId = 1;
     QuadTree<OverrideClusterColumn> m_overrideColumns;
@@ -146,6 +149,7 @@ private:
     OverrideCluster::Mask generatedSolidColumnMask(int32_t x, int32_t z, int32_t clusterY, int32_t localX,
         int32_t localZ, int32_t localMinY, int32_t localMaxY) const;
     float terrainHeight(int32_t x, int32_t z) const;
+    void updateCharacters(float dt, Vec3 threatPosition);
     void spawnTestPigs();
 };
 

@@ -13,6 +13,8 @@ using Vec4 = glm::vec4;
 using IVec3 = glm::ivec3;
 using IVec4 = glm::ivec4;
 
-inline int32_t floorToInt(float value) { return static_cast<int32_t>(std::floor(value)); }
+inline static constexpr float Pi = 3.14159265358979323846f;
+
+inline constexpr int32_t floorToInt(float value) { return static_cast<int32_t>(std::floor(value)); }
 
 } // namespace blocklab

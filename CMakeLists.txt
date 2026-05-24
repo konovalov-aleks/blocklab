@@ -160,3 +160,13 @@ target_link_libraries(blocklab_page_locked_vector_test PRIVATE blocklab_env Catc
 blocklab_enable_strict_warnings(blocklab_page_locked_vector_test)
 
 add_test(NAME blocklab_page_locked_vector_test COMMAND blocklab_page_locked_vector_test)
+
+add_executable(blocklab_hash_test
+    tests/hash_test.cpp
+)
+
+target_link_libraries(blocklab_hash_test PRIVATE blocklab_env Catch2::Catch2WithMain)
+
+blocklab_enable_strict_warnings(blocklab_hash_test)
+
+add_test(NAME blocklab_hash_test COMMAND blocklab_hash_test)
