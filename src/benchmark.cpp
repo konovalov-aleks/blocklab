@@ -189,7 +189,7 @@ uint64_t applyInitialOverrides(blocklab::Environment& env, const BenchmarkConfig
         const int32_t x = std::clamp(static_cast<int32_t>(std::lround(horizontal(rng))), -28, 28);
         const int32_t z = std::clamp(static_cast<int32_t>(std::lround(horizontal(rng))), -28, 28);
         const int32_t surfaceY
-            = std::max(0, blocklab::floorToInt(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1);
+            = std::max(0, blocklab::floorToInt32(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1);
         const int32_t y = std::clamp(surfaceY + verticalOffset(rng), 0, blocklab::Chunk::SizeY - 1);
         const blocklab::Block current = world.getBlock(x, y, z);
         world.setBlock(x, y, z, current == blocklab::Block::Air ? blocklab::Block::Stone : blocklab::Block::Air);

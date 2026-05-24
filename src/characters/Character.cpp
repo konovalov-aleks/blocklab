@@ -132,25 +132,25 @@ bool Character::collides(const World& world, Vec3 position) const
 {
     return world.hasSolidBlockInArea(
         {
-            floorToInt(position.x - m_radius),
-            floorToInt(position.y),
-            floorToInt(position.z - m_radius),
+            floorToInt32(position.x - m_radius),
+            floorToInt32(position.y),
+            floorToInt32(position.z - m_radius),
         },
         {
-            floorToInt(position.x + m_radius),
-            floorToInt(position.y + m_height),
-            floorToInt(position.z + m_radius),
+            floorToInt32(position.x + m_radius),
+            floorToInt32(position.y + m_height),
+            floorToInt32(position.z + m_radius),
         });
 }
 
 bool Character::occupiesBlock(IVec3 block) const
 {
-    const int32_t minX = floorToInt(m_position.x - m_radius);
-    const int32_t maxX = floorToInt(m_position.x + m_radius);
-    const int32_t minY = floorToInt(m_position.y);
-    const int32_t maxY = floorToInt(m_position.y + m_height);
-    const int32_t minZ = floorToInt(m_position.z - m_radius);
-    const int32_t maxZ = floorToInt(m_position.z + m_radius);
+    const int32_t minX = floorToInt32(m_position.x - m_radius);
+    const int32_t maxX = floorToInt32(m_position.x + m_radius);
+    const int32_t minY = floorToInt32(m_position.y);
+    const int32_t maxY = floorToInt32(m_position.y + m_height);
+    const int32_t minZ = floorToInt32(m_position.z - m_radius);
+    const int32_t maxZ = floorToInt32(m_position.z + m_radius);
     return block.x >= minX && block.x <= maxX && block.y >= minY && block.y <= maxY && block.z >= minZ
         && block.z <= maxZ;
 }

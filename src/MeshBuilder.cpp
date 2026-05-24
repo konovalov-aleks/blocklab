@@ -18,7 +18,7 @@ MeshBuilder::~MeshBuilder() = default;
 uint32_t MeshBuilder::rebuild(
     const World& world, const AgentState& agent, MeshVertex* outVertices, uint32_t maxVertices)
 {
-    const IVec3 center { floorToInt(agent.position.x), floorToInt(agent.position.y), floorToInt(agent.position.z) };
+    const IVec3 center { floorToInt32(agent.position.x), floorToInt32(agent.position.y), floorToInt32(agent.position.z) };
     const int32_t extent = m_config.halfExtent * 2;
     // The cached/rendered area is half-open: [center - halfExtent, center + halfExtent).
     const IVec3 origin { center.x - m_config.halfExtent, 0, center.z - m_config.halfExtent };

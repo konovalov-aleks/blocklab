@@ -1324,7 +1324,7 @@ void Renderer::drawFrame(const RenderParams& params)
 
 Observation Renderer::renderObservation(const World& world, const AgentState& agent)
 {
-    const IVec3 agentBlock { floorToInt(agent.position.x), floorToInt(agent.position.y), floorToInt(agent.position.z) };
+    const IVec3 agentBlock { floorToInt32(agent.position.x), floorToInt32(agent.position.y), floorToInt32(agent.position.z) };
     constexpr int32_t MeshCacheStride = 12;
     const IVec3 meshDelta = glm::abs(agentBlock - m_lastMeshCenter);
     const bool agentLeftMeshCache

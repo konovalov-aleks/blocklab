@@ -22,8 +22,8 @@ namespace {
 
     constexpr uint32_t pigSeed(EntityId id, Vec3 position)
     {
-        const uint32_t x = static_cast<uint32_t>(floorToInt(position.x * 16.0f));
-        const uint32_t z = static_cast<uint32_t>(floorToInt(position.z * 16.0f));
+        const uint32_t x = static_cast<uint32_t>(floorToInt32(position.x * 16.0f));
+        const uint32_t z = static_cast<uint32_t>(floorToInt32(position.z * 16.0f));
         return hashCombine(id, x, z);
     }
 

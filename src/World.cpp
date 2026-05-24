@@ -350,8 +350,8 @@ void World::updateCharacters(float dt, Vec3 threatPosition)
 
 float World::groundHeight(float x, float z) const
 {
-    const int32_t wx = floorToInt(x);
-    const int32_t wz = floorToInt(z);
+    const int32_t wx = floorToInt32(x);
+    const int32_t wz = floorToInt32(z);
     for (int32_t y = Chunk::SizeY - 1; y >= 0; --y) {
         if (isSolid(wx, y, wz))
             return static_cast<float>(y + 1);
@@ -362,9 +362,9 @@ float World::groundHeight(float x, float z) const
 std::vector<IVec3> World::visibleBlocksNear(Vec3 center, int32_t radius) const
 {
     std::vector<IVec3> blocks;
-    const int32_t cx = floorToInt(center.x);
-    const int32_t cy = floorToInt(center.y);
-    const int32_t cz = floorToInt(center.z);
+    const int32_t cx = floorToInt32(center.x);
+    const int32_t cy = floorToInt32(center.y);
+    const int32_t cz = floorToInt32(center.z);
     blocks.reserve(static_cast<std::size_t>((radius * 2 + 1) * (radius * 2 + 1) * 8));
 
     for (int32_t z = cz - radius; z <= cz + radius; ++z) {

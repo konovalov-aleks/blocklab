@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <numbers>
 
 namespace blocklab {
 
@@ -13,8 +14,8 @@ using Vec4 = glm::vec4;
 using IVec3 = glm::ivec3;
 using IVec4 = glm::ivec4;
 
-inline static constexpr float Pi = 3.14159265358979323846f;
+inline static constexpr float Pi = std::numbers::pi_v<float>;
 
-inline constexpr int32_t floorToInt(float value) { return static_cast<int32_t>(std::floor(value)); }
+inline constexpr int32_t floorToInt32(float value) { return static_cast<int32_t>(std::floor(value)); }
 
 } // namespace blocklab

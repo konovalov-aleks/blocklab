@@ -58,9 +58,9 @@ TEST_CASE("Agent cannot place a block into its own body", "[environment]")
     blocklab::Environment placeEnv(2);
     placeEnv.reset(7);
     const blocklab::AgentState& state = placeEnv.agent().state();
-    const int32_t occupiedX = blocklab::floorToInt(state.position.x);
-    const int32_t occupiedY = blocklab::floorToInt(state.position.y + 1.0f);
-    const int32_t occupiedZ = blocklab::floorToInt(state.position.z);
+    const int32_t occupiedX = blocklab::floorToInt32(state.position.x);
+    const int32_t occupiedY = blocklab::floorToInt32(state.position.y + 1.0f);
+    const int32_t occupiedZ = blocklab::floorToInt32(state.position.z);
     placeEnv.mutableWorld().setBlock(occupiedX, occupiedY, occupiedZ + 2, blocklab::Block::Dirt);
 
     blocklab::AgentAction placeIntoSelf;
@@ -90,7 +90,7 @@ TEST_CASE("World collision queries respect air and solid override masks", "[worl
     blocklab::World world(17);
     const int32_t x = 5;
     const int32_t z = -3;
-    const int32_t groundY = blocklab::floorToInt(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1;
+    const int32_t groundY = blocklab::floorToInt32(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1;
     const blocklab::IVec3 groundBlock { x, groundY, z };
     REQUIRE(world.getBlock(x, groundY, z) != blocklab::Block::Air);
     CHECK(world.hasSolidBlockInArea(groundBlock, groundBlock));
