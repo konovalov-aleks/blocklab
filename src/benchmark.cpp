@@ -15,6 +15,7 @@ namespace {
 
 struct BenchmarkConfig {
     uint64_t steps = 0;
+    uint64_t warmupSteps = 128;
     double seconds = 10.0;
     double reportInterval = 1.0;
     uint32_t seed = 1;
@@ -86,6 +87,7 @@ private:
                 "Options:\n"
                 "  --seconds N              Run for N seconds, default 10. Ignored when --steps is non-zero.\n"
                 "  --steps N                Run fixed number of simulation steps, default 0.\n"
+                "  --warmup-steps N         Run N untimed warmup steps before measurement, default 128.\n"
                 "  --seed N                 RNG seed, default 1.\n"
                 "  --world-radius N         World radius in chunks, default 4.\n"
                 "  --report-interval N      Progress report interval in seconds, default 1.\n"
@@ -117,6 +119,10 @@ BenchmarkConfig parseArgs(int argc, char** argv)
         else if (arg == "--steps" || arg.starts_with("--steps="))
             config.steps = blocklab::cli::parseInt<uint64_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--steps"))
                                .value_or(config.steps);
+        else if (arg == "--warmup-steps" || arg.starts_with("--warmup-steps="))
+            config.warmupSteps = blocklab::cli::parseInt<uint64_t>(
+                blocklab::cli::optionValue(i, argc, argv, arg, "--warmup-steps"))
+                                     .value_or(config.warmupSteps);
         else if (arg == "--seed" || arg.starts_with("--seed="))
             config.seed = static_cast<uint32_t>(
                 blocklab::cli::parseInt<uint64_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--seed"))
@@ -221,6 +227,14 @@ int main(int argc, char** argv)
         visualRenderer = std::make_unique<blocklab::Renderer>(config.visualConfig);
     uint64_t lastInitialOverridesApplied = resetEnvironment(env, config, config.seed);
 
+    for (uint64_t step = 0; step < config.warmupSteps; ++step) {
+        if (renderer)
+            renderer->pollEvents();
+        const blocklab::StepResult result = env.step(randomAgent.nextAction(rng));
+        if (result.terminated || result.truncated)
+            lastInitialOverridesApplied = resetEnvironment(env, config, config.seed + static_cast<uint32_t>(step + 1));
+    }
+
     using Clock = std::chrono::steady_clock;
     const auto startedAt = Clock::now();
     auto lastReportAt = startedAt;
@@ -282,6 +296,7 @@ int main(int argc, char** argv)
     const blocklab::Observation& observation = env.observe();
     std::printf("\nBlockLab benchmark result\n"
                 "  total_steps: %llu\n"
+                "  warmup_steps: %llu\n"
                 "  total_time_s: %.4f\n"
                 "  steps_per_second: %.2f\n"
                 "  avg_reward: %.6f\n"
@@ -293,7 +308,8 @@ int main(int argc, char** argv)
                 "  world_overrides: %llu\n"
                 "  observation_version: %llu\n"
                 "  observation_handle: 0x%llx\n",
-        static_cast<unsigned long long>(stats.steps), totalSeconds, static_cast<double>(stats.steps) / totalSeconds,
+        static_cast<unsigned long long>(stats.steps), static_cast<unsigned long long>(config.warmupSteps), totalSeconds,
+        static_cast<double>(stats.steps) / totalSeconds,
         stats.reward / static_cast<double>(std::max<uint64_t>(1, stats.steps)),
         static_cast<unsigned long long>(stats.episodes), static_cast<unsigned long long>(stats.blocksCollected),
         static_cast<unsigned long long>(stats.blocksPlaced), static_cast<unsigned long long>(config.initialOverrides),

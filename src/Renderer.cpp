@@ -28,7 +28,7 @@ namespace blocklab {
 namespace {
 
     constexpr float EyeHeight = 1.62f;
-    constexpr VkFormat ColorFormat = VK_FORMAT_B8G8R8A8_UNORM;
+    constexpr VkFormat ColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
     constexpr uint32_t OffscreenFrameCount = 8;
     constexpr uint32_t MaxEntityInstances = 256;
     constexpr uint32_t MaxPigVertices = 1024;
@@ -197,6 +197,7 @@ struct Renderer::VulkanState {
     Buffer vertexBuffer;
     Buffer instanceBuffer;
     Buffer paramsBuffer;
+    Buffer observationBuffer;
     VkSemaphore imageAvailable = VK_NULL_HANDLE;
     VkSemaphore renderFinished = VK_NULL_HANDLE;
     VkFence inFlight = VK_NULL_HANDLE;
@@ -669,7 +670,7 @@ namespace {
             .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
             .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .finalLayout = vk.swapchain ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .finalLayout = vk.swapchain ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
         };
         const VkAttachmentDescription depthAttachment {
             .format = vk.depthFormat,
@@ -717,10 +718,10 @@ namespace {
                 .dstSubpass = VK_SUBPASS_EXTERNAL,
                 .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
                     | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                .dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                .dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT,
                 .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
                     | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT,
+                .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
                 .dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT,
             },
         };
@@ -963,9 +964,14 @@ namespace {
         if (vk.swapchain)
             vk.paramsBuffer = createHostBuffer(vk, sizeof(Renderer::RenderParams), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         else {
-            for (OffscreenFrame& frame : vk.offscreenFrames)
+            const VkDeviceSize observationBytes
+                = static_cast<VkDeviceSize>(vk.renderExtent.width) * vk.renderExtent.height * 4U;
+            vk.observationBuffer
+                = createExportedDeviceBuffer(vk, observationBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+            for (OffscreenFrame& frame : vk.offscreenFrames) {
                 frame.paramsBuffer
                     = createHostBuffer(vk, sizeof(Renderer::RenderParams), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+            }
         }
 
         const uint32_t paramsSetCount = vk.swapchain ? 1U : static_cast<uint32_t>(vk.offscreenFrames.size());
@@ -1084,6 +1090,7 @@ namespace {
             destroyImage(vk, frame.color);
         }
         destroyBuffer(vk, vk.paramsBuffer);
+        destroyBuffer(vk, vk.observationBuffer);
         destroyBuffer(vk, vk.instanceBuffer);
         destroyBuffer(vk, vk.vertexBuffer);
         if (vk.descriptorPool)
@@ -1182,6 +1189,31 @@ void Renderer::resize(int32_t width, int32_t height)
 {
     m_config.width = std::max(1, width);
     m_config.height = std::max(1, height);
+}
+
+void Renderer::setCudaObservationExportEnabled(bool enabled) { m_cudaObservationExportEnabled = enabled; }
+
+void* Renderer::cudaObservationData()
+{
+    if (!m_vk || m_vk->swapchain || m_vk->offscreenFrames.empty())
+        return nullptr;
+    synchronizeObservation();
+    return m_vk->observationBuffer.cudaPtr;
+}
+
+void Renderer::synchronizeObservation()
+{
+    if (!m_vk || m_vk->swapchain || m_vk->offscreenFrames.empty())
+        return;
+    OffscreenFrame& frame = m_vk->offscreenFrames[m_vk->lastSubmittedOffscreenFrame];
+    vkWaitForFences(m_vk->device, 1, &frame.fence, VK_TRUE, UINT64_MAX);
+}
+
+std::size_t Renderer::cudaObservationBytes() const
+{
+    if (!m_vk || m_vk->swapchain)
+        return 0;
+    return static_cast<std::size_t>(m_vk->renderExtent.width) * static_cast<std::size_t>(m_vk->renderExtent.height) * 4U;
 }
 
 Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, const World& world) const
@@ -1294,6 +1326,19 @@ void Renderer::drawFrame(const RenderParams& params)
     if (m_pigVertexCount > 0 && m_instanceCount > 0)
         vkCmdDraw(commandBuffer, m_pigVertexCount, m_instanceCount, m_pigVertexOffset, 1);
     vkCmdEndRenderPass(commandBuffer);
+    if (offscreenFrame && m_cudaObservationExportEnabled) {
+        const VkBufferImageCopy copyRegion {
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0,
+                .layerCount = 1 },
+            .imageOffset = { 0, 0, 0 },
+            .imageExtent = { vk.renderExtent.width, vk.renderExtent.height, 1 },
+        };
+        vkCmdCopyImageToBuffer(commandBuffer, offscreenFrame->color.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            vk.observationBuffer.buffer, 1, &copyRegion);
+    }
     vkCheck(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
 
     const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;

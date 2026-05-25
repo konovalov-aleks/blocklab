@@ -4,6 +4,7 @@
 #include "blocklab/MeshBuilder.h"
 
 #include <cstdint>
+#include <cstddef>
 #include <limits>
 #include <span>
 #include <vector>
@@ -40,6 +41,10 @@ public:
     void resize(int32_t width, int32_t height);
     Observation renderObservation(const World& world, const AgentState& agent) override;
     const Observation& observation() const { return m_observation; }
+    void* cudaObservationData();
+    void synchronizeObservation();
+    std::size_t cudaObservationBytes() const;
+    void setCudaObservationExportEnabled(bool enabled);
 
     struct VulkanState;
     struct RenderParams {
@@ -81,6 +86,7 @@ private:
     uint32_t m_pigVertexOffset = 0;
     uint32_t m_pigVertexCount = 0;
     uint32_t m_instanceCount = 0;
+    bool m_cudaObservationExportEnabled = false;
 };
 
 } // namespace blocklab
