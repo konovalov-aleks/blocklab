@@ -7,6 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <cuda_runtime.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 
@@ -110,20 +111,13 @@ namespace {
             return step(action);
         }
 
-        StepResult stepDiscreteSync(int32_t actionId)
-        {
-            StepResult result = stepDiscrete(actionId);
-            synchronizeObservation();
-            return result;
-        }
-
         Observation observe() const { return m_environment.observe(); }
 
-        void synchronizeObservation() { m_renderer.synchronizeObservation(); }
+        std::size_t lastObservationFrameIndex() const { return m_renderer.lastObservationFrameIndex(); }
 
-        py::capsule observationDlpack()
+        py::capsule observationDlpack(std::size_t frameIndex)
         {
-            void* const data = m_renderer.cudaObservationData();
+            void* const data = m_renderer.cudaObservationData(frameIndex);
             if (!data)
                 fatalError("native observation is not backed by CUDA-visible Vulkan memory");
 
@@ -218,10 +212,9 @@ PYBIND11_MODULE(_native, module)
         .def(py::init<int32_t, int32_t, int32_t, int32_t, uint32_t>(), py::arg("num_envs") = 1,
             py::arg("width") = 160, py::arg("height") = 90, py::arg("world_radius_chunks") = 3, py::arg("seed") = 1)
         .def("reset", &blocklab::NativeEnvironment::reset, py::arg("seed") = 1)
-        .def("step", &blocklab::NativeEnvironment::step, py::arg("action"))
-        .def("step_discrete", &blocklab::NativeEnvironment::stepDiscrete, py::arg("action"))
-        .def("step_discrete_sync", &blocklab::NativeEnvironment::stepDiscreteSync, py::arg("action"))
+        .def("step_action", &blocklab::NativeEnvironment::step, py::arg("action"))
+        .def("step", &blocklab::NativeEnvironment::stepDiscrete, py::arg("action"))
         .def("observe", &blocklab::NativeEnvironment::observe)
-        .def("synchronize_observation", &blocklab::NativeEnvironment::synchronizeObservation)
-        .def("observation_dlpack", &blocklab::NativeEnvironment::observationDlpack);
+        .def("last_observation_frame_index", &blocklab::NativeEnvironment::lastObservationFrameIndex)
+        .def("observation_dlpack", &blocklab::NativeEnvironment::observationDlpack, py::arg("frame_index"));
 }

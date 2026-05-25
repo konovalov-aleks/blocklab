@@ -74,11 +74,7 @@ def main() -> None:
     env = blocklab.make(num_envs=args.num_envs, width=args.width,
                         height=args.height, device=args.device)
     obs, _ = env.reset()
-    if not isinstance(obs, torch.Tensor):
-        raise RuntimeError(
-            "visualize requires CUDA tensor observations. The native binding is active, "
-            "but zero-copy DLPack/PyTorch observation export is not implemented yet."
-        )
+    obs = torch.from_dlpack(obs)
     plt.figure("BlockLab observation")
     draw_observation(plt, obs, max_images=args.num_envs, title="step 0")
     if is_interactive_backend():
@@ -87,6 +83,7 @@ def main() -> None:
     for step in range(args.steps):
         obs, reward, terminated, truncated, info = env.step(
             env.sample_actions())
+        obs = torch.from_dlpack(obs)
         del reward, terminated, truncated, info
         if step % args.interval != 0:
             continue

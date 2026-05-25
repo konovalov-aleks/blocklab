@@ -41,8 +41,9 @@ public:
     void resize(int32_t width, int32_t height);
     Observation renderObservation(const World& world, const AgentState& agent) override;
     const Observation& observation() const { return m_observation; }
-    void* cudaObservationData();
-    void synchronizeObservation();
+    std::size_t lastObservationFrameIndex() const;
+    void* cudaObservationData(std::size_t frameIndex);
+    void synchronizeObservation(std::size_t frameIndex);
     std::size_t cudaObservationBytes() const;
     void setCudaObservationExportEnabled(bool enabled);
 

@@ -22,6 +22,33 @@ class ObservationSpec:
     device: torch.device
 
 
+class BlockLabObservation:
+    """Lazy DLPack producer for an observation frame.
+
+    The Vulkan render is submitted by reset()/step(), but synchronization is
+    delayed until a consumer calls torch.from_dlpack(observation).
+    """
+
+    def __init__(self, backend: "NativeBlockLabBackend", *, frame_index: int, version: int) -> None:
+        self._backend = backend
+        self._frame_index = frame_index
+        self.version = version
+        self.shape = backend.observation_spec.shape
+        self.dtype = backend.observation_spec.dtype
+        self.device = backend.observation_spec.device
+
+    def __dlpack_device__(self) -> tuple[int, int]:
+        if self.device.type != "cuda":
+            raise RuntimeError("BlockLab observations are CUDA-only")
+        return (2, 0 if self.device.index is None else self.device.index)
+
+    def __dlpack__(self, stream: int | None = None):
+        return self._backend._env.observation_dlpack(self._frame_index)
+
+    def to_tensor(self) -> torch.Tensor:
+        return torch.from_dlpack(self)
+
+
 class NativeBlockLabBackend:
     """Thin Python wrapper over the pybind11 C++ BlockLab environment."""
 
@@ -56,7 +83,6 @@ class NativeBlockLabBackend:
             world_radius_chunks=world_radius_chunks,
             seed=seed,
         )
-        self._obs: torch.Tensor | None = None
         self._rng = random.Random(seed)
 
     @property
@@ -64,26 +90,23 @@ class NativeBlockLabBackend:
         return ObservationSpec((1, 4, self.height, self.width), torch.uint8, self.device)
 
     def reset(self, seed: int = 1):
-        self._env.reset(seed)
-        self._obs = self._observation_tensor()
-        return self._obs
+        observation = self._env.reset(seed)
+        return self._observation_ref(observation)
 
     def step(self, actions: Any):
-        if self._obs is None:
-            result = self._env.step_discrete(self._discrete_action_id(actions))
-            self._obs = self._observation_tensor()
-        else:
-            result = self._env.step_discrete_sync(self._discrete_action_id(actions))
-        obs = self._obs
+        result = self._env.step(self._discrete_action_id(actions))
+        obs = self._observation_ref(result.observation)
         return obs, result.reward, result.terminated, result.truncated, {
             "native": True,
-            "zero_copy_ready": obs.data_ptr(),
             "observation_handle": result.observation.handle,
             "observation_version": result.observation.version,
+            "observation_frame_index": obs._frame_index,
         }
 
-    def _observation_tensor(self) -> torch.Tensor:
-        return torch.utils.dlpack.from_dlpack(self._env.observation_dlpack())
+    def _observation_ref(self, observation: Any) -> BlockLabObservation:
+        return BlockLabObservation(
+            self, frame_index=self._env.last_observation_frame_index(), version=observation.version
+        )
 
     def sample_action(self) -> int:
         return self._rng.randrange(7)
@@ -122,7 +145,7 @@ class BlockLabEnv:
 
     def reset(self, *, seed: int = 1):
         obs = self.backend.reset(seed)
-        return obs, {"native": True, "zero_copy_ready": obs.data_ptr()}
+        return obs, {"native": True, "observation_version": obs.version}
 
     def step(self, actions: Any):
         return self.backend.step(actions)

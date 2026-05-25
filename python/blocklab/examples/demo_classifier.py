@@ -34,11 +34,7 @@ def main() -> None:
 
     env = blocklab.make(num_envs=args.num_envs, width=args.width, height=args.height, device=args.device)
     obs, _ = env.reset()
-    if not isinstance(obs, torch.Tensor):
-        raise RuntimeError(
-            "demo_classifier requires CUDA tensor observations. The native binding is active, "
-            "but zero-copy DLPack/PyTorch observation export is not implemented yet."
-        )
+    obs = torch.from_dlpack(obs)
     policy = TinyPolicy(env.single_action_space_n).to(obs.device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
 
@@ -54,7 +50,7 @@ def main() -> None:
             actions = logits.argmax(dim=1)
             next_obs, reward, terminated, truncated, info = env.step(actions)
             del terminated, truncated, info
-        obs = next_obs.detach()
+        obs = torch.from_dlpack(next_obs).detach()
 
         if step % 50 == 0:
             print(f"step={step} loss={loss.item():.4f} reward={reward.mean().item():.3f} device={obs.device}")

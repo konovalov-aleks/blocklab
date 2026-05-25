@@ -121,6 +121,7 @@ namespace {
         VkFramebuffer framebuffer = VK_NULL_HANDLE;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
         Buffer paramsBuffer;
+        Buffer observationBuffer;
         VkDescriptorSet paramsDescriptorSet = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
     };
@@ -197,7 +198,6 @@ struct Renderer::VulkanState {
     Buffer vertexBuffer;
     Buffer instanceBuffer;
     Buffer paramsBuffer;
-    Buffer observationBuffer;
     VkSemaphore imageAvailable = VK_NULL_HANDLE;
     VkSemaphore renderFinished = VK_NULL_HANDLE;
     VkFence inFlight = VK_NULL_HANDLE;
@@ -966,11 +966,11 @@ namespace {
         else {
             const VkDeviceSize observationBytes
                 = static_cast<VkDeviceSize>(vk.renderExtent.width) * vk.renderExtent.height * 4U;
-            vk.observationBuffer
-                = createExportedDeviceBuffer(vk, observationBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
             for (OffscreenFrame& frame : vk.offscreenFrames) {
                 frame.paramsBuffer
                     = createHostBuffer(vk, sizeof(Renderer::RenderParams), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+                frame.observationBuffer
+                    = createExportedDeviceBuffer(vk, observationBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
             }
         }
 
@@ -1081,6 +1081,7 @@ namespace {
             return;
         vkDeviceWaitIdle(vk.device);
         for (OffscreenFrame& frame : vk.offscreenFrames) {
+            destroyBuffer(vk, frame.observationBuffer);
             destroyBuffer(vk, frame.paramsBuffer);
             if (frame.fence)
                 vkDestroyFence(vk.device, frame.fence, nullptr);
@@ -1090,7 +1091,6 @@ namespace {
             destroyImage(vk, frame.color);
         }
         destroyBuffer(vk, vk.paramsBuffer);
-        destroyBuffer(vk, vk.observationBuffer);
         destroyBuffer(vk, vk.instanceBuffer);
         destroyBuffer(vk, vk.vertexBuffer);
         if (vk.descriptorPool)
@@ -1193,19 +1193,30 @@ void Renderer::resize(int32_t width, int32_t height)
 
 void Renderer::setCudaObservationExportEnabled(bool enabled) { m_cudaObservationExportEnabled = enabled; }
 
-void* Renderer::cudaObservationData()
+std::size_t Renderer::lastObservationFrameIndex() const
+{
+    if (!m_vk || m_vk->swapchain || m_vk->offscreenFrames.empty())
+        return 0;
+    return m_vk->lastSubmittedOffscreenFrame;
+}
+
+void* Renderer::cudaObservationData(std::size_t frameIndex)
 {
     if (!m_vk || m_vk->swapchain || m_vk->offscreenFrames.empty())
         return nullptr;
-    synchronizeObservation();
-    return m_vk->observationBuffer.cudaPtr;
+    if (frameIndex >= m_vk->offscreenFrames.size())
+        fatalError("Invalid observation frame index:", frameIndex);
+    synchronizeObservation(frameIndex);
+    return m_vk->offscreenFrames[frameIndex].observationBuffer.cudaPtr;
 }
 
-void Renderer::synchronizeObservation()
+void Renderer::synchronizeObservation(std::size_t frameIndex)
 {
     if (!m_vk || m_vk->swapchain || m_vk->offscreenFrames.empty())
         return;
-    OffscreenFrame& frame = m_vk->offscreenFrames[m_vk->lastSubmittedOffscreenFrame];
+    if (frameIndex >= m_vk->offscreenFrames.size())
+        fatalError("Invalid observation frame index:", frameIndex);
+    OffscreenFrame& frame = m_vk->offscreenFrames[frameIndex];
     vkWaitForFences(m_vk->device, 1, &frame.fence, VK_TRUE, UINT64_MAX);
 }
 
@@ -1337,7 +1348,7 @@ void Renderer::drawFrame(const RenderParams& params)
             .imageExtent = { vk.renderExtent.width, vk.renderExtent.height, 1 },
         };
         vkCmdCopyImageToBuffer(commandBuffer, offscreenFrame->color.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            vk.observationBuffer.buffer, 1, &copyRegion);
+            offscreenFrame->observationBuffer.buffer, 1, &copyRegion);
     }
     vkCheck(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
 

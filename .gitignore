@@ -1,0 +1,11 @@
+build/
+.venv/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+*.so
+
+*.nsys-rep
+*.sqlite
