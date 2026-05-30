@@ -66,10 +66,12 @@ namespace {
 
     __device__ float terrainHeight(uint32_t seed, int32_t x, int32_t z)
     {
-        const float low = __sinf((static_cast<float>(x) + static_cast<float>(seed) * 0.013f) * 0.17f) * 2.2f;
-        const float high = __cosf((static_cast<float>(z) - static_cast<float>(seed) * 0.019f) * 0.13f) * 1.8f;
-        const float diagonal = __sinf(static_cast<float>(x + z) * 0.08f + static_cast<float>(seed) * 0.001f) * 2.0f;
-        const float rough = valueNoise(seed, x / 3, z / 3) * 0.55f;
+        const int32_t sampleX = x + seedOffset(seed, 0x4f1bbc21U);
+        const int32_t sampleZ = z + seedOffset(seed, 0x9a7c15d3U);
+        const float low = __sinf(static_cast<float>(sampleX) * 0.17f) * 2.2f;
+        const float high = __cosf(static_cast<float>(sampleZ) * 0.13f) * 1.8f;
+        const float diagonal = __sinf(static_cast<float>(sampleX + sampleZ) * 0.08f) * 2.0f;
+        const float rough = valueNoise(seed, sampleX / 3, sampleZ / 3) * 0.55f;
         return 9.0f + low + high + diagonal + rough;
     }
 

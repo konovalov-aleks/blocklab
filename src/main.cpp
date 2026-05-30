@@ -105,9 +105,8 @@ void keyCallback(GLFWwindow* window, int key, int, int action, int)
 int main(int argc, char** argv)
 {
     const AppConfig appConfig = parseAppConfig(argc, argv);
-    blocklab::Environment env(4);
     blocklab::Renderer renderer(appConfig.renderConfig);
-    env.setObservationRenderer(&renderer);
+    blocklab::Environment env(renderer, 1, 1);
     env.reset();
     InputState input;
     GLFWwindow* window = renderer.window();
@@ -157,7 +156,8 @@ int main(int argc, char** argv)
             input.mouse.pendingPitchDelta = 0.0f;
             input.digRequested = false;
             input.placeRequested = false;
-            const blocklab::StepResult result = env.step(action);
+            const blocklab::AgentAction actions[] { action };
+            const blocklab::StepResult result = env.step(actions).front();
             if (result.terminated || result.truncated)
                 env.reset();
             ++statsSteps;
@@ -173,7 +173,7 @@ int main(int argc, char** argv)
             }
         }
 
-        if (env.observe().version > 0 && now - lastVisualAt >= visualInterval) {
+        if (env.observe().version() > 0 && now - lastVisualAt >= visualInterval) {
             lastVisualAt = now;
             ++statsFrames;
         }
@@ -182,7 +182,7 @@ int main(int argc, char** argv)
         if (statsElapsed >= 1.0) {
             std::printf("fps=%.1f sim_steps/s=%.1f total_steps=%llu observation_version=%llu mode=%s\n",
                 static_cast<double>(statsFrames) / statsElapsed, static_cast<double>(statsSteps) / statsElapsed,
-                static_cast<unsigned long long>(totalSteps), static_cast<unsigned long long>(env.observe().version),
+                static_cast<unsigned long long>(totalSteps), static_cast<unsigned long long>(env.observe().version()),
                 appConfig.unlocked ? "unlocked" : "fixed");
             lastStatsAt = now;
             statsFrames = 0;

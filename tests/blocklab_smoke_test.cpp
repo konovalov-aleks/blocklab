@@ -11,63 +11,69 @@ namespace {
 
 class CountingRenderer final : public blocklab::ObservationRenderer {
 public:
-    blocklab::Observation renderObservation(const blocklab::World&, const blocklab::AgentState&) override
+    const blocklab::Observation& renderObservations(
+        std::span<const blocklab::World> worlds, std::span<const blocklab::AgentState> agents) override
     {
-        return {
-            .width = 4,
-            .height = 4,
-            .channels = 4,
-            .device = blocklab::ObservationDevice::Cpu,
-            .format = blocklab::ObservationFormat::RGBA8,
-            .handle = 0x1234,
-            .version = ++m_version,
-        };
+        (void)agents;
+        m_observation.reset(4U, 4U, 4U, blocklab::ObservationDevice::Cpu, blocklab::ObservationFormat::FloatNCHW,
+            static_cast<uint32_t>(worlds.size()));
+        m_observation.setVersion(++m_version);
+        for (uint32_t i = 0; i < worlds.size(); ++i)
+            m_observation.setSlot(i, 0x1234);
+        return m_observation;
     }
 
 private:
+    blocklab::Observation m_observation;
     uint64_t m_version = 0;
 };
 
 } // namespace
 
-TEST_CASE("Environment reset returns an empty observation without renderer", "[environment]")
+TEST_CASE("Environment reset returns renderer observation", "[environment]")
 {
-    blocklab::Environment env(2);
-    const blocklab::Observation initial = env.reset(42);
-    CHECK(initial.device == blocklab::ObservationDevice::None);
-    CHECK(initial.handle == 0);
+    CountingRenderer renderer;
+    blocklab::Environment env(renderer, 1, 2);
+    env.reset(42);
+    const blocklab::Observation& initial = env.observe();
+    CHECK(initial.device() == blocklab::ObservationDevice::Cpu);
+    CHECK(initial.handle(0) == 0x1234);
 }
 
 TEST_CASE("Environment can step a moving agent", "[environment]")
 {
-    blocklab::Environment env(2);
+    CountingRenderer renderer;
+    blocklab::Environment env(renderer, 1, 2);
     env.reset(42);
     for (int i = 0; i < 120; ++i) {
         blocklab::AgentAction action;
         action.forward = 1.0f;
         action.yawDelta = 0.01f;
         action.pitchDelta = 0.001f;
-        const blocklab::StepResult result = env.step(action);
-        CHECK(result.observation.device == blocklab::ObservationDevice::None);
+        const blocklab::AgentAction actions[] { action };
+        const blocklab::StepResult result = env.step(actions).front();
+        CHECK(env.observe().device() == blocklab::ObservationDevice::Cpu);
         CHECK(result.reward > -10.0f);
     }
 }
 
 TEST_CASE("Agent cannot place a block into its own body", "[environment]")
 {
-    blocklab::Environment placeEnv(2);
+    CountingRenderer renderer;
+    blocklab::Environment placeEnv(renderer, 1, 2);
     placeEnv.reset(7);
-    const blocklab::AgentState& state = placeEnv.agent().state();
+    const blocklab::AgentState& state = placeEnv.agent(0).state();
     const int32_t occupiedX = blocklab::floorToInt32(state.position.x);
     const int32_t occupiedY = blocklab::floorToInt32(state.position.y + 1.0f);
     const int32_t occupiedZ = blocklab::floorToInt32(state.position.z);
-    placeEnv.mutableWorld().setBlock(occupiedX, occupiedY, occupiedZ + 2, blocklab::Block::Dirt);
+    placeEnv.mutableWorld(0).setBlock(occupiedX, occupiedY, occupiedZ + 2, blocklab::Block::Dirt);
 
     blocklab::AgentAction placeIntoSelf;
     placeIntoSelf.pitchDelta = 1.2f;
     placeIntoSelf.place = true;
-    placeEnv.step(placeIntoSelf);
-    CHECK(placeEnv.world().getBlock(occupiedX, occupiedY, occupiedZ) == blocklab::Block::Air);
+    const blocklab::AgentAction placeActions[] { placeIntoSelf };
+    placeEnv.step(placeActions);
+    CHECK(placeEnv.world(0).getBlock(occupiedX, occupiedY, occupiedZ) == blocklab::Block::Air);
 }
 
 TEST_CASE("World keeps procedural blocks and sparse overrides consistent", "[world]")
@@ -85,12 +91,33 @@ TEST_CASE("World keeps procedural blocks and sparse overrides consistent", "[wor
     CHECK(infiniteWorld.overrideCount() == 0);
 }
 
+TEST_CASE("World seed materially changes procedural terrain", "[world]")
+{
+    blocklab::World first(1);
+    blocklab::World second(2);
+    first.reset(1);
+    second.reset(2);
+
+    int differentHeights = 0;
+    for (int32_t z = -8; z <= 8; ++z) {
+        for (int32_t x = -8; x <= 8; ++x) {
+            if (std::abs(first.groundHeight(static_cast<float>(x), static_cast<float>(z))
+                    - second.groundHeight(static_cast<float>(x), static_cast<float>(z)))
+                > 0.5f) {
+                ++differentHeights;
+            }
+        }
+    }
+    CHECK(differentHeights > 96);
+}
+
 TEST_CASE("World collision queries respect air and solid override masks", "[world]")
 {
     blocklab::World world(17);
     const int32_t x = 5;
     const int32_t z = -3;
-    const int32_t groundY = blocklab::floorToInt32(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1;
+    const int32_t groundY
+        = blocklab::floorToInt32(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1;
     const blocklab::IVec3 groundBlock { x, groundY, z };
     REQUIRE(world.getBlock(x, groundY, z) != blocklab::Block::Air);
     CHECK(world.hasSolidBlockInArea(groundBlock, groundBlock));
@@ -296,16 +323,19 @@ TEST_CASE("Pig panics when threat is close", "[world][characters]")
 
 TEST_CASE("Environment returns renderer observations when renderer is installed", "[environment]")
 {
-    blocklab::Environment renderEnv(2);
     CountingRenderer renderer;
-    renderEnv.setObservationRenderer(&renderer);
-    const blocklab::Observation renderedReset = renderEnv.reset(9);
-    CHECK(renderedReset.device == blocklab::ObservationDevice::Cpu);
-    CHECK(renderedReset.handle == 0x1234);
-    CHECK(renderedReset.version != 0);
+    blocklab::Environment renderEnv(renderer, 1, 2);
+    renderEnv.reset(9);
+    const uint64_t renderedResetVersion = renderEnv.observe().version();
+    CHECK(renderEnv.observe().device() == blocklab::ObservationDevice::Cpu);
+    CHECK(renderEnv.observe().handle(0) == 0x1234);
+    CHECK(renderedResetVersion != 0);
 
-    const blocklab::StepResult renderedStep = renderEnv.step({});
-    CHECK(renderedStep.observation.device == blocklab::ObservationDevice::Cpu);
-    CHECK(renderedStep.observation.handle == 0x1234);
-    CHECK(renderedStep.observation.version > renderedReset.version);
+    const blocklab::AgentAction action;
+    const blocklab::AgentAction actions[] { action };
+    const blocklab::StepResult renderedStep = renderEnv.step(actions).front();
+    CHECK(renderEnv.observe().device() == blocklab::ObservationDevice::Cpu);
+    CHECK(renderEnv.observe().handle(0) == 0x1234);
+    CHECK(renderEnv.observe().version() > renderedResetVersion);
+    CHECK(!renderedStep.terminated);
 }

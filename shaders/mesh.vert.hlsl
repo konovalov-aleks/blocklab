@@ -24,6 +24,13 @@ struct EntityInstance {
     float4 velocityAndKind;
 };
 
+struct DrawPushConstants {
+    uint envIndex;
+    uint layerIndex;
+    uint _padding0;
+    uint _padding1;
+};
+
 static const uint EntityKindNone = 0;
 static const uint EntityKindPig = 1;
 
@@ -34,15 +41,21 @@ struct VertexOutput {
     float shade : TEXCOORD2;
     float fog : TEXCOORD3;
     float3 uvMaterial : TEXCOORD4;
+    uint layer : SV_RenderTargetArrayIndex;
 };
 
 StructuredBuffer<MeshVertex> vertices : register(t0, space0);
 StructuredBuffer<EntityInstance> instances : register(t1, space0);
+StructuredBuffer<RenderParams> paramsBuffer : register(t2, space0);
 
-cbuffer Params : register(b0, space1) { RenderParams params; };
+[[vk::push_constant]] cbuffer PushConstants
+{
+    DrawPushConstants pushConstants;
+};
 
 VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
 {
+    RenderParams params = paramsBuffer[pushConstants.envIndex];
     MeshVertex vertex = vertices[vertexId];
     float3 worldPosition = vertex.position.xyz;
     EntityInstance instance = instances[instanceId];
@@ -58,7 +71,8 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
         float stridePhase = legPhaseMarker > 0.0 ? 0.0 : 3.14159265;
         float animationTime = float(params.frameInfo.animationTimeMs) * 0.001;
         float stride = sin(animationTime * 9.0 + stridePhase);
-        if (abs(legPhaseMarker) > 1.5 && instance.velocityAndKind.x > 0.05) {
+        float horizontalSpeedSq = dot(instance.velocityAndKind.xz, instance.velocityAndKind.xz);
+        if (abs(legPhaseMarker) > 1.5 && horizontalSpeedSq > 0.0025) {
             worldPosition += entityForward * (stride * 0.08);
             worldPosition.y += max(0.0, -stride) * 0.05;
         }
@@ -83,5 +97,6 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
     output.shade = vertex.colorAndShade.a;
     output.uvMaterial = vertex.uvMaterial.xyz;
     output.fog = saturate((viewZ - params.tuning.z) / max(params.tuning.w - params.tuning.z, 0.001));
+    output.layer = pushConstants.layerIndex;
     return output;
 }

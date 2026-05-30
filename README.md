@@ -41,7 +41,6 @@ cmake --build build -j 16
 ./build/blocklab_benchmark --seconds 30
 ./build/blocklab_benchmark --steps 1000000
 ./build/blocklab_benchmark --initial-overrides 10000
-./build/blocklab_benchmark --no-render
 ./build/blocklab_benchmark --visualize
 ```
 

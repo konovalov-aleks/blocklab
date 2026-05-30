@@ -469,10 +469,12 @@ Block World::generatedBlock(int32_t x, int32_t y, int32_t z) const
 
 float World::terrainHeight(int32_t x, int32_t z) const
 {
-    const float low = std::sin((static_cast<float>(x) + static_cast<float>(m_seed) * 0.013f) * 0.17f) * 2.2f;
-    const float high = std::cos((static_cast<float>(z) - static_cast<float>(m_seed) * 0.019f) * 0.13f) * 1.8f;
-    const float diagonal = std::sin(static_cast<float>(x + z) * 0.08f + static_cast<float>(m_seed) * 0.001f) * 2.0f;
-    const float rough = valueNoise(m_seed, x / 3, z / 3) * 0.55f;
+    const int32_t sampleX = x + seedOffset(m_seed, 0x4f1bbc21U);
+    const int32_t sampleZ = z + seedOffset(m_seed, 0x9a7c15d3U);
+    const float low = std::sin(static_cast<float>(sampleX) * 0.17f) * 2.2f;
+    const float high = std::cos(static_cast<float>(sampleZ) * 0.13f) * 1.8f;
+    const float diagonal = std::sin(static_cast<float>(sampleX + sampleZ) * 0.08f) * 2.0f;
+    const float rough = valueNoise(m_seed, sampleX / 3, sampleZ / 3) * 0.55f;
     return 9.0f + low + high + diagonal + rough;
 }
 
@@ -483,8 +485,10 @@ void World::spawnTestPigs()
     static constexpr float MinAgentDistance = 3.5f;
 
     for (int32_t i = 0; i < PigCount; ++i) {
-        const float angle = static_cast<float>(i) * 2.39996323f + static_cast<float>(m_seed % 97U) * 0.037f;
-        const float t = (static_cast<float>(i) + 0.5f) / static_cast<float>(PigCount);
+        const float angle = randomFloat01(hashCombine(m_seed, static_cast<uint32_t>(i), 0x27d4eb2dU)) * 2.0f * Pi;
+        const float t
+            = (static_cast<float>(i) + randomFloat01(hashCombine(m_seed, static_cast<uint32_t>(i), 0x85ebca6bU)))
+            / static_cast<float>(PigCount);
         const float radius = MinAgentDistance + std::sqrt(t) * (SpawnRadius - MinAgentDistance);
         const float x = 0.5f + std::cos(angle) * radius;
         const float z = 0.5f + std::sin(angle) * radius;

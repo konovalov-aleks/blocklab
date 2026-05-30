@@ -100,8 +100,10 @@ target_link_libraries(blocklab_env
 blocklab_enable_strict_warnings(blocklab_env)
 
 add_library(blocklab_render
+    src/CudaObservation.cu
     src/MeshBuilderCuda.cu
     src/MeshBuilder.cpp
+    src/meshes/PigMesh.cpp
     src/Renderer.cpp
 )
 
@@ -125,7 +127,7 @@ add_dependencies(blocklab_render blocklab_mesh_vertex_shader blocklab_mesh_fragm
 target_compile_definitions(blocklab_render PRIVATE BLOCKLAB_SHADER_DIR="${BLOCKLAB_SHADER_OUTPUT_DIR}")
 
 blocklab_enable_strict_warnings(blocklab_render)
-set_source_files_properties(src/MeshBuilderCuda.cu PROPERTIES CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED ON)
+set_source_files_properties(src/CudaObservation.cu src/MeshBuilderCuda.cu PROPERTIES CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED ON)
 
 add_executable(blocklab
     src/main.cpp

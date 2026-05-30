@@ -1,7 +1,9 @@
 #include "blocklab/Renderer.h"
 
 #include "blocklab/CudaHelpers.h"
+#include "blocklab/CudaObservation.h"
 #include "blocklab/Error.h"
+#include "blocklab/meshes/PigMesh.h"
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -29,9 +31,8 @@ namespace {
 
     constexpr float EyeHeight = 1.62f;
     constexpr VkFormat ColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
-    constexpr uint32_t OffscreenFrameCount = 8;
+    constexpr uint32_t OffscreenFrameCount = 2;
     constexpr uint32_t MaxEntityInstances = 256;
-    constexpr uint32_t MaxPigVertices = 1024;
     constexpr int32_t TerrainMeshHalfExtent = 32;
     constexpr uint32_t TerrainMeshExtent = TerrainMeshHalfExtent * 2;
     constexpr uint32_t MaxTerrainVertices
@@ -122,6 +123,8 @@ namespace {
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
         Buffer paramsBuffer;
         Buffer observationBuffer;
+        float* observationTensor = nullptr;
+        bool observationTensorValid = false;
         VkDescriptorSet paramsDescriptorSet = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
     };
@@ -202,6 +205,7 @@ struct Renderer::VulkanState {
     VkSemaphore renderFinished = VK_NULL_HANDLE;
     VkFence inFlight = VK_NULL_HANDLE;
     VkDeviceSize vertexCapacityBytes = 0;
+    uint32_t batchSize = 1;
 };
 
 namespace {
@@ -293,78 +297,6 @@ namespace {
         buffer = {};
     }
 
-    void appendMeshFace(std::vector<MeshVertex>& vertices, Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, Vec3 color, float shade,
-        MeshMaterial material, float animationPhase)
-    {
-        const Vec4 packedColor { color, shade };
-        const float materialId = meshMaterialId(material);
-        vertices.push_back({ .position = { p0, animationPhase },
-            .colorAndShade = packedColor,
-            .uvMaterial = { 0.0f, 0.0f, materialId, 0.0f } });
-        vertices.push_back({ .position = { p1, animationPhase },
-            .colorAndShade = packedColor,
-            .uvMaterial = { 1.0f, 0.0f, materialId, 0.0f } });
-        vertices.push_back({ .position = { p2, animationPhase },
-            .colorAndShade = packedColor,
-            .uvMaterial = { 1.0f, 1.0f, materialId, 0.0f } });
-        vertices.push_back({ .position = { p0, animationPhase },
-            .colorAndShade = packedColor,
-            .uvMaterial = { 0.0f, 0.0f, materialId, 0.0f } });
-        vertices.push_back({ .position = { p2, animationPhase },
-            .colorAndShade = packedColor,
-            .uvMaterial = { 1.0f, 1.0f, materialId, 0.0f } });
-        vertices.push_back({ .position = { p3, animationPhase },
-            .colorAndShade = packedColor,
-            .uvMaterial = { 0.0f, 1.0f, materialId, 0.0f } });
-    }
-
-    void appendMeshCuboid(
-        std::vector<MeshVertex>& vertices, Vec3 min, Vec3 max, Vec3 color, float animationPhase = 0.0f)
-    {
-        const Vec3 p000 { min.x, min.y, min.z };
-        const Vec3 p100 { max.x, min.y, min.z };
-        const Vec3 p010 { min.x, max.y, min.z };
-        const Vec3 p110 { max.x, max.y, min.z };
-        const Vec3 p001 { min.x, min.y, max.z };
-        const Vec3 p101 { max.x, min.y, max.z };
-        const Vec3 p011 { min.x, max.y, max.z };
-        const Vec3 p111 { max.x, max.y, max.z };
-        const MeshMaterial material = color.g > 0.6f ? MeshMaterial::PigSnout : MeshMaterial::PigSkin;
-        appendMeshFace(vertices, p010, p011, p111, p110, color, 1.0f, material, animationPhase);
-        appendMeshFace(vertices, p000, p100, p101, p001, color, 0.48f, material, animationPhase);
-        appendMeshFace(vertices, p100, p110, p111, p101, color, 0.78f, material, animationPhase);
-        appendMeshFace(vertices, p000, p001, p011, p010, color, 0.78f, material, animationPhase);
-        appendMeshFace(vertices, p001, p101, p111, p011, color, 0.68f, material, animationPhase);
-        appendMeshFace(vertices, p000, p010, p110, p100, color, 0.68f, material, animationPhase);
-    }
-
-    void appendMeshPatch(std::vector<MeshVertex>& vertices, Vec3 min, Vec3 max, float z, Vec3 color)
-    {
-        appendMeshFace(vertices, { min.x, min.y, z }, { max.x, min.y, z }, { max.x, max.y, z }, { min.x, max.y, z },
-            color, 1.0f, MeshMaterial::VertexColor, 0.0f);
-    }
-
-    std::vector<MeshVertex> createPigMesh()
-    {
-        std::vector<MeshVertex> vertices;
-        vertices.reserve(420U);
-        const Vec3 skin { 0.88f, 0.56f, 0.65f };
-        const Vec3 snout { 0.96f, 0.66f, 0.73f };
-        const Vec3 dark { 0.08f, 0.06f, 0.07f };
-        appendMeshCuboid(vertices, { -0.36f, 0.24f, -0.58f }, { 0.36f, 0.78f, 0.58f }, skin);
-        appendMeshCuboid(vertices, { -0.30f, 0.34f, 0.50f }, { 0.30f, 0.84f, 0.98f }, skin);
-        appendMeshCuboid(vertices, { -0.16f, 0.48f, 0.94f }, { 0.16f, 0.66f, 1.08f }, snout);
-        appendMeshPatch(vertices, { -0.23f, 0.65f, 0.0f }, { -0.13f, 0.75f, 0.0f }, 0.982f, dark);
-        appendMeshPatch(vertices, { 0.13f, 0.65f, 0.0f }, { 0.23f, 0.75f, 0.0f }, 0.982f, dark);
-        appendMeshPatch(vertices, { -0.10f, 0.54f, 0.0f }, { -0.04f, 0.61f, 0.0f }, 1.082f, dark);
-        appendMeshPatch(vertices, { 0.04f, 0.54f, 0.0f }, { 0.10f, 0.61f, 0.0f }, 1.082f, dark);
-        appendMeshCuboid(vertices, { -0.31f, 0.00f, -0.45f }, { -0.15f, 0.28f, -0.25f }, skin, 2.0f);
-        appendMeshCuboid(vertices, { 0.15f, 0.00f, -0.45f }, { 0.31f, 0.28f, -0.25f }, skin, -2.0f);
-        appendMeshCuboid(vertices, { -0.31f, 0.00f, 0.25f }, { -0.15f, 0.28f, 0.45f }, skin, -2.0f);
-        appendMeshCuboid(vertices, { 0.15f, 0.00f, 0.25f }, { 0.31f, 0.28f, 0.45f }, skin, 2.0f);
-        return vertices;
-    }
-
     void destroyImage(Renderer::VulkanState& vk, Image& image)
     {
         if (image.view)
@@ -379,13 +311,14 @@ namespace {
     Image createDepthImage(Renderer::VulkanState& vk)
     {
         Image image;
+        const uint32_t layers = vk.swapchain ? 1U : vk.batchSize;
         const VkImageCreateInfo imageInfo {
             .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .imageType = VK_IMAGE_TYPE_2D,
             .format = vk.depthFormat,
             .extent = { vk.renderExtent.width, vk.renderExtent.height, 1 },
             .mipLevels = 1,
-            .arrayLayers = 1,
+            .arrayLayers = layers,
             .samples = VK_SAMPLE_COUNT_1_BIT,
             .tiling = VK_IMAGE_TILING_OPTIMAL,
             .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -408,11 +341,11 @@ namespace {
         const VkImageViewCreateInfo viewInfo {
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .image = image.image,
-            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .viewType = layers == 1U ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY,
             .format = vk.depthFormat,
             .subresourceRange = { static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT
                                       | (hasStencilComponent(vk.depthFormat) ? VK_IMAGE_ASPECT_STENCIL_BIT : 0)),
-                0, 1, 0, 1 },
+                0, 1, 0, layers },
         };
         vkCheck(vkCreateImageView(vk.device, &viewInfo, nullptr, &image.view), "vkCreateImageView depth");
         return image;
@@ -421,13 +354,14 @@ namespace {
     Image createColorImage(Renderer::VulkanState& vk)
     {
         Image image;
+        const uint32_t layers = vk.swapchain ? 1U : vk.batchSize;
         const VkImageCreateInfo imageInfo {
             .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .imageType = VK_IMAGE_TYPE_2D,
             .format = vk.colorFormat,
             .extent = { vk.renderExtent.width, vk.renderExtent.height, 1 },
             .mipLevels = 1,
-            .arrayLayers = 1,
+            .arrayLayers = layers,
             .samples = VK_SAMPLE_COUNT_1_BIT,
             .tiling = VK_IMAGE_TILING_OPTIMAL,
             .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
@@ -450,9 +384,9 @@ namespace {
         const VkImageViewCreateInfo viewInfo {
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .image = image.image,
-            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .viewType = layers == 1U ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY,
             .format = vk.colorFormat,
-            .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
+            .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers },
         };
         vkCheck(vkCreateImageView(vk.device, &viewInfo, nullptr, &image.view), "vkCreateImageView color");
         return image;
@@ -508,9 +442,6 @@ namespace {
         };
     }
 
-} // namespace
-namespace {
-
     void createInstance(Renderer::VulkanState& vk)
     {
         VkApplicationInfo appInfo {
@@ -547,7 +478,19 @@ namespace {
             const bool hasSwapchain = !vk.surface || hasDeviceExtension(device, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
             const bool hasExternalMemory = hasDeviceExtension(device, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME)
                 && hasDeviceExtension(device, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
-            if (families.complete(vk.surface != VK_NULL_HANDLE) && hasSwapchain && hasExternalMemory) {
+            const bool hasShaderLayer = hasDeviceExtension(device, VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME);
+            VkPhysicalDeviceVulkan12Features features12 {
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+            };
+            VkPhysicalDeviceFeatures2 features {
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+                .pNext = &features12,
+            };
+            vkGetPhysicalDeviceFeatures2(device, &features);
+            const bool hasShaderOutputLayer = features12.shaderOutputLayer == VK_TRUE;
+            const bool hasShaderOutputViewportIndex = features12.shaderOutputViewportIndex == VK_TRUE;
+            if (families.complete(vk.surface != VK_NULL_HANDLE) && hasSwapchain && hasExternalMemory && hasShaderLayer
+                && hasShaderOutputLayer && hasShaderOutputViewportIndex) {
                 vk.physicalDevice = device;
                 vk.graphicsFamily = *families.graphics;
                 return;
@@ -576,12 +519,19 @@ namespace {
         std::vector<const char*> extensions {
             VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
             VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+            VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME,
         };
         if (vk.surface)
             extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+        VkPhysicalDeviceVulkan12Features features12 {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+            .shaderOutputViewportIndex = VK_TRUE,
+            .shaderOutputLayer = VK_TRUE,
+        };
         VkPhysicalDeviceFeatures features {};
         const VkDeviceCreateInfo info {
             .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+            .pNext = &features12,
             .queueCreateInfoCount = static_cast<uint32_t>(queueInfos.size()),
             .pQueueCreateInfos = queueInfos.data(),
             .enabledExtensionCount = static_cast<uint32_t>(extensions.size()),
@@ -738,9 +688,6 @@ namespace {
         vkCheck(vkCreateRenderPass(vk.device, &info, nullptr, &vk.renderPass), "vkCreateRenderPass");
     }
 
-} // namespace
-namespace {
-
     void createPipeline(Renderer::VulkanState& vk)
     {
         const VkDescriptorSetLayoutBinding vertexBinding {
@@ -755,34 +702,33 @@ namespace {
             .descriptorCount = 1,
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
         };
-        const VkDescriptorSetLayoutBinding vertexBindings[] { vertexBinding, instanceBinding };
+        const VkDescriptorSetLayoutBinding paramsBinding {
+            .binding = 2,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        };
+        const VkDescriptorSetLayoutBinding vertexBindings[] { vertexBinding, instanceBinding, paramsBinding };
         const VkDescriptorSetLayoutCreateInfo vertexLayoutInfo {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .bindingCount = 2,
+            .bindingCount = 3,
             .pBindings = vertexBindings,
         };
         vkCheck(vkCreateDescriptorSetLayout(vk.device, &vertexLayoutInfo, nullptr, &vk.vertexSetLayout),
             "vkCreateDescriptorSetLayout vertices");
 
-        const VkDescriptorSetLayoutBinding paramsBinding {
-            .binding = 0,
-            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .descriptorCount = 1,
+        const VkPushConstantRange pushConstantRange {
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            .offset = 0,
+            .size = sizeof(Renderer::DrawPushConstants),
         };
-        const VkDescriptorSetLayoutCreateInfo paramsLayoutInfo {
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .bindingCount = 1,
-            .pBindings = &paramsBinding,
-        };
-        vkCheck(vkCreateDescriptorSetLayout(vk.device, &paramsLayoutInfo, nullptr, &vk.paramsSetLayout),
-            "vkCreateDescriptorSetLayout params");
-
-        const VkDescriptorSetLayout layouts[] { vk.vertexSetLayout, vk.paramsSetLayout };
+        const VkDescriptorSetLayout layouts[] { vk.vertexSetLayout };
         const VkPipelineLayoutCreateInfo pipelineLayoutInfo {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 2,
+            .setLayoutCount = 1,
             .pSetLayouts = layouts,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &pushConstantRange,
         };
         vkCheck(vkCreatePipelineLayout(vk.device, &pipelineLayoutInfo, nullptr, &vk.pipelineLayout),
             "vkCreatePipelineLayout");
@@ -891,7 +837,7 @@ namespace {
                     .pAttachments = attachments,
                     .width = vk.renderExtent.width,
                     .height = vk.renderExtent.height,
-                    .layers = 1,
+                    .layers = vk.batchSize,
                 };
                 vkCheck(vkCreateFramebuffer(vk.device, &info, nullptr, &frame.framebuffer),
                     "vkCreateFramebuffer offscreen");
@@ -952,67 +898,57 @@ namespace {
         }
     }
 
-} // namespace
-namespace {
-
     void createDescriptors(Renderer::VulkanState& vk)
     {
-        vk.vertexCapacityBytes = (static_cast<VkDeviceSize>(MaxTerrainVertices) + MaxPigVertices) * sizeof(MeshVertex);
+        // Vertex buffer layout: per-env terrain regions first, followed by one shared static pig mesh.
+        vk.vertexCapacityBytes
+            = (static_cast<VkDeviceSize>(MaxTerrainVertices) * vk.batchSize + PigMesh::verticesCount())
+            * sizeof(MeshVertex);
         vk.vertexBuffer = createExportedDeviceBuffer(vk, vk.vertexCapacityBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-        vk.instanceBuffer = createHostBuffer(
-            vk, sizeof(Renderer::EntityInstance) * MaxEntityInstances, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-        if (vk.swapchain)
-            vk.paramsBuffer = createHostBuffer(vk, sizeof(Renderer::RenderParams), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
-        else {
+        vk.instanceBuffer = createHostBuffer(vk, sizeof(Renderer::EntityInstance) * MaxEntityInstances * vk.batchSize,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        vk.paramsBuffer
+            = createHostBuffer(vk, sizeof(Renderer::RenderParams) * vk.batchSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (!vk.swapchain) {
             const VkDeviceSize observationBytes
-                = static_cast<VkDeviceSize>(vk.renderExtent.width) * vk.renderExtent.height * 4U;
+                = static_cast<VkDeviceSize>(vk.renderExtent.width) * vk.renderExtent.height * 4U * vk.batchSize;
             for (OffscreenFrame& frame : vk.offscreenFrames) {
-                frame.paramsBuffer
-                    = createHostBuffer(vk, sizeof(Renderer::RenderParams), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
                 frame.observationBuffer
                     = createExportedDeviceBuffer(vk, observationBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+                const std::size_t tensorBytes = static_cast<std::size_t>(vk.renderExtent.width)
+                    * static_cast<std::size_t>(vk.renderExtent.height) * 3U * vk.batchSize * sizeof(float);
+                cudaCheck(cudaMalloc(&frame.observationTensor, tensorBytes), "cudaMalloc observation tensor");
             }
         }
 
-        const uint32_t paramsSetCount = vk.swapchain ? 1U : static_cast<uint32_t>(vk.offscreenFrames.size());
         const VkDescriptorPoolSize poolSizes[] {
-            { .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 2 },
-            { .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = paramsSetCount },
+            { .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 3 },
         };
         const VkDescriptorPoolCreateInfo poolInfo {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-            .maxSets = 1U + paramsSetCount,
-            .poolSizeCount = 2,
+            .maxSets = 1U,
+            .poolSizeCount = 1,
             .pPoolSizes = poolSizes,
         };
         vkCheck(vkCreateDescriptorPool(vk.device, &poolInfo, nullptr, &vk.descriptorPool), "vkCreateDescriptorPool");
 
-        std::vector<VkDescriptorSetLayout> layouts;
-        layouts.reserve(1U + paramsSetCount);
-        layouts.push_back(vk.vertexSetLayout);
-        for (uint32_t i = 0; i < paramsSetCount; ++i)
-            layouts.push_back(vk.paramsSetLayout);
-        std::vector<VkDescriptorSet> sets(layouts.size());
+        const VkDescriptorSetLayout layouts[] { vk.vertexSetLayout };
         const VkDescriptorSetAllocateInfo allocInfo {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .descriptorPool = vk.descriptorPool,
-            .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
-            .pSetLayouts = layouts.data(),
+            .descriptorSetCount = 1,
+            .pSetLayouts = layouts,
         };
-        vkCheck(vkAllocateDescriptorSets(vk.device, &allocInfo, sets.data()), "vkAllocateDescriptorSets");
-        vk.vertexDescriptorSet = sets[0];
-        if (vk.swapchain)
-            vk.paramsDescriptorSet = sets[1];
-        else {
-            for (std::size_t i = 0; i < vk.offscreenFrames.size(); ++i)
-                vk.offscreenFrames[i].paramsDescriptorSet = sets[i + 1U];
-        }
+        vkCheck(vkAllocateDescriptorSets(vk.device, &allocInfo, &vk.vertexDescriptorSet), "vkAllocateDescriptorSets");
 
         const VkDescriptorBufferInfo vertexInfo {
             .buffer = vk.vertexBuffer.buffer, .offset = 0, .range = vk.vertexBuffer.size
         };
         const VkDescriptorBufferInfo instanceInfo {
             .buffer = vk.instanceBuffer.buffer, .offset = 0, .range = vk.instanceBuffer.size
+        };
+        const VkDescriptorBufferInfo paramsInfo {
+            .buffer = vk.paramsBuffer.buffer, .offset = 0, .range = vk.paramsBuffer.size
         };
         const VkWriteDescriptorSet vertexWrite {
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -1030,30 +966,21 @@ namespace {
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .pBufferInfo = &instanceInfo,
         };
-        const VkWriteDescriptorSet storageWrites[] { vertexWrite, instanceWrite };
-        vkUpdateDescriptorSets(vk.device, 2, storageWrites, 0, nullptr);
-
-        std::vector<VkDescriptorBufferInfo> paramsInfos(paramsSetCount);
-        std::vector<VkWriteDescriptorSet> writes(paramsSetCount);
-        for (uint32_t i = 0; i < paramsSetCount; ++i) {
-            Buffer& paramsBuffer = vk.swapchain ? vk.paramsBuffer : vk.offscreenFrames[i].paramsBuffer;
-            VkDescriptorSet paramsSet
-                = vk.swapchain ? vk.paramsDescriptorSet : vk.offscreenFrames[i].paramsDescriptorSet;
-            paramsInfos[i] = { .buffer = paramsBuffer.buffer, .offset = 0, .range = paramsBuffer.size };
-            writes[i] = {
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = paramsSet,
-                .dstBinding = 0,
-                .descriptorCount = 1,
-                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                .pBufferInfo = &paramsInfos[i],
-            };
-        }
-        vkUpdateDescriptorSets(vk.device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        const VkWriteDescriptorSet paramsWrite {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = vk.vertexDescriptorSet,
+            .dstBinding = 2,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &paramsInfo,
+        };
+        const VkWriteDescriptorSet storageWrites[] { vertexWrite, instanceWrite, paramsWrite };
+        vkUpdateDescriptorSets(vk.device, 3, storageWrites, 0, nullptr);
     }
 
     void initVulkan(Renderer::VulkanState& vk, GLFWwindow* window, RenderConfig config)
     {
+        vk.batchSize = std::max(1U, config.batchSize);
         createInstance(vk);
         if (window)
             vkCheck(glfwCreateWindowSurface(vk.instance, window, nullptr, &vk.surface), "glfwCreateWindowSurface");
@@ -1081,6 +1008,8 @@ namespace {
             return;
         vkDeviceWaitIdle(vk.device);
         for (OffscreenFrame& frame : vk.offscreenFrames) {
+            if (frame.observationTensor)
+                cudaCheck(cudaFree(frame.observationTensor), "cudaFree observation tensor");
             destroyBuffer(vk, frame.observationBuffer);
             destroyBuffer(vk, frame.paramsBuffer);
             if (frame.fence)
@@ -1129,13 +1058,11 @@ namespace {
     }
 
 } // namespace
+
 Renderer::Renderer(RenderConfig config)
     : m_config(config)
     , m_meshBuilder({ .halfExtent = TerrainMeshHalfExtent })
-    , m_pigMesh(createPigMesh())
 {
-    if (m_pigMesh.size() > MaxPigVertices) [[unlikely]]
-        fatalError("Pig mesh exceeds reserved Vulkan/CUDA vertex buffer capacity");
     if (!glfwInit()) [[unlikely]]
         fatalError("glfwInit failed");
     if (!glfwVulkanSupported()) [[unlikely]]
@@ -1151,16 +1078,7 @@ Renderer::Renderer(RenderConfig config)
 
     m_vk = new VulkanState();
     initVulkan(*m_vk, m_window, m_config);
-    m_observation = {
-        .width = static_cast<int32_t>(m_vk->renderExtent.width),
-        .height = static_cast<int32_t>(m_vk->renderExtent.height),
-        .channels = 4,
-        .device = m_vk->swapchain ? ObservationDevice::VulkanSwapchain : ObservationDevice::VulkanImage,
-        .format = ObservationFormat::RGBA8,
-        .handle
-        = reinterpret_cast<uintptr_t>(m_vk->swapchain ? reinterpret_cast<void*>(m_vk->swapchain)
-                                                      : reinterpret_cast<void*>(m_vk->offscreenFrames[0].color.image)),
-    };
+    initializeBatchData();
 }
 
 Renderer::~Renderer()
@@ -1193,21 +1111,27 @@ void Renderer::resize(int32_t width, int32_t height)
 
 void Renderer::setCudaObservationExportEnabled(bool enabled) { m_cudaObservationExportEnabled = enabled; }
 
-std::size_t Renderer::lastObservationFrameIndex() const
+std::size_t Renderer::lastObservationFrameIndex(std::size_t slot) const
 {
     if (!m_vk || m_vk->swapchain || m_vk->offscreenFrames.empty())
         return 0;
-    return m_vk->lastSubmittedOffscreenFrame;
+    if (slot >= m_batchSize) [[unlikely]]
+        fatalError("Invalid render slot:", slot);
+    return m_slots[slot].lastObservationFrame;
 }
 
-void* Renderer::cudaObservationData(std::size_t frameIndex)
+void* Renderer::cudaObservationTensorData(std::size_t frameIndex, uintptr_t streamHandle)
 {
     if (!m_vk || m_vk->swapchain || m_vk->offscreenFrames.empty())
         return nullptr;
-    if (frameIndex >= m_vk->offscreenFrames.size())
+    if (frameIndex >= m_vk->offscreenFrames.size()) [[unlikely]]
         fatalError("Invalid observation frame index:", frameIndex);
+    OffscreenFrame& frame = m_vk->offscreenFrames[frameIndex];
     synchronizeObservation(frameIndex);
-    return m_vk->offscreenFrames[frameIndex].observationBuffer.cudaPtr;
+    convertRgba8ToFloatNchw(frame.observationBuffer.cudaPtr, frame.observationTensor, m_vk->batchSize,
+        m_vk->renderExtent.width, m_vk->renderExtent.height, streamHandle);
+    frame.observationTensorValid = true;
+    return frame.observationTensor;
 }
 
 void Renderer::synchronizeObservation(std::size_t frameIndex)
@@ -1220,11 +1144,54 @@ void Renderer::synchronizeObservation(std::size_t frameIndex)
     vkWaitForFences(m_vk->device, 1, &frame.fence, VK_TRUE, UINT64_MAX);
 }
 
-std::size_t Renderer::cudaObservationBytes() const
+std::size_t Renderer::cudaObservationTensorBytes() const
 {
     if (!m_vk || m_vk->swapchain)
         return 0;
-    return static_cast<std::size_t>(m_vk->renderExtent.width) * static_cast<std::size_t>(m_vk->renderExtent.height) * 4U;
+    return static_cast<std::size_t>(m_vk->renderExtent.width) * static_cast<std::size_t>(m_vk->renderExtent.height) * 3U
+        * m_vk->batchSize * sizeof(float);
+}
+
+void Renderer::initializeBatchData()
+{
+    if (!m_vk)
+        return;
+    m_batchSize = m_vk->batchSize;
+    m_slots = std::make_unique<RenderSlot[]>(m_batchSize);
+    m_renderParams = std::make_unique<RenderParams[]>(m_batchSize);
+    m_observation.reset(m_vk->renderExtent.width, m_vk->renderExtent.height, 3U,
+        m_vk->swapchain ? ObservationDevice::VulkanSwapchain : ObservationDevice::Cuda,
+        m_vk->swapchain ? ObservationFormat::RGBA8 : ObservationFormat::FloatNCHW, m_batchSize);
+    m_observation.setVersion(m_observationVersion);
+    m_pigMeshVertexOffset = MaxTerrainVertices * m_vk->batchSize;
+    if (!m_pigMeshUploaded) {
+        PigMesh pigMeshGenerator;
+        const std::span<MeshVertex> pigMesh = pigMeshGenerator.generate();
+        m_pigMeshVertexCount = static_cast<uint32_t>(pigMesh.size());
+        MeshVertex* const vertices = static_cast<MeshVertex*>(m_vk->vertexBuffer.cudaPtr);
+        cudaCheck(cudaMemcpy(vertices + m_pigMeshVertexOffset, pigMesh.data(), sizeof(MeshVertex) * pigMesh.size(),
+                      cudaMemcpyHostToDevice),
+            "cudaMemcpy pig mesh to Vulkan vertex buffer");
+        cudaCheck(cudaDeviceSynchronize(), "cudaDeviceSynchronize pig mesh upload");
+        m_pigMeshUploaded = true;
+    }
+    for (uint32_t i = 0; i < m_batchSize; ++i) {
+        RenderSlot& slot = m_slots[i];
+        slot.terrainVertexOffset = i * MaxTerrainVertices;
+        slot.pigVertexOffset = m_pigMeshVertexOffset;
+        slot.pigVertexCount = m_pigMeshVertexCount;
+        slot.instanceOffset = i * MaxEntityInstances;
+        m_observation.setSlot(i,
+            reinterpret_cast<uintptr_t>(m_vk->swapchain
+                    ? reinterpret_cast<void*>(m_vk->swapchain)
+                    : reinterpret_cast<void*>(m_vk->offscreenFrames[0].color.image)));
+    }
+}
+
+void Renderer::validateBatchSize(std::size_t batchSize) const
+{
+    if (batchSize != m_batchSize) [[unlikely]]
+        fatalError("Renderer batch size cannot change after initialization");
 }
 
 Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, const World& world) const
@@ -1248,8 +1215,9 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, cons
     };
 }
 
-void Renderer::uploadInstances(const World& world)
+void Renderer::uploadInstances(std::size_t slotIndex, const World& world)
 {
+    RenderSlot& slot = m_slots[slotIndex];
     m_instances.clear();
     m_instances.reserve(world.characters().size() + 1U);
     m_instances.push_back({});
@@ -1260,26 +1228,27 @@ void Renderer::uploadInstances(const World& world)
         if (snapshot.kind != CharacterKind::Pig)
             continue;
         const float yaw = std::atan2(snapshot.forward.x, snapshot.forward.z);
-        const float speed
-            = std::sqrt(snapshot.velocity.x * snapshot.velocity.x + snapshot.velocity.z * snapshot.velocity.z);
         m_instances.push_back({
             .positionAndYaw = { snapshot.position.x, snapshot.position.y, snapshot.position.z, yaw },
-            .velocityAndKind = { speed, 0.0f, 0.0f, renderEntityKindId(RenderEntityKind::Pig) },
+            .velocityAndKind = { snapshot.velocity.x, snapshot.velocity.y, snapshot.velocity.z,
+                renderEntityKindId(RenderEntityKind::Pig) },
         });
         if (m_instances.size() >= MaxEntityInstances)
             break;
     }
-    m_instanceCount = static_cast<uint32_t>(m_instances.size() - 1U);
+    slot.instanceCount = static_cast<uint32_t>(m_instances.size() - 1U);
 
     VulkanState& vk = *m_vk;
     void* mapped = nullptr;
     const VkDeviceSize uploadBytes = sizeof(EntityInstance) * m_instances.size();
-    vkCheck(vkMapMemory(vk.device, vk.instanceBuffer.memory, 0, uploadBytes, 0, &mapped), "vkMapMemory instances");
+    const VkDeviceSize uploadOffset = sizeof(EntityInstance) * slot.instanceOffset;
+    vkCheck(vkMapMemory(vk.device, vk.instanceBuffer.memory, uploadOffset, uploadBytes, 0, &mapped),
+        "vkMapMemory instances");
     std::memcpy(mapped, m_instances.data(), static_cast<std::size_t>(uploadBytes));
     vkUnmapMemory(vk.device, vk.instanceBuffer.memory);
 }
 
-void Renderer::drawFrame(const RenderParams& params)
+void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderSlot> slots)
 {
     VulkanState& vk = *m_vk;
     OffscreenFrame* offscreenFrame = nullptr;
@@ -1302,14 +1271,16 @@ void Renderer::drawFrame(const RenderParams& params)
         submitFence = offscreenFrame->fence;
         vk.lastSubmittedOffscreenFrame = vk.nextOffscreenFrame;
         vk.nextOffscreenFrame = (vk.nextOffscreenFrame + 1U) % vk.offscreenFrames.size();
-        m_observation.handle = reinterpret_cast<uintptr_t>(offscreenFrame->color.image);
+        offscreenFrame->observationTensorValid = false;
+        for (RenderSlot& slot : slots)
+            slot.lastObservationFrame = vk.lastSubmittedOffscreenFrame;
     }
 
     void* mapped = nullptr;
-    Buffer& paramsBuffer = offscreenFrame ? offscreenFrame->paramsBuffer : vk.paramsBuffer;
-    vkCheck(vkMapMemory(vk.device, paramsBuffer.memory, 0, sizeof(params), 0, &mapped), "vkMapMemory params");
-    std::memcpy(mapped, &params, sizeof(params));
-    vkUnmapMemory(vk.device, paramsBuffer.memory);
+    const VkDeviceSize paramsBytes = sizeof(RenderParams) * params.size();
+    vkCheck(vkMapMemory(vk.device, vk.paramsBuffer.memory, 0, paramsBytes, 0, &mapped), "vkMapMemory params");
+    std::memcpy(mapped, params.data(), static_cast<std::size_t>(paramsBytes));
+    vkUnmapMemory(vk.device, vk.paramsBuffer.memory);
 
     VkCommandBuffer commandBuffer = offscreenFrame ? offscreenFrame->commandBuffer : vk.commandBuffers[imageIndex];
     vkResetCommandBuffer(commandBuffer, 0);
@@ -1329,21 +1300,33 @@ void Renderer::drawFrame(const RenderParams& params)
     };
     vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipeline);
-    const VkDescriptorSet sets[] { vk.vertexDescriptorSet,
-        offscreenFrame ? offscreenFrame->paramsDescriptorSet : vk.paramsDescriptorSet };
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipelineLayout, 0, 2, sets, 0, nullptr);
-    if (m_terrainVertexCount > 0)
-        vkCmdDraw(commandBuffer, m_terrainVertexCount, 1, 0, 0);
-    if (m_pigVertexCount > 0 && m_instanceCount > 0)
-        vkCmdDraw(commandBuffer, m_pigVertexCount, m_instanceCount, m_pigVertexOffset, 1);
+    vkCmdBindDescriptorSets(
+        commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipelineLayout, 0, 1, &vk.vertexDescriptorSet, 0, nullptr);
+    for (uint32_t envIndex = 0; envIndex < slots.size(); ++envIndex) {
+        const RenderSlot& slot = slots[envIndex];
+        DrawPushConstants pushConstants {
+            .envIndex = envIndex,
+            .layerIndex = offscreenFrame ? envIndex : 0U,
+        };
+        vkCmdPushConstants(
+            commandBuffer, vk.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pushConstants), &pushConstants);
+        if (slot.terrainVertexCount > 0)
+            vkCmdDraw(commandBuffer, slot.terrainVertexCount, 1, slot.terrainVertexOffset, slot.instanceOffset);
+        if (slot.pigVertexCount > 0 && slot.instanceCount > 0) {
+            vkCmdDraw(
+                commandBuffer, slot.pigVertexCount, slot.instanceCount, slot.pigVertexOffset, slot.instanceOffset + 1U);
+        }
+    }
     vkCmdEndRenderPass(commandBuffer);
     if (offscreenFrame && m_cudaObservationExportEnabled) {
         const VkBufferImageCopy copyRegion {
             .bufferOffset = 0,
             .bufferRowLength = 0,
             .bufferImageHeight = 0,
-            .imageSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0,
-                .layerCount = 1 },
+            .imageSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = static_cast<uint32_t>(slots.size()) },
             .imageOffset = { 0, 0, 0 },
             .imageExtent = { vk.renderExtent.width, vk.renderExtent.height, 1 },
         };
@@ -1378,14 +1361,38 @@ void Renderer::drawFrame(const RenderParams& params)
     }
 }
 
-Observation Renderer::renderObservation(const World& world, const AgentState& agent)
+const Observation& Renderer::renderObservations(std::span<const World> worlds, std::span<const AgentState> agents)
 {
-    const IVec3 agentBlock { floorToInt32(agent.position.x), floorToInt32(agent.position.y), floorToInt32(agent.position.z) };
+    if (worlds.size() != agents.size()) [[unlikely]]
+        fatalError("renderObservations world/agent count mismatch");
+    validateBatchSize(worlds.size());
+    for (std::size_t i = 0; i < worlds.size(); ++i) {
+        renderObservationSlot(i, worlds[i], agents[i]);
+        m_renderParams[i] = buildRenderParams(agents[i], worlds[i]);
+    }
+    drawFrame({ m_renderParams.get(), m_batchSize }, { m_slots.get(), m_batchSize });
+    ++m_observationVersion;
+    m_observation.setVersion(m_observationVersion);
+    for (uint32_t i = 0; i < m_batchSize; ++i) {
+        RenderSlot& slot = m_slots[i];
+        const uintptr_t handle = m_vk->swapchain
+            ? reinterpret_cast<uintptr_t>(m_vk->swapchain)
+            : reinterpret_cast<uintptr_t>(m_vk->offscreenFrames[slot.lastObservationFrame].color.image);
+        m_observation.setSlot(i, handle);
+    }
+    return m_observation;
+}
+
+void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, const AgentState& agent)
+{
+    const IVec3 agentBlock { floorToInt32(agent.position.x), floorToInt32(agent.position.y),
+        floorToInt32(agent.position.z) };
     constexpr int32_t MeshCacheStride = 12;
-    const IVec3 meshDelta = glm::abs(agentBlock - m_lastMeshCenter);
+    RenderSlot& slot = m_slots[slotIndex];
+    const IVec3 meshDelta = glm::abs(agentBlock - slot.lastMeshCenter);
     const bool agentLeftMeshCache
         = meshDelta.x > MeshCacheStride || meshDelta.y > MeshCacheStride || meshDelta.z > MeshCacheStride;
-    if (m_lastWorldVersion != world.version() || agentLeftMeshCache) {
+    if (slot.lastWorldVersion != world.version() || agentLeftMeshCache) {
         if (!m_vk->swapchain) {
             for (OffscreenFrame& frame : m_vk->offscreenFrames)
                 vkWaitForFences(m_vk->device, 1, &frame.fence, VK_TRUE, UINT64_MAX);
@@ -1393,21 +1400,13 @@ Observation Renderer::renderObservation(const World& world, const AgentState& ag
             vkWaitForFences(m_vk->device, 1, &m_vk->inFlight, VK_TRUE, UINT64_MAX);
 
         MeshVertex* const vertices = static_cast<MeshVertex*>(m_vk->vertexBuffer.cudaPtr);
-        m_terrainVertexCount = m_meshBuilder.rebuild(world, agent, vertices, MaxTerrainVertices);
-        m_pigVertexOffset = m_terrainVertexCount;
-        m_pigVertexCount = static_cast<uint32_t>(m_pigMesh.size());
-        cudaCheck(cudaMemcpy(vertices + m_pigVertexOffset, m_pigMesh.data(), sizeof(MeshVertex) * m_pigMesh.size(),
-                      cudaMemcpyHostToDevice),
-            "cudaMemcpy pig mesh to Vulkan vertex buffer");
-        cudaCheck(cudaDeviceSynchronize(), "cudaDeviceSynchronize mesh upload");
-        m_lastWorldVersion = world.version();
-        m_lastMeshCenter = agentBlock;
+        slot.terrainVertexCount
+            = m_meshBuilder.rebuild(world, agent, vertices + slot.terrainVertexOffset, MaxTerrainVertices);
+        cudaCheck(cudaDeviceSynchronize(), "cudaDeviceSynchronize terrain mesh upload");
+        slot.lastWorldVersion = world.version();
+        slot.lastMeshCenter = agentBlock;
     }
-    uploadInstances(world);
-
-    drawFrame(buildRenderParams(agent, world));
-    ++m_observation.version;
-    return m_observation;
+    uploadInstances(slotIndex, world);
 }
 
 } // namespace blocklab
