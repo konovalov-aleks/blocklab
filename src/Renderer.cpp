@@ -1400,9 +1400,9 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
             vkWaitForFences(m_vk->device, 1, &m_vk->inFlight, VK_TRUE, UINT64_MAX);
 
         MeshVertex* const vertices = static_cast<MeshVertex*>(m_vk->vertexBuffer.cudaPtr);
-        slot.terrainVertexCount
+        CudaSharedFuture<uint32_t> meshBuild
             = m_meshBuilder.rebuild(world, agent, vertices + slot.terrainVertexOffset, MaxTerrainVertices);
-        cudaCheck(cudaDeviceSynchronize(), "cudaDeviceSynchronize terrain mesh upload");
+        slot.terrainVertexCount = meshBuild.get();
         slot.lastWorldVersion = world.version();
         slot.lastMeshCenter = agentBlock;
     }

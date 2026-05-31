@@ -1,6 +1,7 @@
 #pragma once
 
 #include "blocklab/Agent.h"
+#include "blocklab/CudaSharedFuture.h"
 #include "blocklab/MeshTypes.h"
 #include "blocklab/World.h"
 
@@ -16,7 +17,7 @@ public:
     explicit MeshBuilder(MeshBuildConfig config = {});
     ~MeshBuilder();
 
-    uint32_t rebuild(const World& world, const AgentState& agent, MeshVertex* outVertices, uint32_t maxVertices);
+    CudaSharedFuture<uint32_t> rebuild(const World&, const AgentState&, MeshVertex* outVertices, uint32_t maxVertices);
 
 private:
     MeshBuildConfig m_config;

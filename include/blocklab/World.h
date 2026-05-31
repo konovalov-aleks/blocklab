@@ -1,6 +1,7 @@
 #pragma once
 
 #include "blocklab/BlockTypes.h"
+#include "blocklab/CudaSharedFuture.h"
 #include "blocklab/Math.h"
 #include "blocklab/PageLockedVector.h"
 #include "blocklab/QuadTree.h"
@@ -14,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace blocklab {
@@ -97,18 +99,54 @@ struct OverrideClusterColumn {
 class World {
 public:
     struct BlocksCache {
+        BlocksCache() = default;
+        ~BlocksCache() { waitIfPending(); }
+
+        BlocksCache(const BlocksCache&) = delete;
+        BlocksCache& operator=(const BlocksCache&) = delete;
+
+        BlocksCache(BlocksCache&& other) noexcept
+            : origin(other.origin)
+            , size(other.size)
+            , version(other.version)
+            , blocks(std::move(other.blocks))
+            , pendingFuture(std::move(other.pendingFuture))
+        {
+        }
+
+        BlocksCache& operator=(BlocksCache&& other) noexcept
+        {
+            if (this == &other)
+                return *this;
+
+            waitIfPending();
+            other.waitIfPending();
+            origin = other.origin;
+            size = other.size;
+            version = other.version;
+            blocks = std::move(other.blocks);
+            pendingFuture = std::move(other.pendingFuture);
+            return *this;
+        }
+
         void clear()
         {
+            waitIfPending();
             origin = {};
             size = {};
             version = {};
             blocks.clear();
         }
 
+        void markPending(CudaSharedFuture<uint32_t> future) const { pendingFuture = std::move(future); }
+
+        void waitIfPending() const;
+
         IVec3 origin {};
         IVec3 size {};
         uint64_t version = 0;
         PageLockedVector<uint8_t> blocks;
+        mutable CudaSharedFuture<uint32_t> pendingFuture;
     };
 
     explicit World(uint32_t seed = 1);

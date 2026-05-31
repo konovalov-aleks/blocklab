@@ -15,7 +15,7 @@ MeshBuilder::MeshBuilder(MeshBuildConfig config)
 
 MeshBuilder::~MeshBuilder() = default;
 
-uint32_t MeshBuilder::rebuild(
+CudaSharedFuture<uint32_t> MeshBuilder::rebuild(
     const World& world, const AgentState& agent, MeshVertex* outVertices, uint32_t maxVertices)
 {
     const IVec3 center {
@@ -44,11 +44,13 @@ uint32_t MeshBuilder::rebuild(
     cache.size = size;
     cache.version = world.version();
 
-    const uint32_t vertexCount = m_cudaTerrain->rebuild(
+    CudaFuture<uint32_t> future = m_cudaTerrain->rebuild(
         world.seed(), center, m_config.halfExtent, m_terrainOverrides, outVertices, maxVertices, cache.blocks);
+    CudaSharedFuture<uint32_t> sharedFuture(std::move(future));
     assert(static_cast<std::size_t>(size.x) * static_cast<std::size_t>(size.y) * static_cast<std::size_t>(size.z)
         == cache.blocks.size());
-    return vertexCount;
+    cache.markPending(sharedFuture);
+    return sharedFuture;
 }
 
 } // namespace blocklab

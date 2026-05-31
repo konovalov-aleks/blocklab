@@ -123,6 +123,15 @@ World::World(uint32_t seed)
 {
 }
 
+void World::BlocksCache::waitIfPending() const
+{
+    if (!pendingFuture)
+        return;
+
+    pendingFuture.wait();
+    pendingFuture = {};
+}
+
 void World::reset(uint32_t seed)
 {
     m_seed = seed;
@@ -143,6 +152,7 @@ Block World::getBlock(int32_t x, int32_t y, int32_t z) const
         && x < m_blocksCache.origin.x + m_blocksCache.size.x && y < m_blocksCache.origin.y + m_blocksCache.size.y
         && z < m_blocksCache.origin.z + m_blocksCache.size.z) [[likely]] {
 
+        m_blocksCache.waitIfPending();
         const IVec3 local { x - m_blocksCache.origin.x, y - m_blocksCache.origin.y, z - m_blocksCache.origin.z };
         return static_cast<Block>(m_blocksCache.blocks[denseBlockIndex(local, m_blocksCache.size)]);
     }
@@ -248,8 +258,10 @@ bool World::hasSolidBlockInArea(IVec3 min, IVec3 max) const
         && min.y >= m_blocksCache.origin.y && min.z >= m_blocksCache.origin.z
         && max.x < m_blocksCache.origin.x + m_blocksCache.size.x
         && max.y < m_blocksCache.origin.y + m_blocksCache.size.y
-        && max.z < m_blocksCache.origin.z + m_blocksCache.size.z) [[likely]]
+        && max.z < m_blocksCache.origin.z + m_blocksCache.size.z) [[likely]] {
+        m_blocksCache.waitIfPending();
         return cachedSolidBlockInArea(min, max);
+    }
 
     if (m_overrideCount == 0) {
         for (int32_t z = min.z; z <= max.z; ++z) {

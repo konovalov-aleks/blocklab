@@ -1,5 +1,6 @@
 #pragma once
 
+#include "blocklab/CudaFuture.h"
 #include "blocklab/Math.h"
 #include "blocklab/MeshTypes.h"
 #include "blocklab/PageLockedVector.h"
@@ -18,7 +19,7 @@ public:
     CudaTerrainMeshBuilder(const CudaTerrainMeshBuilder&) = delete;
     CudaTerrainMeshBuilder& operator=(const CudaTerrainMeshBuilder&) = delete;
 
-    uint32_t rebuild(uint32_t seed, IVec3 center, int32_t halfExtent,
+    CudaFuture<uint32_t> rebuild(uint32_t seed, IVec3 center, int32_t halfExtent,
         const std::vector<TerrainBlockOverride>& overrides, MeshVertex* outVertices, uint32_t maxVertices,
         PageLockedVector<uint8_t>& outBlocks);
 

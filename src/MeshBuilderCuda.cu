@@ -261,32 +261,55 @@ namespace {
 struct CudaTerrainMeshBuilder::State {
     CudaOverride* overrides = nullptr;
     uint32_t* vertexCount = nullptr;
+    uint32_t* vertexCountHost = nullptr;
+    cudaStream_t stream = nullptr;
+    PageLockedVector<CudaOverride> packedOverrides;
     uint32_t overrideCapacity = 0;
+    bool pending = false;
 };
 
 CudaTerrainMeshBuilder::CudaTerrainMeshBuilder()
     : m_state(std::make_unique<State>())
 {
+    cudaCheck(cudaStreamCreateWithFlags(&m_state->stream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags");
     cudaCheck(cudaMalloc(&m_state->vertexCount, sizeof(uint32_t)), "cudaMalloc vertexCount");
+    cudaCheck(cudaMallocHost(&m_state->vertexCountHost, sizeof(uint32_t)), "cudaMallocHost vertexCount");
 }
 
 CudaTerrainMeshBuilder::~CudaTerrainMeshBuilder()
 {
     if (!m_state)
         return;
+    cudaStreamSynchronize(m_state->stream);
     cudaFree(m_state->overrides);
     cudaFree(m_state->vertexCount);
+    cudaFreeHost(m_state->vertexCountHost);
+    cudaStreamDestroy(m_state->stream);
 }
 
-uint32_t CudaTerrainMeshBuilder::rebuild(uint32_t seed, IVec3 center, int32_t halfExtent,
+CudaFuture<uint32_t> CudaTerrainMeshBuilder::rebuild(uint32_t seed, IVec3 center, int32_t halfExtent,
     const std::vector<TerrainBlockOverride>& overrides, MeshVertex* outVertices, uint32_t maxVertices,
     PageLockedVector<uint8_t>& outBlocks)
 {
+    const auto waitForPendingBuild = [this] {
+        cudaCheck(cudaStreamSynchronize(m_state->stream), "cudaStreamSynchronize previous terrain mesh build");
+        m_state->pending = false;
+    };
+
     const int32_t width = halfExtent * 2;
     const int32_t height = ChunkSizeY;
     const int32_t depth = halfExtent * 2;
+    const int32_t volume = width * height * depth;
+    if (m_state->pending && outBlocks.capacity() < static_cast<std::size_t>(volume))
+        waitForPendingBuild();
 
-    PageLockedVector<CudaOverride> packedOverrides;
+    outBlocks.uninitializedResize(volume);
+
+    if (m_state->pending)
+        waitForPendingBuild();
+
+    PageLockedVector<CudaOverride>& packedOverrides = m_state->packedOverrides;
+    packedOverrides.clear();
     packedOverrides.reserve(overrides.size());
     for (const TerrainBlockOverride& blockOverride : overrides) {
         packedOverrides.push_back({
@@ -305,12 +328,13 @@ uint32_t CudaTerrainMeshBuilder::rebuild(uint32_t seed, IVec3 center, int32_t ha
             cudaMalloc(&m_state->overrides, sizeof(CudaOverride) * m_state->overrideCapacity), "cudaMalloc overrides");
     }
     if (!packedOverrides.empty()) {
-        cudaCheck(cudaMemcpy(m_state->overrides, packedOverrides.data(), sizeof(CudaOverride) * packedOverrides.size(),
-                      cudaMemcpyHostToDevice),
-            "cudaMemcpy overrides");
+        cudaCheck(cudaMemcpyAsync(m_state->overrides, packedOverrides.data(),
+                      sizeof(CudaOverride) * packedOverrides.size(), cudaMemcpyHostToDevice, m_state->stream),
+            "cudaMemcpyAsync overrides");
     }
 
-    cudaCheck(cudaMemset(m_state->vertexCount, 0, sizeof(uint32_t)), "cudaMemset vertexCount");
+    cudaCheck(
+        cudaMemsetAsync(m_state->vertexCount, 0, sizeof(uint32_t), m_state->stream), "cudaMemsetAsync vertexCount");
     const CudaBuildParams params {
         .seed = seed,
         .centerX = center.x,
@@ -326,18 +350,20 @@ uint32_t CudaTerrainMeshBuilder::rebuild(uint32_t seed, IVec3 center, int32_t ha
         .maxVertices = maxVertices,
     };
 
-    const int32_t volume = width * height * depth;
-    outBlocks.uninitializedResize(volume);
-
     constexpr int32_t ThreadCount = 256;
-    buildTerrainMeshKernel<<<(volume + ThreadCount - 1) / ThreadCount, ThreadCount>>>(
+    buildTerrainMeshKernel<<<(volume + ThreadCount - 1) / ThreadCount, ThreadCount, 0, m_state->stream>>>(
         params, m_state->overrides, reinterpret_cast<CudaVertex*>(outVertices), m_state->vertexCount, outBlocks.data());
     cudaCheck(cudaGetLastError(), "buildTerrainMeshKernel");
 
-    uint32_t vertexCount = 0;
-    cudaCheck(cudaMemcpy(&vertexCount, m_state->vertexCount, sizeof(vertexCount), cudaMemcpyDeviceToHost),
-        "cudaMemcpy vertexCount");
-    return std::min(vertexCount, maxVertices);
+    cudaCheck(cudaMemcpyAsync(m_state->vertexCountHost, m_state->vertexCount, sizeof(*m_state->vertexCountHost),
+                  cudaMemcpyDeviceToHost, m_state->stream),
+        "cudaMemcpyAsync vertexCount");
+
+    m_state->pending = true;
+    return CudaFuture<uint32_t>(m_state->stream, [state = m_state.get(), maxVertices] {
+        state->pending = false;
+        return std::min(*state->vertexCountHost, maxVertices);
+    });
 }
 
 } // namespace blocklab
