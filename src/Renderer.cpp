@@ -1061,7 +1061,7 @@ namespace {
 
 Renderer::Renderer(RenderConfig config)
     : m_config(config)
-    , m_meshBuilder({ .halfExtent = TerrainMeshHalfExtent })
+    , m_worldGenerator({ .halfExtent = TerrainMeshHalfExtent })
 {
     if (!glfwInit()) [[unlikely]]
         fatalError("glfwInit failed");
@@ -1303,7 +1303,13 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
     vkCmdBindDescriptorSets(
         commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipelineLayout, 0, 1, &vk.vertexDescriptorSet, 0, nullptr);
     for (uint32_t envIndex = 0; envIndex < slots.size(); ++envIndex) {
-        const RenderSlot& slot = slots[envIndex];
+        RenderSlot& slot = slots[envIndex];
+        if (slot.pendingGeneration.valid()) {
+            const WorldGenerationOutput& output = slot.pendingGeneration.get();
+            slot.terrainVertexCount = output.meshVertexCount;
+            slot.lastWorldVersion = output.worldVersion;
+            slot.pendingGeneration = {};
+        }
         DrawPushConstants pushConstants {
             .envIndex = envIndex,
             .layerIndex = offscreenFrame ? envIndex : 0U,
@@ -1400,9 +1406,14 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
             vkWaitForFences(m_vk->device, 1, &m_vk->inFlight, VK_TRUE, UINT64_MAX);
 
         MeshVertex* const vertices = static_cast<MeshVertex*>(m_vk->vertexBuffer.cudaPtr);
-        CudaSharedFuture<uint32_t> meshBuild
-            = m_meshBuilder.rebuild(world, agent, vertices + slot.terrainVertexOffset, MaxTerrainVertices);
-        slot.terrainVertexCount = meshBuild.get();
+        CudaSharedFuture<WorldGenerationOutput> generation
+            = m_worldGenerator
+                  .generate(world, agent,
+                      world.borrowGenerationBuffers({ vertices + slot.terrainVertexOffset, MaxTerrainVertices }))
+                  .share();
+        world.updateGeneration(generation);
+        slot.pendingGeneration = std::move(generation);
+        slot.terrainVertexCount = 0;
         slot.lastWorldVersion = world.version();
         slot.lastMeshCenter = agentBlock;
     }

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "blocklab/Environment.h"
-#include "blocklab/MeshBuilder.h"
+#include "blocklab/WorldGenerator.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -87,6 +87,7 @@ private:
         uint32_t pigVertexCount = 0;
         uint32_t instanceOffset = 0;
         uint32_t instanceCount = 0;
+        CudaSharedFuture<WorldGenerationOutput> pendingGeneration;
         std::size_t lastObservationFrame = 0;
     };
 
@@ -100,7 +101,7 @@ private:
     RenderConfig m_config;
     GLFWwindow* m_window = nullptr;
     VulkanState* m_vk = nullptr;
-    MeshBuilder m_meshBuilder;
+    WorldGenerator m_worldGenerator;
     Observation m_observation;
     uint64_t m_lastWorldVersion = 0;
     IVec3 m_lastMeshCenter { std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::min(),

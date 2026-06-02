@@ -34,6 +34,7 @@ public:
         , m_result(std::move(other.m_result))
         , m_pending(std::exchange(other.m_pending, false))
     {
+        other.m_result.reset();
     }
 
     CudaFuture& operator=(CudaFuture&& other) noexcept
@@ -44,6 +45,7 @@ public:
         m_stream = std::exchange(other.m_stream, nullptr);
         m_readResult = std::move(other.m_readResult);
         m_result = std::move(other.m_result);
+        other.m_result.reset();
         m_pending = std::exchange(other.m_pending, false);
         return *this;
     }
@@ -57,13 +59,17 @@ public:
         m_pending = false;
     }
 
-    T get()
+    T& get()
     {
         wait();
         if (!m_result)
             m_result = m_readResult();
         return *m_result;
     }
+
+    bool valid() const { return m_stream || m_result.has_value(); }
+
+    CudaSharedFuture<T> share();
 
 private:
     friend class CudaSharedFuture<T>;

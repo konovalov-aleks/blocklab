@@ -1,5 +1,6 @@
 #include "blocklab/World.h"
 
+#include "blocklab/Error.h"
 #include "blocklab/Hash.h"
 #include "blocklab/characters/PigCharacter.h"
 
@@ -66,11 +67,6 @@ void Chunk::set(int32_t x, int32_t y, int32_t z, Block block)
     m_blocks[static_cast<std::size_t>(index)] = block;
 }
 
-std::size_t BlockCoordHash::operator()(const BlockCoord& coord) const noexcept
-{
-    return static_cast<std::size_t>(hashCombine(coord.x, coord.y, coord.z));
-}
-
 OverrideCluster::OverrideCluster() { m_blocks.fill(NoOverride); }
 
 OverrideCluster::Mask OverrideCluster::bitFor(std::size_t index) { return Mask { 1 } << index; }
@@ -123,13 +119,40 @@ World::World(uint32_t seed)
 {
 }
 
-void World::BlocksCache::waitIfPending() const
+void World::BlocksCache::waitIfPending()
 {
-    if (!pendingFuture)
+    if (state == State::Borrowed) [[unlikely]]
+        fatalError("World block cache is borrowed for generation");
+
+    if (!pendingFuture.valid())
         return;
 
-    pendingFuture.wait();
+    WorldGenerationOutput& output = pendingFuture.get();
+    origin = output.origin;
+    size = output.size;
+    version = output.worldVersion;
+    blocks = std::move(output.buffers.blocks);
     pendingFuture = {};
+    state = State::Ready;
+}
+
+WorldGenerationBuffers World::borrowGenerationBuffers(std::span<MeshVertex> meshVertices) const
+{
+    m_blocksCache.waitIfPending();
+    m_blocksCache.state = BlocksCache::State::Borrowed;
+    return {
+        .meshVertices = meshVertices,
+        .blocks = std::move(m_blocksCache.blocks),
+    };
+}
+
+void World::updateGeneration(CudaSharedFuture<WorldGenerationOutput> generation) const
+{
+    if (m_blocksCache.state != BlocksCache::State::Borrowed) [[unlikely]]
+        fatalError("World generation buffers were not borrowed");
+
+    m_blocksCache.pendingFuture = std::move(generation);
+    m_blocksCache.state = BlocksCache::State::Pending;
 }
 
 void World::reset(uint32_t seed)
@@ -146,13 +169,13 @@ void World::reset(uint32_t seed)
 
 Block World::getBlock(int32_t x, int32_t y, int32_t z) const
 {
+    m_blocksCache.waitIfPending();
 
     if (m_blocksCache.version == m_version && !m_blocksCache.blocks.empty() && x >= m_blocksCache.origin.x
         && y >= m_blocksCache.origin.y && z >= m_blocksCache.origin.z
         && x < m_blocksCache.origin.x + m_blocksCache.size.x && y < m_blocksCache.origin.y + m_blocksCache.size.y
         && z < m_blocksCache.origin.z + m_blocksCache.size.z) [[likely]] {
 
-        m_blocksCache.waitIfPending();
         const IVec3 local { x - m_blocksCache.origin.x, y - m_blocksCache.origin.y, z - m_blocksCache.origin.z };
         return static_cast<Block>(m_blocksCache.blocks[denseBlockIndex(local, m_blocksCache.size)]);
     }
@@ -185,6 +208,7 @@ std::optional<Block> World::overriddenBlock(int32_t x, int32_t y, int32_t z) con
 
 void World::setBlock(int32_t x, int32_t y, int32_t z, Block block)
 {
+    m_blocksCache.waitIfPending();
     if (y < 0 || y >= Chunk::SizeY)
         return;
 
@@ -246,6 +270,8 @@ OverrideCluster::Mask World::generatedSolidColumnMask(
 
 bool World::hasSolidBlockInArea(IVec3 min, IVec3 max) const
 {
+    m_blocksCache.waitIfPending();
+
     if (max.y < 0)
         return true;
     if (min.y >= Chunk::SizeY)
@@ -258,10 +284,8 @@ bool World::hasSolidBlockInArea(IVec3 min, IVec3 max) const
         && min.y >= m_blocksCache.origin.y && min.z >= m_blocksCache.origin.z
         && max.x < m_blocksCache.origin.x + m_blocksCache.size.x
         && max.y < m_blocksCache.origin.y + m_blocksCache.size.y
-        && max.z < m_blocksCache.origin.z + m_blocksCache.size.z) [[likely]] {
-        m_blocksCache.waitIfPending();
+        && max.z < m_blocksCache.origin.z + m_blocksCache.size.z) [[likely]]
         return cachedSolidBlockInArea(min, max);
-    }
 
     if (m_overrideCount == 0) {
         for (int32_t z = min.z; z <= max.z; ++z) {
@@ -443,11 +467,7 @@ void World::collectOverridesInRegion(IVec3 origin, IVec3 size, std::vector<Block
                             if (!stored)
                                 continue;
                             out.push_back({
-                                .coord = {
-                                    .x = clusterOrigin.x + x,
-                                    .y = clusterOrigin.y + y,
-                                    .z = clusterOrigin.z + z,
-                                },
+                                .coord = IVec3 { clusterOrigin.x + x, clusterOrigin.y + y, clusterOrigin.z + z },
                                 .block = *stored,
                             });
                         }

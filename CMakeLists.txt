@@ -101,10 +101,10 @@ blocklab_enable_strict_warnings(blocklab_env)
 
 add_library(blocklab_render
     src/CudaObservation.cu
-    src/MeshBuilderCuda.cu
-    src/MeshBuilder.cpp
+    src/CudaWorldGenerator.cu
     src/meshes/PigMesh.cpp
     src/Renderer.cpp
+    src/WorldGenerator.cpp
 )
 
 target_include_directories(blocklab_render
@@ -127,7 +127,7 @@ add_dependencies(blocklab_render blocklab_mesh_vertex_shader blocklab_mesh_fragm
 target_compile_definitions(blocklab_render PRIVATE BLOCKLAB_SHADER_DIR="${BLOCKLAB_SHADER_OUTPUT_DIR}")
 
 blocklab_enable_strict_warnings(blocklab_render)
-set_source_files_properties(src/CudaObservation.cu src/MeshBuilderCuda.cu PROPERTIES CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED ON)
+set_source_files_properties(src/CudaObservation.cu src/CudaWorldGenerator.cu PROPERTIES CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED ON)
 
 add_executable(blocklab
     src/main.cpp
@@ -186,6 +186,16 @@ target_link_libraries(blocklab_page_locked_vector_test PRIVATE blocklab_env Catc
 blocklab_enable_strict_warnings(blocklab_page_locked_vector_test)
 
 add_test(NAME blocklab_page_locked_vector_test COMMAND blocklab_page_locked_vector_test)
+
+add_executable(blocklab_cuda_future_test
+    tests/cuda_future_test.cpp
+)
+
+target_link_libraries(blocklab_cuda_future_test PRIVATE blocklab_env Catch2::Catch2WithMain)
+
+blocklab_enable_strict_warnings(blocklab_cuda_future_test)
+
+add_test(NAME blocklab_cuda_future_test COMMAND blocklab_cuda_future_test)
 
 add_executable(blocklab_hash_test
     tests/hash_test.cpp

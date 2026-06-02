@@ -252,10 +252,10 @@ TEST_CASE("World collects only overrides inside a requested region", "[world]")
     std::vector<blocklab::BlockOverride> overrides;
     world.collectOverridesInRegion({ 0, 24, 0 }, { 16, 8, 16 }, overrides);
 
-    std::vector<blocklab::BlockCoord> coords;
+    std::vector<blocklab::IVec3> coords;
     for (const blocklab::BlockOverride& blockOverride : overrides)
         coords.push_back(blockOverride.coord);
-    std::sort(coords.begin(), coords.end(), [](const blocklab::BlockCoord& a, const blocklab::BlockCoord& b) {
+    std::sort(coords.begin(), coords.end(), [](const blocklab::IVec3& a, const blocklab::IVec3& b) {
         if (a.x != b.x)
             return a.x < b.x;
         if (a.y != b.y)
@@ -264,8 +264,8 @@ TEST_CASE("World collects only overrides inside a requested region", "[world]")
     });
 
     REQUIRE(coords.size() == 2);
-    CHECK(coords[0] == blocklab::BlockCoord { .x = 1, .y = 30, .z = 1 });
-    CHECK(coords[1] == blocklab::BlockCoord { .x = 9, .y = 30, .z = 1 });
+    CHECK(coords[0] == blocklab::IVec3 { 1, 30, 1 });
+    CHECK(coords[1] == blocklab::IVec3 { 9, 30, 1 });
 }
 
 TEST_CASE("World spawns test pigs around the agent on reset", "[world][characters]")

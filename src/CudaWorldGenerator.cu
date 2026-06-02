@@ -1,4 +1,4 @@
-#include "blocklab/CudaMeshBuilder.h"
+#include "blocklab/CudaWorldGenerator.h"
 
 #include "blocklab/CudaHelpers.h"
 #include "blocklab/Hash.h"
@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 
 namespace blocklab {
@@ -258,7 +259,7 @@ namespace {
 
 } // namespace
 
-struct CudaTerrainMeshBuilder::State {
+struct CudaWorldGenerator::State {
     CudaOverride* overrides = nullptr;
     uint32_t* vertexCount = nullptr;
     uint32_t* vertexCountHost = nullptr;
@@ -268,7 +269,7 @@ struct CudaTerrainMeshBuilder::State {
     bool pending = false;
 };
 
-CudaTerrainMeshBuilder::CudaTerrainMeshBuilder()
+CudaWorldGenerator::CudaWorldGenerator()
     : m_state(std::make_unique<State>())
 {
     cudaCheck(cudaStreamCreateWithFlags(&m_state->stream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags");
@@ -276,7 +277,7 @@ CudaTerrainMeshBuilder::CudaTerrainMeshBuilder()
     cudaCheck(cudaMallocHost(&m_state->vertexCountHost, sizeof(uint32_t)), "cudaMallocHost vertexCount");
 }
 
-CudaTerrainMeshBuilder::~CudaTerrainMeshBuilder()
+CudaWorldGenerator::~CudaWorldGenerator()
 {
     if (!m_state)
         return;
@@ -287,34 +288,36 @@ CudaTerrainMeshBuilder::~CudaTerrainMeshBuilder()
     cudaStreamDestroy(m_state->stream);
 }
 
-CudaFuture<uint32_t> CudaTerrainMeshBuilder::rebuild(uint32_t seed, IVec3 center, int32_t halfExtent,
-    const std::vector<TerrainBlockOverride>& overrides, MeshVertex* outVertices, uint32_t maxVertices,
-    PageLockedVector<uint8_t>& outBlocks)
+CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
+    const WorldGenerationInput& input, WorldGenerationBuffers&& buffers)
 {
     const auto waitForPendingBuild = [this] {
         cudaCheck(cudaStreamSynchronize(m_state->stream), "cudaStreamSynchronize previous terrain mesh build");
         m_state->pending = false;
     };
 
-    const int32_t width = halfExtent * 2;
+    const int32_t width = input.halfExtent * 2;
     const int32_t height = ChunkSizeY;
-    const int32_t depth = halfExtent * 2;
+    const int32_t depth = input.halfExtent * 2;
     const int32_t volume = width * height * depth;
-    if (m_state->pending && outBlocks.capacity() < static_cast<std::size_t>(volume))
-        waitForPendingBuild();
-
-    outBlocks.uninitializedResize(volume);
+    const auto blockCount = static_cast<std::size_t>(volume);
+    // Do not resize the borrowed cache buffer in-place: it may still be part of an async
+    // CUDA/Vulkan handoff chain.
+    PageLockedVector<uint8_t> outBlocks;
+    if (buffers.blocks.size() >= blockCount)
+        outBlocks = std::move(buffers.blocks);
+    outBlocks.uninitializedResize(blockCount);
 
     if (m_state->pending)
         waitForPendingBuild();
 
     PageLockedVector<CudaOverride>& packedOverrides = m_state->packedOverrides;
     packedOverrides.clear();
-    packedOverrides.reserve(overrides.size());
-    for (const TerrainBlockOverride& blockOverride : overrides) {
+    packedOverrides.reserve(input.overrides.size());
+    for (const BlockOverride& blockOverride : input.overrides) {
         packedOverrides.push_back({
-            .key = packKeyHost(blockOverride.x, blockOverride.y, blockOverride.z),
-            .block = blockOverride.block,
+            .key = packKeyHost(blockOverride.coord.x, blockOverride.coord.y, blockOverride.coord.z),
+            .block = blockId(blockOverride.block),
         });
     }
     std::sort(packedOverrides.begin(), packedOverrides.end(),
@@ -336,23 +339,24 @@ CudaFuture<uint32_t> CudaTerrainMeshBuilder::rebuild(uint32_t seed, IVec3 center
     cudaCheck(
         cudaMemsetAsync(m_state->vertexCount, 0, sizeof(uint32_t), m_state->stream), "cudaMemsetAsync vertexCount");
     const CudaBuildParams params {
-        .seed = seed,
-        .centerX = center.x,
-        .centerY = center.y,
-        .centerZ = center.z,
+        .seed = input.seed,
+        .centerX = input.center.x,
+        .centerY = input.center.y,
+        .centerZ = input.center.z,
         .width = width,
         .height = height,
         .depth = depth,
-        .originX = center.x - halfExtent,
+        .originX = input.origin.x,
         .originY = 0,
-        .originZ = center.z - halfExtent,
+        .originZ = input.origin.z,
         .overrideCount = static_cast<int32_t>(packedOverrides.size()),
-        .maxVertices = maxVertices,
+        .maxVertices = static_cast<uint32_t>(buffers.meshVertices.size()),
     };
 
     constexpr int32_t ThreadCount = 256;
-    buildTerrainMeshKernel<<<(volume + ThreadCount - 1) / ThreadCount, ThreadCount, 0, m_state->stream>>>(
-        params, m_state->overrides, reinterpret_cast<CudaVertex*>(outVertices), m_state->vertexCount, outBlocks.data());
+    buildTerrainMeshKernel<<<(volume + ThreadCount - 1) / ThreadCount, ThreadCount, 0, m_state->stream>>>(params,
+        m_state->overrides, reinterpret_cast<CudaVertex*>(buffers.meshVertices.data()), m_state->vertexCount,
+        outBlocks.data());
     cudaCheck(cudaGetLastError(), "buildTerrainMeshKernel");
 
     cudaCheck(cudaMemcpyAsync(m_state->vertexCountHost, m_state->vertexCount, sizeof(*m_state->vertexCountHost),
@@ -360,10 +364,20 @@ CudaFuture<uint32_t> CudaTerrainMeshBuilder::rebuild(uint32_t seed, IVec3 center
         "cudaMemcpyAsync vertexCount");
 
     m_state->pending = true;
-    return CudaFuture<uint32_t>(m_state->stream, [state = m_state.get(), maxVertices] {
-        state->pending = false;
-        return std::min(*state->vertexCountHost, maxVertices);
-    });
+    WorldGenerationOutput output;
+    output.origin = input.origin;
+    output.size = input.size;
+    output.worldVersion = input.worldVersion;
+    output.buffers = std::move(buffers);
+    output.buffers.blocks = std::move(outBlocks);
+    auto outputStorage = std::make_shared<WorldGenerationOutput>(std::move(output));
+    return CudaFuture<WorldGenerationOutput>(
+        m_state->stream, [state = m_state.get(), outputStorage]() mutable {
+            state->pending = false;
+            outputStorage->meshVertexCount
+                = std::min(*state->vertexCountHost, static_cast<uint32_t>(outputStorage->buffers.meshVertices.size()));
+            return std::move(*outputStorage);
+        });
 }
 
 } // namespace blocklab

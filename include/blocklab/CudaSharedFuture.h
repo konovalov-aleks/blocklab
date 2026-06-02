@@ -17,8 +17,9 @@ public:
     CudaSharedFuture() = default;
 
     CudaSharedFuture(CudaFuture<T>&& future)
-        : m_control(std::make_shared<ControlBlock>(std::move(future)))
     {
+        if (future.valid())
+            m_control = std::make_shared<ControlBlock>(std::move(future));
     }
 
     void wait() const
@@ -27,9 +28,9 @@ public:
             m_control->wait();
     }
 
-    T get() const { return m_control->get(); }
+    T& get() const { return m_control->get(); }
 
-    explicit operator bool() const { return static_cast<bool>(m_control); }
+    bool valid() const { return static_cast<bool>(m_control); }
 
 private:
     struct ControlBlock {
@@ -39,6 +40,7 @@ private:
             , result(std::move(future.m_result))
             , pending(std::exchange(future.m_pending, false))
         {
+            future.m_result.reset();
         }
 
         void wait()
@@ -50,7 +52,7 @@ private:
             pending = false;
         }
 
-        T get()
+        T& get()
         {
             wait();
             if (!result)
@@ -66,5 +68,11 @@ private:
 
     std::shared_ptr<ControlBlock> m_control;
 };
+
+template <typename T>
+CudaSharedFuture<T> CudaFuture<T>::share()
+{
+    return CudaSharedFuture<T>(std::move(*this));
+}
 
 } // namespace blocklab

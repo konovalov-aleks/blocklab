@@ -1,10 +1,11 @@
 #pragma once
 
-#include "blocklab/BlockTypes.h"
+#include "blocklab/Block.h"
 #include "blocklab/CudaSharedFuture.h"
 #include "blocklab/Math.h"
 #include "blocklab/PageLockedVector.h"
 #include "blocklab/QuadTree.h"
+#include "blocklab/WorldGenerator.h"
 #include "blocklab/characters/NPC.h"
 
 #include <array>
@@ -19,32 +20,6 @@
 #include <vector>
 
 namespace blocklab {
-
-class Chunk {
-public:
-    static constexpr int32_t SizeX = 16;
-    static constexpr int32_t SizeY = 32;
-    static constexpr int32_t SizeZ = 16;
-    static constexpr int32_t Volume = SizeX * SizeY * SizeZ;
-
-    Block get(int32_t x, int32_t y, int32_t z) const;
-    void set(int32_t x, int32_t y, int32_t z, Block block);
-
-private:
-    std::array<Block, Volume> m_blocks {};
-};
-
-struct BlockCoord {
-    int32_t x = 0;
-    int32_t y = 0;
-    int32_t z = 0;
-
-    bool operator==(const BlockCoord& other) const { return x == other.x && y == other.y && z == other.z; }
-};
-
-struct BlockCoordHash {
-    std::size_t operator()(const BlockCoord& coord) const noexcept;
-};
 
 class OverrideCluster {
 public:
@@ -85,11 +60,6 @@ static_assert(BlockId::Grass != OverrideCluster::NoOverride);
 static_assert(BlockId::Dirt != OverrideCluster::NoOverride);
 static_assert(BlockId::Stone != OverrideCluster::NoOverride);
 
-struct BlockOverride {
-    BlockCoord coord;
-    Block block = Block::Air;
-};
-
 struct OverrideClusterColumn {
     std::map<int32_t, OverrideCluster> clusters;
 
@@ -99,6 +69,12 @@ struct OverrideClusterColumn {
 class World {
 public:
     struct BlocksCache {
+        enum class State : uint8_t {
+            Ready,
+            Borrowed,
+            Pending,
+        };
+
         BlocksCache() = default;
         ~BlocksCache() { waitIfPending(); }
 
@@ -111,6 +87,7 @@ public:
             , version(other.version)
             , blocks(std::move(other.blocks))
             , pendingFuture(std::move(other.pendingFuture))
+            , state(std::exchange(other.state, State::Ready))
         {
         }
 
@@ -126,6 +103,7 @@ public:
             version = other.version;
             blocks = std::move(other.blocks);
             pendingFuture = std::move(other.pendingFuture);
+            state = std::exchange(other.state, State::Ready);
             return *this;
         }
 
@@ -136,17 +114,17 @@ public:
             size = {};
             version = {};
             blocks.clear();
+            state = State::Ready;
         }
 
-        void markPending(CudaSharedFuture<uint32_t> future) const { pendingFuture = std::move(future); }
-
-        void waitIfPending() const;
+        void waitIfPending();
 
         IVec3 origin {};
         IVec3 size {};
         uint64_t version = 0;
         PageLockedVector<uint8_t> blocks;
-        mutable CudaSharedFuture<uint32_t> pendingFuture;
+        CudaSharedFuture<WorldGenerationOutput> pendingFuture;
+        State state = State::Ready;
     };
 
     explicit World(uint32_t seed = 1);
@@ -161,6 +139,8 @@ public:
     float groundHeight(float x, float z) const;
     std::vector<IVec3> visibleBlocksNear(Vec3 center, int32_t radius) const;
     void collectOverridesInRegion(IVec3 origin, IVec3 size, std::vector<BlockOverride>& out) const;
+    WorldGenerationBuffers borrowGenerationBuffers(std::span<MeshVertex> meshVertices) const;
+    void updateGeneration(CudaSharedFuture<WorldGenerationOutput>) const;
 
     BlocksCache& collisionCacheMutable() const { return m_blocksCache; }
 
