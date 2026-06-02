@@ -161,7 +161,7 @@ add_executable(blocklab_smoke_test
     tests/blocklab_smoke_test.cpp
 )
 
-target_link_libraries(blocklab_smoke_test PRIVATE blocklab_env Catch2::Catch2WithMain)
+target_link_libraries(blocklab_smoke_test PRIVATE blocklab_render Catch2::Catch2WithMain)
 
 blocklab_enable_strict_warnings(blocklab_smoke_test)
 

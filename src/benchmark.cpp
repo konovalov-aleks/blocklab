@@ -22,7 +22,6 @@ struct BenchmarkConfig {
     double reportInterval = 1.0;
     uint32_t seed = 1;
     uint32_t batchSize = 1;
-    int32_t worldRadiusChunks = 4;
     bool visualize = false;
     double visualFps = 30.0;
     int32_t minActionSteps = 20;
@@ -93,7 +92,6 @@ private:
                 "  --batch-size N           Number of environments stepped and rendered per iteration, default 1.\n"
                 "  --num-envs N             Alias for --batch-size.\n"
                 "  --seed N                 RNG seed, default 1.\n"
-                "  --world-radius N         World radius in chunks, default 4.\n"
                 "  --report-interval N      Progress report interval in seconds, default 1.\n"
                 "  --visualize              Open a Vulkan window and render the environment visibly.\n"
                 "  --visual-fps N           Max visible presentation rate, default 30.\n"
@@ -138,15 +136,7 @@ BenchmarkConfig parseArgs(int argc, char** argv)
             config.seed = static_cast<uint32_t>(
                 blocklab::cli::parseInt<uint64_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--seed"))
                     .value_or(config.seed));
-        else if (arg == "--world-radius" || arg.starts_with("--world-radius=")) {
-            const auto worldRadiusChunks
-                = blocklab::cli::parseInt<int32_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--world-radius"));
-            if (!worldRadiusChunks || *worldRadiusChunks <= 0) [[unlikely]] {
-                std::fprintf(stderr, "Invalid --world-radius value.\n");
-                std::exit(EXIT_FAILURE);
-            }
-            config.worldRadiusChunks = *worldRadiusChunks;
-        } else if (arg == "--report-interval" || arg.starts_with("--report-interval=")) {
+        else if (arg == "--report-interval" || arg.starts_with("--report-interval=")) {
             const auto reportInterval
                 = blocklab::cli::parseDouble(blocklab::cli::optionValue(i, argc, argv, arg, "--report-interval"));
             if (!reportInterval || *reportInterval <= 0.0) [[unlikely]] {
@@ -209,8 +199,8 @@ uint64_t applyInitialOverrides(blocklab::World& world, const BenchmarkConfig& co
         const int32_t surfaceY
             = std::max(0, blocklab::floorToInt32(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1);
         const int32_t y = std::clamp(surfaceY + verticalOffset(rng), 0, blocklab::Chunk::SizeY - 1);
-        const blocklab::Block current = world.getBlock(x, y, z);
-        world.setBlock(x, y, z, current == blocklab::Block::Air ? blocklab::Block::Stone : blocklab::Block::Air);
+        const blocklab::Block current = world.getBlock({ x, y, z });
+        world.setBlock({ x, y, z }, current == blocklab::Block::Air ? blocklab::Block::Stone : blocklab::Block::Air);
     }
     return static_cast<uint64_t>(world.overrideCount() - before);
 }
@@ -236,7 +226,7 @@ int main(int argc, char** argv)
         randomAgents.emplace_back(config);
     std::vector<blocklab::AgentAction> actions(config.batchSize);
     blocklab::Renderer renderer(config.renderConfig);
-    blocklab::Environment env(renderer, config.batchSize, config.worldRadiusChunks);
+    blocklab::Environment env(renderer, config.batchSize);
     std::unique_ptr<blocklab::Renderer> visualRenderer;
     if (config.visualize)
         visualRenderer = std::make_unique<blocklab::Renderer>(config.visualConfig);

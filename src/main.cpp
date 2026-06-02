@@ -106,7 +106,7 @@ int main(int argc, char** argv)
 {
     const AppConfig appConfig = parseAppConfig(argc, argv);
     blocklab::Renderer renderer(appConfig.renderConfig);
-    blocklab::Environment env(renderer, 1, 1);
+    blocklab::Environment env(renderer, 1);
     env.reset();
     InputState input;
     GLFWwindow* window = renderer.window();

@@ -1,6 +1,10 @@
 #include "blocklab/Environment.h"
 
+#include "blocklab/CudaHelpers.h"
+
 #include <catch2/catch_test_macros.hpp>
+
+#include <cuda_runtime.h>
 
 #include <algorithm>
 #include <cmath>
@@ -9,12 +13,38 @@
 
 namespace {
 
+constexpr int32_t TestMeshHalfExtent = 32;
+constexpr uint32_t TestMeshExtent = TestMeshHalfExtent * 2;
+constexpr uint32_t TestMaxTerrainVertices
+    = static_cast<uint32_t>(TestMeshExtent * blocklab::Chunk::SizeY * TestMeshExtent * 36);
+
+void updateWorldCacheAt(const blocklab::World& world, blocklab::IVec3 center)
+{
+    blocklab::WorldGenerator generator({ .halfExtent = TestMeshHalfExtent });
+    blocklab::MeshVertex* vertices = nullptr;
+    blocklab::cudaCheck(cudaMalloc(&vertices, sizeof(blocklab::MeshVertex) * TestMaxTerrainVertices),
+        "cudaMalloc test terrain vertices");
+    blocklab::AgentState agent;
+    agent.position = { static_cast<float>(center.x), static_cast<float>(center.y), static_cast<float>(center.z) };
+    blocklab::CudaSharedFuture<blocklab::WorldGenerationOutput> generation
+        = generator
+              .generate(world, agent, world.borrowGenerationBuffers({ vertices, TestMaxTerrainVertices }))
+              .share();
+    world.updateGeneration(generation);
+    world.waitForGeneration();
+    blocklab::cudaCheck(cudaFree(vertices), "cudaFree test terrain vertices");
+}
+
 class CountingRenderer final : public blocklab::ObservationRenderer {
 public:
     const blocklab::Observation& renderObservations(
         std::span<const blocklab::World> worlds, std::span<const blocklab::AgentState> agents) override
     {
-        (void)agents;
+        for (std::size_t i = 0; i < worlds.size(); ++i) {
+            updateWorldCacheAt(worlds[i],
+                { blocklab::floorToInt32(agents[i].position.x), blocklab::floorToInt32(agents[i].position.y),
+                    blocklab::floorToInt32(agents[i].position.z) });
+        }
         m_observation.reset(4U, 4U, 4U, blocklab::ObservationDevice::Cpu, blocklab::ObservationFormat::FloatNCHW,
             static_cast<uint32_t>(worlds.size()));
         m_observation.setVersion(++m_version);
@@ -33,7 +63,7 @@ private:
 TEST_CASE("Environment reset returns renderer observation", "[environment]")
 {
     CountingRenderer renderer;
-    blocklab::Environment env(renderer, 1, 2);
+    blocklab::Environment env(renderer, 1);
     env.reset(42);
     const blocklab::Observation& initial = env.observe();
     CHECK(initial.device() == blocklab::ObservationDevice::Cpu);
@@ -43,7 +73,7 @@ TEST_CASE("Environment reset returns renderer observation", "[environment]")
 TEST_CASE("Environment can step a moving agent", "[environment]")
 {
     CountingRenderer renderer;
-    blocklab::Environment env(renderer, 1, 2);
+    blocklab::Environment env(renderer, 1);
     env.reset(42);
     for (int i = 0; i < 120; ++i) {
         blocklab::AgentAction action;
@@ -57,103 +87,86 @@ TEST_CASE("Environment can step a moving agent", "[environment]")
     }
 }
 
+TEST_CASE("Environment reset rebuilds cache around the initial spawn", "[environment]")
+{
+    CountingRenderer renderer;
+    blocklab::Environment env(renderer, 1);
+    env.reset(42);
+    blocklab::AgentAction action;
+    action.forward = 1.0f;
+    const blocklab::AgentAction actions[] { action };
+    // Move the agent into another generated cache region, then verify reset rebuilds the cache around the initial
+    // spawn instead of reusing the previous agent-centered region.
+    for (int i = 0; i < 500; ++i)
+        env.step(actions);
+
+    env.reset(43);
+
+    CHECK(env.agent(0).state().position.x == 0.5f);
+    CHECK(env.agent(0).state().position.z == 0.5f);
+    CHECK(env.world(0).characters().size() == 32);
+}
+
 TEST_CASE("Agent cannot place a block into its own body", "[environment]")
 {
     CountingRenderer renderer;
-    blocklab::Environment placeEnv(renderer, 1, 2);
+    blocklab::Environment placeEnv(renderer, 1);
     placeEnv.reset(7);
     const blocklab::AgentState& state = placeEnv.agent(0).state();
     const int32_t occupiedX = blocklab::floorToInt32(state.position.x);
     const int32_t occupiedY = blocklab::floorToInt32(state.position.y + 1.0f);
     const int32_t occupiedZ = blocklab::floorToInt32(state.position.z);
-    placeEnv.mutableWorld(0).setBlock(occupiedX, occupiedY, occupiedZ + 2, blocklab::Block::Dirt);
+    placeEnv.mutableWorld(0).setBlock({ occupiedX, occupiedY, occupiedZ + 2 }, blocklab::Block::Dirt);
 
     blocklab::AgentAction placeIntoSelf;
     placeIntoSelf.pitchDelta = 1.2f;
     placeIntoSelf.place = true;
     const blocklab::AgentAction placeActions[] { placeIntoSelf };
     placeEnv.step(placeActions);
-    CHECK(placeEnv.world(0).getBlock(occupiedX, occupiedY, occupiedZ) == blocklab::Block::Air);
-}
-
-TEST_CASE("World keeps procedural blocks and sparse overrides consistent", "[world]")
-{
-    blocklab::World infiniteWorld(11);
-    CHECK(infiniteWorld.getBlock(100000, 0, -100000) == blocklab::Block::Stone);
-
-    const blocklab::Block generated = infiniteWorld.getBlock(100000, 12, -100000);
-    infiniteWorld.setBlock(100000, 12, -100000, blocklab::Block::Stone);
-    CHECK(infiniteWorld.getBlock(100000, 12, -100000) == blocklab::Block::Stone);
-    CHECK(infiniteWorld.overrideCount() > 0);
-
-    infiniteWorld.setBlock(100000, 12, -100000, generated);
-    CHECK(infiniteWorld.getBlock(100000, 12, -100000) == generated);
-    CHECK(infiniteWorld.overrideCount() == 0);
-}
-
-TEST_CASE("World seed materially changes procedural terrain", "[world]")
-{
-    blocklab::World first(1);
-    blocklab::World second(2);
-    first.reset(1);
-    second.reset(2);
-
-    int differentHeights = 0;
-    for (int32_t z = -8; z <= 8; ++z) {
-        for (int32_t x = -8; x <= 8; ++x) {
-            if (std::abs(first.groundHeight(static_cast<float>(x), static_cast<float>(z))
-                    - second.groundHeight(static_cast<float>(x), static_cast<float>(z)))
-                > 0.5f) {
-                ++differentHeights;
-            }
-        }
-    }
-    CHECK(differentHeights > 96);
+    CHECK(placeEnv.world(0).getBlock({ occupiedX, occupiedY, occupiedZ }) == blocklab::Block::Air);
 }
 
 TEST_CASE("World collision queries respect air and solid override masks", "[world]")
 {
-    blocklab::World world(17);
+    blocklab::World world;
+    world.resetSeed(17);
     const int32_t x = 5;
     const int32_t z = -3;
+    updateWorldCacheAt(world, { x, 0, z });
     const int32_t groundY
         = blocklab::floorToInt32(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1;
     const blocklab::IVec3 groundBlock { x, groundY, z };
-    REQUIRE(world.getBlock(x, groundY, z) != blocklab::Block::Air);
+    REQUIRE(world.getBlock({ x, groundY, z }) != blocklab::Block::Air);
     CHECK(world.hasSolidBlockInArea(groundBlock, groundBlock));
 
-    world.setBlock(x, groundY, z, blocklab::Block::Air);
+    world.setBlock({ x, groundY, z }, blocklab::Block::Air);
+    CHECK(!world.hasSolidBlockInArea(groundBlock, groundBlock));
+    updateWorldCacheAt(world, { x, 0, z });
+    CHECK(world.getBlock(groundBlock) == blocklab::Block::Air);
     CHECK(!world.hasSolidBlockInArea(groundBlock, groundBlock));
 
     const blocklab::IVec3 airBlock { x, blocklab::Chunk::SizeY - 1, z };
-    REQUIRE(world.getBlock(airBlock.x, airBlock.y, airBlock.z) == blocklab::Block::Air);
+    REQUIRE(world.getBlock(airBlock) == blocklab::Block::Air);
     CHECK(!world.hasSolidBlockInArea(airBlock, airBlock));
 
-    world.setBlock(airBlock.x, airBlock.y, airBlock.z, blocklab::Block::Stone);
+    world.setBlock(airBlock, blocklab::Block::Stone);
+    CHECK(world.hasSolidBlockInArea(airBlock, airBlock));
+    updateWorldCacheAt(world, { x, 0, z });
+    CHECK(world.getBlock(airBlock) == blocklab::Block::Stone);
     CHECK(world.hasSolidBlockInArea(airBlock, airBlock));
 }
 
-TEST_CASE("World block cache uses local dense coordinates", "[world]")
+TEST_CASE("World block cache follows the requested agent-centered region", "[world]")
 {
-    blocklab::World world(17);
-    blocklab::World::BlocksCache& cache = world.collisionCacheMutable();
-    cache.origin = { -4, 0, 8 };
-    cache.size = { 3, 4, 2 };
-    cache.version = world.version();
-    cache.blocks.resize(static_cast<std::size_t>(cache.size.x * cache.size.y * cache.size.z));
-    std::fill(cache.blocks.begin(), cache.blocks.end(), blocklab::BlockId::Air);
+    blocklab::World world;
+    world.resetSeed(17);
+    const blocklab::IVec3 firstCenter { 0, 0, 0 };
+    const blocklab::IVec3 secondCenter { 48, 0, -48 };
+    updateWorldCacheAt(world, firstCenter);
+    CHECK(world.getBlock({ 0, 0, 0 }) != blocklab::Block::Air);
 
-    const blocklab::IVec3 stone { -3, 2, 9 };
-    const blocklab::IVec3 local = stone - cache.origin;
-    const std::size_t index = static_cast<std::size_t>(local.x)
-        + static_cast<std::size_t>(local.y) * static_cast<std::size_t>(cache.size.x)
-        + static_cast<std::size_t>(local.z) * static_cast<std::size_t>(cache.size.x)
-            * static_cast<std::size_t>(cache.size.y);
-    cache.blocks[index] = blocklab::BlockId::Stone;
-
-    CHECK(world.getBlock(stone.x, stone.y, stone.z) == blocklab::Block::Stone);
-    CHECK(world.hasSolidBlockInArea(stone, stone));
-    CHECK(!world.hasSolidBlockInArea({ -4, 0, 8 }, { -4, 0, 8 }));
+    updateWorldCacheAt(world, secondCenter);
+    CHECK(world.getBlock({ 48, 0, -48 }) != blocklab::Block::Air);
 }
 
 TEST_CASE("OverrideCluster keeps count consistent with stored blocks", "[world]")
@@ -243,11 +256,14 @@ TEST_CASE("OverrideCluster tracks air overrides separately from solid overrides"
 
 TEST_CASE("World collects only overrides inside a requested region", "[world]")
 {
-    blocklab::World world(13);
-    world.setBlock(1, 30, 1, blocklab::Block::Stone);
-    world.setBlock(9, 30, 1, blocklab::Block::Stone);
-    world.setBlock(1, 20, 1, blocklab::Block::Stone);
-    world.setBlock(40, 30, 40, blocklab::Block::Stone);
+    blocklab::World world;
+    world.resetSeed(13);
+    updateWorldCacheAt(world, { 1, 0, 1 });
+    world.setBlock({ 1, 30, 1 }, blocklab::Block::Stone);
+    world.setBlock({ 9, 30, 1 }, blocklab::Block::Stone);
+    world.setBlock({ 1, 20, 1 }, blocklab::Block::Stone);
+    updateWorldCacheAt(world, { 40, 0, 40 });
+    world.setBlock({ 40, 30, 40 }, blocklab::Block::Stone);
 
     std::vector<blocklab::BlockOverride> overrides;
     world.collectOverridesInRegion({ 0, 24, 0 }, { 16, 8, 16 }, overrides);
@@ -270,8 +286,10 @@ TEST_CASE("World collects only overrides inside a requested region", "[world]")
 
 TEST_CASE("World spawns test pigs around the agent on reset", "[world][characters]")
 {
-    blocklab::World world(13);
-    world.reset(21);
+    blocklab::World world;
+    world.resetSeed(21);
+    updateWorldCacheAt(world, { 0, 0, 0 });
+    world.resetCharacters();
 
     REQUIRE(world.characters().size() == 32);
     const blocklab::CharacterSnapshot pig = world.characters().front()->snapshot();
@@ -290,8 +308,10 @@ TEST_CASE("World spawns test pigs around the agent on reset", "[world][character
 
 TEST_CASE("Pig starts walking after world character updates", "[world][characters]")
 {
-    blocklab::World world(13);
-    world.reset(21);
+    blocklab::World world;
+    world.resetSeed(21);
+    updateWorldCacheAt(world, { 0, 0, 0 });
+    world.resetCharacters();
     REQUIRE(world.characters().size() == 32);
     std::vector<blocklab::Vec3> initialPositions;
     initialPositions.reserve(world.characters().size());
@@ -313,8 +333,10 @@ TEST_CASE("Pig starts walking after world character updates", "[world][character
 
 TEST_CASE("Pig panics when threat is close", "[world][characters]")
 {
-    blocklab::World world(13);
-    world.reset(21);
+    blocklab::World world;
+    world.resetSeed(21);
+    updateWorldCacheAt(world, { 0, 0, 0 });
+    world.resetCharacters();
     REQUIRE(world.characters().size() == 32);
 
     world.update(1.0f / 60.0f, world.characters().front()->position());
@@ -324,7 +346,7 @@ TEST_CASE("Pig panics when threat is close", "[world][characters]")
 TEST_CASE("Environment returns renderer observations when renderer is installed", "[environment]")
 {
     CountingRenderer renderer;
-    blocklab::Environment renderEnv(renderer, 1, 2);
+    blocklab::Environment renderEnv(renderer, 1);
     renderEnv.reset(9);
     const uint64_t renderedResetVersion = renderEnv.observe().version();
     CHECK(renderEnv.observe().device() == blocklab::ObservationDevice::Cpu);

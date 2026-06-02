@@ -66,7 +66,7 @@ namespace {
 
     class NativeEnvironment {
     public:
-        NativeEnvironment(uint32_t numEnvs, uint32_t width, uint32_t height, int32_t worldRadiusChunks, uint32_t seed)
+        NativeEnvironment(uint32_t numEnvs, uint32_t width, uint32_t height, uint32_t seed)
             : m_numEnvs(numEnvs)
             , m_width(width)
             , m_height(height)
@@ -80,7 +80,7 @@ namespace {
                   .visible = false,
                   .present = false,
               })
-            , m_environment(m_renderer, numEnvs, worldRadiusChunks)
+            , m_environment(m_renderer, numEnvs)
         {
             if (numEnvs == 0U) [[unlikely]]
                 fatalError("num_envs must be positive");
@@ -146,7 +146,7 @@ namespace {
             int deviceId = 0;
             const cudaError_t cudaResult = cudaGetDevice(&deviceId);
             if (cudaResult != cudaSuccess) [[unlikely]]
-                fatalError("cudaGetDevice failed:", cudaGetErrorString(cudaResult));
+                fatalError("cudaGetDevice failed: ", cudaGetErrorString(cudaResult));
 
             auto* context = new DlpackObservationContext {
                 .shape = { static_cast<int64_t>(m_numEnvs), 3, m_height, m_width },
@@ -288,8 +288,8 @@ PYBIND11_MODULE(_native, module)
         .def_readonly("truncated", &blocklab::StepResult::truncated);
 
     py::class_<blocklab::NativeEnvironment>(module, "NativeEnvironment")
-        .def(py::init<uint32_t, uint32_t, uint32_t, int32_t, uint32_t>(), py::arg("num_envs") = 1,
-            py::arg("width") = 160, py::arg("height") = 90, py::arg("world_radius_chunks") = 3, py::arg("seed") = 1)
+        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t>(), py::arg("num_envs") = 1,
+            py::arg("width") = 160, py::arg("height") = 90, py::arg("seed") = 1)
         .def("reset", &blocklab::NativeEnvironment::reset, py::arg("seed") = 1)
         .def("step", &blocklab::NativeEnvironment::step, py::arg("actions"))
         .def("observe", &blocklab::NativeEnvironment::observe)

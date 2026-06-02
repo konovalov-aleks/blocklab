@@ -81,12 +81,12 @@ void Agent::interact(World& world, const AgentAction& action)
     for (float distance = 0.5f; distance <= 4.0f; distance += 0.2f) {
         const Vec3 sample = eye + forward * distance;
         const IVec3 blockPos { floorToInt32(sample.x), floorToInt32(sample.y), floorToInt32(sample.z) };
-        if (world.isSolid(blockPos.x, blockPos.y, blockPos.z)) {
+        if (world.isSolid(blockPos)) {
             if (action.dig) {
-                world.setBlock(blockPos.x, blockPos.y, blockPos.z, Block::Air);
+                world.setBlock(blockPos, Block::Air);
                 ++m_state.blocksCollected;
             } else if (action.place && !occupiesBlock(previousAir)) {
-                world.setBlock(previousAir.x, previousAir.y, previousAir.z, Block::Dirt);
+                world.setBlock(previousAir, Block::Dirt);
                 ++m_state.blocksPlaced;
             }
             return;

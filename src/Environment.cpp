@@ -8,7 +8,9 @@
 
 namespace blocklab {
 
-Environment::Environment(ObservationRenderer& renderer, uint32_t numEnvs, int32_t worldRadiusChunks)
+static constexpr Vec3 InitialAgentPosition { 0.5f, 14.0f, 0.5f };
+
+Environment::Environment(ObservationRenderer& renderer, uint32_t numEnvs)
     : m_batchSize(numEnvs)
     , m_worlds(std::make_unique<World[]>(numEnvs))
     , m_agents(std::make_unique<Agent[]>(numEnvs))
@@ -17,21 +19,31 @@ Environment::Environment(ObservationRenderer& renderer, uint32_t numEnvs, int32_
     , m_stepResults(std::make_unique<StepResult[]>(numEnvs))
     , m_renderAgents(std::make_unique<AgentState[]>(numEnvs))
 {
-    if (numEnvs == 0U) [[unlikely]]
+    if (numEnvs == 0) [[unlikely]]
         fatalError("Environment batch size must be positive");
-    for (uint32_t i = 0; i < numEnvs; ++i)
-        m_worlds[i] = World(worldRadiusChunks);
 }
 
 void Environment::reset(uint32_t seed)
 {
     for (uint32_t i = 0; i < m_batchSize; ++i) {
         World& world = m_worlds[i];
-        world.reset(hash(seed + i));
-        m_stepCounts[i] = 0;
-        const float spawnY = world.groundHeight(0.0f, 0.0f) + 0.05f;
-        m_agents[i].reset({ 0.5f, spawnY, 0.5f });
+        world.resetSeed(hash(seed + i));
+        m_agents[i].reset(InitialAgentPosition);
     }
+
+    // update block cache before character's initialization
+    updateObservation();
+
+    for (uint32_t i = 0; i < m_batchSize; ++i) {
+        World& world = m_worlds[i];
+        m_stepCounts[i] = 0;
+        world.resetCharacters();
+        const float spawnY = world.groundHeight(0.0f, 0.0f) + 0.05f;
+        m_agents[i].reset({ InitialAgentPosition.x, spawnY, InitialAgentPosition.z });
+    }
+
+    // we have moved the agent's initial position according to the ground height,
+    // so we need to update the observation again
     updateObservation();
 }
 

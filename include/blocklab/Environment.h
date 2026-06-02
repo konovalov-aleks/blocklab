@@ -25,8 +25,9 @@ struct StepResult {
 
 class Environment {
 public:
-    Environment(ObservationRenderer&, uint32_t numEnvs, int32_t worldRadiusChunks);
+    Environment(ObservationRenderer&, uint32_t numEnvs);
 
+    // TODO implement per-batch reset
     void reset(uint32_t seed = 1);
     std::span<const StepResult> step(std::span<const AgentAction> actions);
     // Returned observation remains valid until the next reset() or step() call.

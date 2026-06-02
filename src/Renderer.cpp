@@ -48,7 +48,7 @@ namespace {
     {
         std::ifstream file(path, std::ios::ate | std::ios::binary);
         if (!file) [[unlikely]]
-            fatalError("Failed to open", path);
+            fatalError("Failed to open ", path);
         const std::streamsize size = file.tellg();
         std::vector<char> bytes(static_cast<std::size_t>(size));
         file.seekg(0);
@@ -59,7 +59,7 @@ namespace {
     void vkCheck(VkResult result, const char* operation)
     {
         if (result != VK_SUCCESS) [[unlikely]]
-            fatalError(operation, "failed with VkResult", result);
+            fatalError(operation, " failed with VkResult ", result);
     }
 
     uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeBits, VkMemoryPropertyFlags flags)
@@ -1116,7 +1116,7 @@ std::size_t Renderer::lastObservationFrameIndex(std::size_t slot) const
     if (!m_vk || m_vk->swapchain || m_vk->offscreenFrames.empty())
         return 0;
     if (slot >= m_batchSize) [[unlikely]]
-        fatalError("Invalid render slot:", slot);
+        fatalError("Invalid render slot: ", slot);
     return m_slots[slot].lastObservationFrame;
 }
 
@@ -1125,7 +1125,7 @@ void* Renderer::cudaObservationTensorData(std::size_t frameIndex, uintptr_t stre
     if (!m_vk || m_vk->swapchain || m_vk->offscreenFrames.empty())
         return nullptr;
     if (frameIndex >= m_vk->offscreenFrames.size()) [[unlikely]]
-        fatalError("Invalid observation frame index:", frameIndex);
+        fatalError("Invalid observation frame index: ", frameIndex);
     OffscreenFrame& frame = m_vk->offscreenFrames[frameIndex];
     synchronizeObservation(frameIndex);
     convertRgba8ToFloatNchw(frame.observationBuffer.cudaPtr, frame.observationTensor, m_vk->batchSize,
@@ -1139,7 +1139,7 @@ void Renderer::synchronizeObservation(std::size_t frameIndex)
     if (!m_vk || m_vk->swapchain || m_vk->offscreenFrames.empty())
         return;
     if (frameIndex >= m_vk->offscreenFrames.size())
-        fatalError("Invalid observation frame index:", frameIndex);
+        fatalError("Invalid observation frame index: ", frameIndex);
     OffscreenFrame& frame = m_vk->offscreenFrames[frameIndex];
     vkWaitForFences(m_vk->device, 1, &frame.fence, VK_TRUE, UINT64_MAX);
 }

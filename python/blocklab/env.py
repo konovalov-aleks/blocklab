@@ -62,7 +62,6 @@ class NativeBlockLabBackend:
         height: int,
         device: str | torch.device,
         seed: int = 1,
-        world_radius_chunks: int = 3,
     ) -> None:
         if num_envs <= 0:
             raise ValueError("num_envs must be positive")
@@ -82,7 +81,6 @@ class NativeBlockLabBackend:
             num_envs=num_envs,
             width=width,
             height=height,
-            world_radius_chunks=world_radius_chunks,
             seed=seed,
         )
         self._rng = random.Random(seed)
@@ -148,7 +146,6 @@ class BlockLabEnv:
         device: str | torch.device | None = None,
         seed: int = 1,
         backend: NativeBlockLabBackend | None = None,
-        world_radius_chunks: int = 3,
     ) -> None:
         resolved_device = torch.device(device) if device is not None else torch.device("cuda")
         self.backend = backend or NativeBlockLabBackend(
@@ -157,7 +154,6 @@ class BlockLabEnv:
             height=height,
             device=resolved_device,
             seed=seed,
-            world_radius_chunks=world_radius_chunks,
         )
         self.num_envs = self.backend.num_envs
         self.single_action_space_n = 7
