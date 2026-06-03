@@ -1,6 +1,6 @@
 #pragma once
 
-#include "blocklab/BlockTypes.h"
+#include "blocklab/Block.h"
 #include "blocklab/Math.h"
 
 #include <cstdint>
@@ -27,13 +27,6 @@ struct MeshVertex {
 
 struct MeshBuildConfig {
     int32_t halfExtent = 32;
-};
-
-struct TerrainBlockOverride {
-    int32_t x = 0;
-    int32_t y = 0;
-    int32_t z = 0;
-    uint8_t block = BlockId::Air;
 };
 
 } // namespace blocklab

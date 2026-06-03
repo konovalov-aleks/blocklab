@@ -1,5 +1,8 @@
 #pragma once
 
+#include "blocklab/Math.h"
+
+#include <array>
 #include <cstdint>
 #include <limits>
 
@@ -21,5 +24,24 @@ struct BlockId {
 };
 
 constexpr uint8_t blockId(Block block) { return static_cast<uint8_t>(block); }
+
+struct BlockOverride {
+    IVec3 coord {};
+    Block block = Block::Air;
+};
+
+class Chunk {
+public:
+    static constexpr int32_t SizeX = 16;
+    static constexpr int32_t SizeY = 32;
+    static constexpr int32_t SizeZ = 16;
+    static constexpr int32_t Volume = SizeX * SizeY * SizeZ;
+
+    Block get(int32_t x, int32_t y, int32_t z) const;
+    void set(int32_t x, int32_t y, int32_t z, Block block);
+
+private:
+    std::array<Block, Volume> m_blocks {};
+};
 
 } // namespace blocklab

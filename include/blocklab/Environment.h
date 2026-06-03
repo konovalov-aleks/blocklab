@@ -5,6 +5,8 @@
 #include "blocklab/World.h"
 
 #include <cstdint>
+#include <memory>
+#include <span>
 
 namespace blocklab {
 
@@ -12,11 +14,10 @@ class ObservationRenderer {
 public:
     virtual ~ObservationRenderer() = default;
 
-    virtual Observation renderObservation(const World& world, const AgentState& agent) = 0;
+    virtual const Observation& renderObservations(std::span<const World>, std::span<const AgentState>) = 0;
 };
 
 struct StepResult {
-    Observation observation;
     float reward = 0.0f;
     bool terminated = false;
     bool truncated = false;
@@ -24,28 +25,33 @@ struct StepResult {
 
 class Environment {
 public:
-    explicit Environment(int32_t worldRadiusChunks = 3);
+    Environment(ObservationRenderer&, uint32_t numEnvs);
 
-    void setObservationRenderer(ObservationRenderer* renderer);
-    Observation reset(uint32_t seed = 1);
-    StepResult step(const AgentAction& action);
-    const Observation& observe() const { return m_observation; }
+    // TODO implement per-batch reset
+    void reset(uint32_t seed = 1);
+    std::span<const StepResult> step(std::span<const AgentAction> actions);
+    // Returned observation remains valid until the next reset() or step() call.
+    const Observation& observe() const { return *m_observation; }
 
-    const World& world() const { return m_world; }
-    World& mutableWorld() { return m_world; }
-    const Agent& agent() const { return m_agent; }
+    uint32_t batchSize() const { return m_batchSize; }
+    const World& world(uint32_t batchId) const { return m_worlds[batchId]; }
+    World& mutableWorld(uint32_t batchId) { return m_worlds[batchId]; }
+    const Agent& agent(uint32_t batchId) const { return m_agents[batchId]; }
 
 private:
     static constexpr float s_fixedDt = 1.0f / 60.0f;
     static constexpr int32_t s_maxSteps = 60 * 60 * 5;
 
-    World m_world;
-    Agent m_agent;
-    ObservationRenderer* m_observationRenderer = nullptr;
-    Observation m_observation;
-    int32_t m_stepCount = 0;
+    uint32_t m_batchSize = 0;
+    std::unique_ptr<World[]> m_worlds;
+    std::unique_ptr<Agent[]> m_agents;
+    const Observation* m_observation = nullptr;
+    ObservationRenderer& m_observationRenderer;
+    std::unique_ptr<int32_t[]> m_stepCounts;
+    std::unique_ptr<StepResult[]> m_stepResults;
+    std::unique_ptr<AgentState[]> m_renderAgents;
 
-    Observation updateObservation();
+    const Observation& updateObservation();
 };
 
 } // namespace blocklab

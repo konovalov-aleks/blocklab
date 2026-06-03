@@ -15,7 +15,7 @@ namespace blocklab {
 inline void cudaCheck(cudaError_t result, const char* operation)
 {
     if (result != cudaSuccess) [[unlikely]]
-        fatalError(operation, "failed:", cudaGetErrorString(result));
+        fatalError(operation, "failed: ", cudaGetErrorString(result));
 }
 
 } // namespace blocklab

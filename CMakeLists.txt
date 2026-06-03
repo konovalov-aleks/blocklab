@@ -15,6 +15,8 @@ include(FetchContent)
 find_package(Vulkan REQUIRED)
 find_package(glfw3 REQUIRED)
 find_package(CUDAToolkit REQUIRED)
+find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+find_package(pybind11 CONFIG QUIET)
 
 find_program(GLSLC_EXECUTABLE glslc REQUIRED)
 
@@ -63,6 +65,16 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(Catch2)
 
+if(NOT pybind11_FOUND)
+    FetchContent_Declare(
+        pybind11
+        GIT_REPOSITORY https://github.com/pybind/pybind11.git
+        GIT_TAG v2.13.6
+        GIT_PROGRESS TRUE
+    )
+    FetchContent_MakeAvailable(pybind11)
+endif()
+
 add_library(blocklab_env
     src/Agent.cpp
     src/characters/Character.cpp
@@ -78,6 +90,7 @@ target_include_directories(blocklab_env
 )
 
 target_compile_features(blocklab_env PUBLIC cxx_std_20)
+set_target_properties(blocklab_env PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(blocklab_env
     PUBLIC
         glm::glm
@@ -87,9 +100,11 @@ target_link_libraries(blocklab_env
 blocklab_enable_strict_warnings(blocklab_env)
 
 add_library(blocklab_render
-    src/MeshBuilderCuda.cu
-    src/MeshBuilder.cpp
+    src/CudaObservation.cu
+    src/CudaWorldGenerator.cu
+    src/meshes/PigMesh.cpp
     src/Renderer.cpp
+    src/WorldGenerator.cpp
 )
 
 target_include_directories(blocklab_render
@@ -98,6 +113,7 @@ target_include_directories(blocklab_render
 )
 
 target_compile_features(blocklab_render PUBLIC cxx_std_20)
+set_target_properties(blocklab_render PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(blocklab_render
     PUBLIC
         blocklab_env
@@ -111,7 +127,7 @@ add_dependencies(blocklab_render blocklab_mesh_vertex_shader blocklab_mesh_fragm
 target_compile_definitions(blocklab_render PRIVATE BLOCKLAB_SHADER_DIR="${BLOCKLAB_SHADER_OUTPUT_DIR}")
 
 blocklab_enable_strict_warnings(blocklab_render)
-set_source_files_properties(src/MeshBuilderCuda.cu PROPERTIES CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED ON)
+set_source_files_properties(src/CudaObservation.cu src/CudaWorldGenerator.cu PROPERTIES CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED ON)
 
 add_executable(blocklab
     src/main.cpp
@@ -129,13 +145,23 @@ target_link_libraries(blocklab_benchmark PRIVATE blocklab_render)
 
 blocklab_enable_strict_warnings(blocklab_benchmark)
 
+pybind11_add_module(_native
+    src/python/Bindings.cpp
+)
+
+target_link_libraries(_native PRIVATE blocklab_render)
+blocklab_enable_strict_warnings(_native)
+set_target_properties(_native PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/python/blocklab
+)
+
 enable_testing()
 
 add_executable(blocklab_smoke_test
     tests/blocklab_smoke_test.cpp
 )
 
-target_link_libraries(blocklab_smoke_test PRIVATE blocklab_env Catch2::Catch2WithMain)
+target_link_libraries(blocklab_smoke_test PRIVATE blocklab_render Catch2::Catch2WithMain)
 
 blocklab_enable_strict_warnings(blocklab_smoke_test)
 
@@ -160,6 +186,16 @@ target_link_libraries(blocklab_page_locked_vector_test PRIVATE blocklab_env Catc
 blocklab_enable_strict_warnings(blocklab_page_locked_vector_test)
 
 add_test(NAME blocklab_page_locked_vector_test COMMAND blocklab_page_locked_vector_test)
+
+add_executable(blocklab_cuda_future_test
+    tests/cuda_future_test.cpp
+)
+
+target_link_libraries(blocklab_cuda_future_test PRIVATE blocklab_env Catch2::Catch2WithMain)
+
+blocklab_enable_strict_warnings(blocklab_cuda_future_test)
+
+add_test(NAME blocklab_cuda_future_test COMMAND blocklab_cuda_future_test)
 
 add_executable(blocklab_hash_test
     tests/hash_test.cpp

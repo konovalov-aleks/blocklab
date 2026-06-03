@@ -32,4 +32,11 @@ BLOCKLAB_HOST_DEVICE constexpr float randomFloat01(uint32_t seed)
     return static_cast<float>(hash(seed) & 0x00ffffffU) / static_cast<float>(0x00ffffffU);
 }
 
+// Maps a seed plus caller-chosen salt to a deterministic signed offset in [-range, range].
+// Different salts let one seed produce independent offsets for unrelated domains, e.g. X and Z axes.
+BLOCKLAB_HOST_DEVICE constexpr int32_t seedOffset(uint32_t seed, uint32_t salt, uint32_t range = 4096U)
+{
+    return static_cast<int32_t>(hashCombine(seed, salt) % (range * 2U + 1U)) - static_cast<int32_t>(range);
+}
+
 } // namespace blocklab
