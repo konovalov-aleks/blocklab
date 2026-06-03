@@ -87,7 +87,7 @@ def main() -> None:
     started = time.perf_counter()
     last_report_at = started
     last_report_step = 0
-    total_reward = torch.zeros((), device=env.observation_spec.device, dtype=torch.float32)
+    total_reward = 0.0
     total_episodes = 0
     step = 0
     while True:
@@ -96,7 +96,7 @@ def main() -> None:
         obs, reward, terminated, truncated, info = env.step(actions)
         if args.materialize_observation:
             tensor = torch.from_dlpack(obs)
-        total_reward += reward.sum()
+        total_reward += float(sum(info["reward"]))
         episode_count = sum(done or cut for done, cut in zip(info["terminated"], info["truncated"]))
         total_episodes += episode_count
         if episode_count > 0:
@@ -108,7 +108,7 @@ def main() -> None:
             interval = now - last_report_at
             interval_steps = (step - last_report_step) * args.num_envs
             total_steps = step * args.num_envs
-            avg_reward = total_reward.item() / max(1, total_steps)
+            avg_reward = total_reward / max(1, total_steps)
             print(
                 f"iterations={step} steps={total_steps} elapsed={now - started:.2f}s "
                 f"steps/s={interval_steps / interval:.0f} avg_reward={avg_reward:.4f} episodes={total_episodes}",
@@ -133,7 +133,7 @@ def main() -> None:
     print(f"warmup_steps: {args.warmup_steps}")
     print(f"iterations: {step}")
     print(f"total_steps: {total_steps}")
-    print(f"avg_reward: {total_reward.item() / max(1, total_steps):.6f}")
+    print(f"avg_reward: {total_reward / max(1, total_steps):.6f}")
     print(f"episodes: {total_episodes}")
     print(f"steps_per_second: {total_steps / elapsed:.0f}")
 

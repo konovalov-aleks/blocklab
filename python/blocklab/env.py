@@ -96,11 +96,12 @@ class NativeBlockLabBackend:
     def step(self, actions: Any):
         result = self._env.step(self._normalize_actions(actions))
         obs = self._observation_ref(result)
-        reward = torch.as_tensor(result["reward"], device=self.device, dtype=torch.float32)
-        terminated = torch.as_tensor(result["terminated"], device=self.device, dtype=torch.bool)
-        truncated = torch.as_tensor(result["truncated"], device=self.device, dtype=torch.bool)
+        reward = result["reward"]
+        terminated = result["terminated"]
+        truncated = result["truncated"]
         return obs, reward, terminated, truncated, {
             "native": True,
+            "reward": result["reward"],
             "terminated": result["terminated"],
             "truncated": result["truncated"],
             "observation_version": result["version"],
