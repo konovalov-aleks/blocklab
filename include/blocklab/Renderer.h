@@ -83,7 +83,6 @@ private:
             std::numeric_limits<int32_t>::min() };
         uint32_t terrainVertexOffset = 0;
         uint32_t terrainVertexCount = 0;
-        uint32_t pigVertexOffset = 0;
         uint32_t pigVertexCount = 0;
         uint32_t instanceOffset = 0;
         uint32_t instanceCount = 0;
@@ -110,7 +109,6 @@ private:
     std::unique_ptr<RenderSlot[]> m_slots;
     std::unique_ptr<RenderParams[]> m_renderParams;
     uint32_t m_batchSize = 0;
-    uint32_t m_pigMeshVertexOffset = 0;
     uint32_t m_pigMeshVertexCount = 0;
     uint64_t m_observationVersion = 0;
     bool m_pigMeshUploaded = false;

@@ -284,8 +284,10 @@ struct Renderer::VulkanState {
     std::vector<VkCommandBuffer> commandBuffers;
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     VkDescriptorSet vertexDescriptorSet = VK_NULL_HANDLE;
+    VkDescriptorSet pigDescriptorSet = VK_NULL_HANDLE;
     VkDescriptorSet paramsDescriptorSet = VK_NULL_HANDLE;
     Buffer vertexBuffer;
+    Buffer pigVertexBuffer;
     Buffer instanceBuffer;
     Buffer paramsBuffer;
     VkSemaphore imageAvailable = VK_NULL_HANDLE;
@@ -340,6 +342,11 @@ namespace {
             vk, size, usage, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     }
 
+    Buffer createDeviceBuffer(Renderer::VulkanState& vk, VkDeviceSize size, VkBufferUsageFlags usage)
+    {
+        return createBuffer(vk, size, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    }
+
     Buffer createExportedDeviceBuffer(Renderer::VulkanState& vk, VkDeviceSize size, VkBufferUsageFlags usage)
     {
         Buffer buffer = createBuffer(vk, size, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, true);
@@ -372,10 +379,7 @@ namespace {
         return buffer;
     }
 
-    ExternalSemaphore::~ExternalSemaphore()
-    {
-        reset();
-    }
+    ExternalSemaphore::~ExternalSemaphore() { reset(); }
 
     void ExternalSemaphore::create(VkDevice device)
     {
@@ -432,15 +436,9 @@ namespace {
         m_cudaSemaphore = nullptr;
     }
 
-    FrameCompletionFence::~FrameCompletionFence()
-    {
-        reset();
-    }
+    FrameCompletionFence::~FrameCompletionFence() { reset(); }
 
-    FrameCompletionFence::FrameCompletionFence(VkDevice device)
-    {
-        create(device);
-    }
+    FrameCompletionFence::FrameCompletionFence(VkDevice device) { create(device); }
 
     void FrameCompletionFence::create(VkDevice device)
     {
@@ -512,6 +510,52 @@ namespace {
         if (buffer.memory)
             vkFreeMemory(vk.device, buffer.memory, nullptr);
         buffer = {};
+    }
+
+    void copyBuffer(Renderer::VulkanState& vk, VkBuffer source, VkBuffer destination, VkDeviceSize size)
+    {
+        const VkCommandBufferAllocateInfo allocInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = vk.commandPool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        vkCheck(vkAllocateCommandBuffers(vk.device, &allocInfo, &commandBuffer), "vkAllocateCommandBuffers copy");
+
+        const VkCommandBufferBeginInfo beginInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        };
+        vkCheck(vkBeginCommandBuffer(commandBuffer, &beginInfo), "vkBeginCommandBuffer copy");
+        const VkBufferCopy copyRegion {
+            .srcOffset = 0,
+            .dstOffset = 0,
+            .size = size,
+        };
+        vkCmdCopyBuffer(commandBuffer, source, destination, 1, &copyRegion);
+        vkCheck(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer copy");
+
+        const VkSubmitInfo submitInfo {
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &commandBuffer,
+        };
+        vkCheck(vkQueueSubmit(vk.graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE), "vkQueueSubmit copy");
+        vkCheck(vkQueueWaitIdle(vk.graphicsQueue), "vkQueueWaitIdle copy");
+        vkFreeCommandBuffers(vk.device, vk.commandPool, 1, &commandBuffer);
+    }
+
+    void uploadDeviceBuffer(Renderer::VulkanState& vk, Buffer& destination, const void* data, VkDeviceSize size)
+    {
+        Buffer staging = createHostBuffer(vk, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        void* mapped = nullptr;
+        vkCheck(vkMapMemory(vk.device, staging.memory, 0, size, 0, &mapped), "vkMapMemory staging upload");
+        std::memcpy(mapped, data, static_cast<std::size_t>(size));
+        vkUnmapMemory(vk.device, staging.memory);
+
+        copyBuffer(vk, staging.buffer, destination.buffer, size);
+        destroyBuffer(vk, staging);
     }
 
     void destroyImage(Renderer::VulkanState& vk, Image& image)
@@ -1111,8 +1155,8 @@ namespace {
                 vkCreateSemaphore(vk.device, &semaphoreInfo, nullptr, &vk.renderFinished), "vkCreateSemaphore render");
             vkCheck(vkCreateFence(vk.device, &fenceInfo, nullptr, &vk.inFlight), "vkCreateFence");
         } else {
-            cudaCheck(cudaStreamCreateWithFlags(&vk.renderWaitStream, cudaStreamNonBlocking),
-                "cudaStreamCreate render wait");
+            cudaCheck(
+                cudaStreamCreateWithFlags(&vk.renderWaitStream, cudaStreamNonBlocking), "cudaStreamCreate render wait");
             for (std::size_t i = 0; i < vk.offscreenFrames.size(); ++i) {
                 vk.offscreenFrames[i].commandBuffer = vk.commandBuffers[i];
                 vkCheck(vkCreateFence(vk.device, &fenceInfo, nullptr, &vk.offscreenFrames[i].fence),
@@ -1124,11 +1168,12 @@ namespace {
 
     void createDescriptors(Renderer::VulkanState& vk)
     {
-        // Vertex buffer layout: per-env terrain regions first, followed by one shared static pig mesh.
-        vk.vertexCapacityBytes
-            = (static_cast<VkDeviceSize>(MaxTerrainVertices) * vk.batchSize + PigMesh::verticesCount())
-            * sizeof(MeshVertex);
+        // Terrain buffer layout: fixed-size per-env regions. Static entity meshes live in separate buffers.
+        vk.vertexCapacityBytes = static_cast<VkDeviceSize>(MaxTerrainVertices) * vk.batchSize * sizeof(MeshVertex);
         vk.vertexBuffer = createExportedDeviceBuffer(vk, vk.vertexCapacityBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        vk.pigVertexBuffer
+            = createDeviceBuffer(vk, static_cast<VkDeviceSize>(PigMesh::verticesCount()) * sizeof(MeshVertex),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         vk.instanceBuffer = createHostBuffer(vk, sizeof(Renderer::EntityInstance) * MaxEntityInstances * vk.batchSize,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         vk.paramsBuffer
@@ -1146,27 +1191,33 @@ namespace {
         }
 
         const VkDescriptorPoolSize poolSizes[] {
-            { .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 3 },
+            { .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 6 },
         };
         const VkDescriptorPoolCreateInfo poolInfo {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-            .maxSets = 1U,
+            .maxSets = 2U,
             .poolSizeCount = 1,
             .pPoolSizes = poolSizes,
         };
         vkCheck(vkCreateDescriptorPool(vk.device, &poolInfo, nullptr, &vk.descriptorPool), "vkCreateDescriptorPool");
 
-        const VkDescriptorSetLayout layouts[] { vk.vertexSetLayout };
+        const VkDescriptorSetLayout layouts[] { vk.vertexSetLayout, vk.vertexSetLayout };
+        VkDescriptorSet descriptorSets[2] {};
         const VkDescriptorSetAllocateInfo allocInfo {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .descriptorPool = vk.descriptorPool,
-            .descriptorSetCount = 1,
+            .descriptorSetCount = 2,
             .pSetLayouts = layouts,
         };
-        vkCheck(vkAllocateDescriptorSets(vk.device, &allocInfo, &vk.vertexDescriptorSet), "vkAllocateDescriptorSets");
+        vkCheck(vkAllocateDescriptorSets(vk.device, &allocInfo, descriptorSets), "vkAllocateDescriptorSets");
+        vk.vertexDescriptorSet = descriptorSets[0];
+        vk.pigDescriptorSet = descriptorSets[1];
 
         const VkDescriptorBufferInfo vertexInfo {
             .buffer = vk.vertexBuffer.buffer, .offset = 0, .range = vk.vertexBuffer.size
+        };
+        const VkDescriptorBufferInfo pigVertexInfo {
+            .buffer = vk.pigVertexBuffer.buffer, .offset = 0, .range = vk.pigVertexBuffer.size
         };
         const VkDescriptorBufferInfo instanceInfo {
             .buffer = vk.instanceBuffer.buffer, .offset = 0, .range = vk.instanceBuffer.size
@@ -1174,32 +1225,42 @@ namespace {
         const VkDescriptorBufferInfo paramsInfo {
             .buffer = vk.paramsBuffer.buffer, .offset = 0, .range = vk.paramsBuffer.size
         };
-        const VkWriteDescriptorSet vertexWrite {
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = vk.vertexDescriptorSet,
-            .dstBinding = 0,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &vertexInfo,
-        };
-        const VkWriteDescriptorSet instanceWrite {
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = vk.vertexDescriptorSet,
-            .dstBinding = 1,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &instanceInfo,
-        };
-        const VkWriteDescriptorSet paramsWrite {
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = vk.vertexDescriptorSet,
-            .dstBinding = 2,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &paramsInfo,
-        };
-        const VkWriteDescriptorSet storageWrites[] { vertexWrite, instanceWrite, paramsWrite };
-        vkUpdateDescriptorSets(vk.device, 3, storageWrites, 0, nullptr);
+        const auto writeDescriptorSet
+            = [](VkDescriptorSet descriptorSet, const VkDescriptorBufferInfo& vertices,
+                  const VkDescriptorBufferInfo& instances, const VkDescriptorBufferInfo& params) {
+                  return std::array<VkWriteDescriptorSet, 3> {
+                      VkWriteDescriptorSet {
+                          .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                          .dstSet = descriptorSet,
+                          .dstBinding = 0,
+                          .descriptorCount = 1,
+                          .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                          .pBufferInfo = &vertices,
+                      },
+                      VkWriteDescriptorSet {
+                          .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                          .dstSet = descriptorSet,
+                          .dstBinding = 1,
+                          .descriptorCount = 1,
+                          .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                          .pBufferInfo = &instances,
+                      },
+                      VkWriteDescriptorSet {
+                          .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                          .dstSet = descriptorSet,
+                          .dstBinding = 2,
+                          .descriptorCount = 1,
+                          .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                          .pBufferInfo = &params,
+                      },
+                  };
+              };
+        const std::array terrainWrites
+            = writeDescriptorSet(vk.vertexDescriptorSet, vertexInfo, instanceInfo, paramsInfo);
+        const std::array pigWrites = writeDescriptorSet(vk.pigDescriptorSet, pigVertexInfo, instanceInfo, paramsInfo);
+        vkUpdateDescriptorSets(
+            vk.device, static_cast<uint32_t>(terrainWrites.size()), terrainWrites.data(), 0, nullptr);
+        vkUpdateDescriptorSets(vk.device, static_cast<uint32_t>(pigWrites.size()), pigWrites.data(), 0, nullptr);
     }
 
     void initVulkan(Renderer::VulkanState& vk, GLFWwindow* window, RenderConfig config)
@@ -1248,6 +1309,7 @@ namespace {
         }
         destroyBuffer(vk, vk.paramsBuffer);
         destroyBuffer(vk, vk.instanceBuffer);
+        destroyBuffer(vk, vk.pigVertexBuffer);
         destroyBuffer(vk, vk.vertexBuffer);
         if (vk.renderWaitStream) {
             cudaCheck(cudaStreamDestroy(vk.renderWaitStream), "cudaStreamDestroy render wait");
@@ -1396,22 +1458,16 @@ void Renderer::initializeBatchData()
         m_vk->swapchain ? ObservationDevice::VulkanSwapchain : ObservationDevice::Cuda,
         m_vk->swapchain ? ObservationFormat::RGBA8 : ObservationFormat::FloatNCHW, m_batchSize);
     m_observation.setVersion(m_observationVersion);
-    m_pigMeshVertexOffset = MaxTerrainVertices * m_vk->batchSize;
     if (!m_pigMeshUploaded) {
         PigMesh pigMeshGenerator;
         const std::span<MeshVertex> pigMesh = pigMeshGenerator.generate();
         m_pigMeshVertexCount = static_cast<uint32_t>(pigMesh.size());
-        MeshVertex* const vertices = static_cast<MeshVertex*>(m_vk->vertexBuffer.cudaPtr);
-        cudaCheck(cudaMemcpy(vertices + m_pigMeshVertexOffset, pigMesh.data(), sizeof(MeshVertex) * pigMesh.size(),
-                      cudaMemcpyHostToDevice),
-            "cudaMemcpy pig mesh to Vulkan vertex buffer");
-        cudaCheck(cudaDeviceSynchronize(), "cudaDeviceSynchronize pig mesh upload");
+        uploadDeviceBuffer(*m_vk, m_vk->pigVertexBuffer, pigMesh.data(), sizeof(MeshVertex) * pigMesh.size());
         m_pigMeshUploaded = true;
     }
     for (uint32_t i = 0; i < m_batchSize; ++i) {
         RenderSlot& slot = m_slots[i];
         slot.terrainVertexOffset = i * MaxTerrainVertices;
-        slot.pigVertexOffset = m_pigMeshVertexOffset;
         slot.pigVertexCount = m_pigMeshVertexCount;
         slot.instanceOffset = i * MaxEntityInstances;
         m_observation.setSlot(i,
@@ -1532,8 +1588,6 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
     };
     vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipeline);
-    vkCmdBindDescriptorSets(
-        commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipelineLayout, 0, 1, &vk.vertexDescriptorSet, 0, nullptr);
     for (uint32_t envIndex = 0; envIndex < slots.size(); ++envIndex) {
         RenderSlot& slot = slots[envIndex];
         if (slot.pendingGeneration.valid()) {
@@ -1548,11 +1602,15 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
         };
         vkCmdPushConstants(
             commandBuffer, vk.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pushConstants), &pushConstants);
-        if (slot.terrainVertexCount > 0)
+        if (slot.terrainVertexCount > 0) {
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipelineLayout, 0, 1,
+                &vk.vertexDescriptorSet, 0, nullptr);
             vkCmdDraw(commandBuffer, slot.terrainVertexCount, 1, slot.terrainVertexOffset, slot.instanceOffset);
+        }
         if (slot.pigVertexCount > 0 && slot.instanceCount > 0) {
-            vkCmdDraw(
-                commandBuffer, slot.pigVertexCount, slot.instanceCount, slot.pigVertexOffset, slot.instanceOffset + 1U);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipelineLayout, 0, 1,
+                &vk.pigDescriptorSet, 0, nullptr);
+            vkCmdDraw(commandBuffer, slot.pigVertexCount, slot.instanceCount, 0, slot.instanceOffset + 1U);
         }
     }
     vkCmdEndRenderPass(commandBuffer);
@@ -1574,8 +1632,8 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
     vkCheck(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
 
     const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    const VkSemaphore signalSemaphore = offscreenFrame ? offscreenFrame->completion.semaphoreForSignal()
-                                                       : vk.renderFinished;
+    const VkSemaphore signalSemaphore
+        = offscreenFrame ? offscreenFrame->completion.semaphoreForSignal() : vk.renderFinished;
     const VkSubmitInfo submitInfo {
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
         .waitSemaphoreCount = vk.swapchain ? 1U : 0U,
