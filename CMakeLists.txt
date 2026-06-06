@@ -210,3 +210,27 @@ target_link_libraries(blocklab_hash_test PRIVATE blocklab_env Catch2::Catch2With
 blocklab_enable_strict_warnings(blocklab_hash_test)
 
 add_test(NAME blocklab_hash_test COMMAND blocklab_hash_test)
+
+set(BLOCKLAB_PYTHON_TEST_EXECUTABLE ${CMAKE_CURRENT_SOURCE_DIR}/.venv/bin/python)
+set(BLOCKLAB_VULKAN_VALIDATION_RUNNER ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_vulkan_validation.py)
+
+add_test(NAME blocklab_cpp_vulkan_validation
+    COMMAND ${Python_EXECUTABLE} ${BLOCKLAB_VULKAN_VALIDATION_RUNNER} --
+        $<TARGET_FILE:blocklab_benchmark>
+        --seconds 2
+        --batch-size 8
+        --warmup-steps 16
+)
+
+add_test(NAME blocklab_python_vulkan_validation
+    COMMAND ${Python_EXECUTABLE} ${BLOCKLAB_VULKAN_VALIDATION_RUNNER} --
+        ${BLOCKLAB_PYTHON_TEST_EXECUTABLE}
+        -m blocklab.examples.benchmark
+        --seconds 2
+        --num-envs 8
+        --warmup-steps 16
+        --materialize-observation
+)
+set_tests_properties(blocklab_python_vulkan_validation PROPERTIES
+    ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/python"
+)
