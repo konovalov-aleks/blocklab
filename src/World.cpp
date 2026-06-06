@@ -116,14 +116,11 @@ void World::BlocksCache::waitIfPending()
     state = State::Ready;
 }
 
-WorldGenerationBuffers World::borrowGenerationBuffers(std::span<MeshVertex> meshVertices) const
+PageLockedVector<uint8_t> World::borrowGenerationBuffers() const
 {
     m_blockCache.waitIfPending();
     m_blockCache.state = BlocksCache::State::Borrowed;
-    return {
-        .meshVertices = meshVertices,
-        .blocks = std::move(m_blockCache.blocks),
-    };
+    return std::move(m_blockCache.blocks);
 }
 
 void World::updateGeneration(CudaSharedFuture<WorldGenerationOutput> generation) const

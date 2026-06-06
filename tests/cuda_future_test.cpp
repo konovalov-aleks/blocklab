@@ -34,6 +34,7 @@ TEST_CASE("CudaFuture exposes validity and move-only ownership", "[cuda][cuda-fu
 {
     blocklab::CudaFuture<int> empty;
     CHECK_FALSE(empty.valid());
+    CHECK_FALSE(empty.ready());
     empty.wait();
 
     TestStream stream;
@@ -51,6 +52,7 @@ TEST_CASE("CudaFuture exposes validity and move-only ownership", "[cuda][cuda-fu
 
     moved.wait();
     moved.wait();
+    CHECK(moved.ready());
     CHECK(*readCount == 0);
     CHECK(moved.get() == 42);
     CHECK(moved.get() == 42);
@@ -83,6 +85,7 @@ TEST_CASE("CudaSharedFuture is empty when built from empty CudaFuture", "[cuda][
     blocklab::CudaSharedFuture<int> shared(std::move(empty));
 
     CHECK_FALSE(shared.valid());
+    CHECK_FALSE(shared.ready());
     CHECK_FALSE(empty.valid());
     shared.wait();
 }
@@ -105,6 +108,8 @@ TEST_CASE("CudaSharedFuture copies share wait and result state", "[cuda][cuda-fu
 
     shared.wait();
     copy.wait();
+    CHECK(shared.ready());
+    CHECK(copy.ready());
     CHECK(*readCount == 0);
     CHECK(shared.get() == 99);
     CHECK(copy.get() == 99);

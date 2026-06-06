@@ -4,8 +4,8 @@
 #include "blocklab/Block.h"
 #include "blocklab/CudaFuture.h"
 #include "blocklab/Math.h"
-#include "blocklab/MeshTypes.h"
 #include "blocklab/PageLockedVector.h"
+#include "blocklab/Voxel.h"
 
 #include <cstdint>
 #include <memory>
@@ -15,6 +15,10 @@
 namespace blocklab {
 
 class CudaWorldGenerator;
+
+struct WorldGenerationConfig {
+    int32_t halfExtent = 32;
+};
 
 struct WorldGenerationInput {
     uint32_t seed = 1;
@@ -27,7 +31,9 @@ struct WorldGenerationInput {
 };
 
 struct WorldGenerationBuffers {
-    std::span<MeshVertex> meshVertices;
+    Voxel* voxels;
+    size_t maxVoxelCount;
+
     PageLockedVector<uint8_t> blocks;
 };
 
@@ -35,19 +41,20 @@ struct WorldGenerationOutput {
     IVec3 origin {};
     IVec3 size {};
     uint64_t worldVersion = 0;
-    uint32_t meshVertexCount = 0;
+    // TODO is this field necessary? it seems, we can use buffers.voxels.size() instead
+    uint32_t voxelCount = 0;
     WorldGenerationBuffers buffers;
 };
 
 class WorldGenerator final {
 public:
-    explicit WorldGenerator(MeshBuildConfig config = {});
+    explicit WorldGenerator(WorldGenerationConfig config = {});
     ~WorldGenerator();
 
     CudaFuture<WorldGenerationOutput> generate(const World&, const AgentState&, WorldGenerationBuffers&& buffers);
 
 private:
-    MeshBuildConfig m_config;
+    WorldGenerationConfig m_config;
     std::vector<BlockOverride> m_overrides;
     std::unique_ptr<blocklab::CudaWorldGenerator> m_cudaGenerator;
 };

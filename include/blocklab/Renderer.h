@@ -78,16 +78,20 @@ public:
 
 private:
     struct RenderSlot {
-        uint64_t lastWorldVersion = 0;
         IVec3 lastMeshCenter { std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::min(),
             std::numeric_limits<int32_t>::min() };
-        uint32_t terrainVertexOffset = 0;
-        uint32_t terrainVertexCount = 0;
+
+        uint32_t terrainVoxelOffset = 0;
+        uint32_t terrainVoxelCount = 0;
+
         uint32_t pigVertexCount = 0;
+
         uint32_t instanceOffset = 0;
         uint32_t instanceCount = 0;
+
         CudaSharedFuture<WorldGenerationOutput> pendingGeneration;
         std::size_t lastObservationFrame = 0;
+        uint64_t lastWorldVersion = 0;
     };
 
     RenderParams buildRenderParams(const AgentState&, const World&) const;

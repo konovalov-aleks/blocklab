@@ -13,26 +13,32 @@
 
 namespace {
 
-constexpr int32_t TestMeshHalfExtent = 32;
-constexpr uint32_t TestMeshExtent = TestMeshHalfExtent * 2;
-constexpr uint32_t TestMaxTerrainVertices
-    = static_cast<uint32_t>(TestMeshExtent * blocklab::Chunk::SizeY * TestMeshExtent * 36);
+constexpr int32_t TestGenerationHalfExtent = 32;
+constexpr uint32_t TestGenerationExtent = TestGenerationHalfExtent * 2;
+constexpr uint32_t TestMaxTerrainVoxels
+    = static_cast<uint32_t>(TestGenerationExtent * blocklab::Chunk::SizeY * TestGenerationExtent);
 
 void updateWorldCacheAt(const blocklab::World& world, blocklab::IVec3 center)
 {
-    blocklab::WorldGenerator generator({ .halfExtent = TestMeshHalfExtent });
-    blocklab::MeshVertex* vertices = nullptr;
-    blocklab::cudaCheck(cudaMalloc(&vertices, sizeof(blocklab::MeshVertex) * TestMaxTerrainVertices),
-        "cudaMalloc test terrain vertices");
+    blocklab::WorldGenerator generator({ .halfExtent = TestGenerationHalfExtent });
+    void* voxelMemory = nullptr;
+    blocklab::cudaCheck(cudaMalloc(&voxelMemory, blocklab::VoxelSize * TestMaxTerrainVoxels),
+        "cudaMalloc test terrain voxels");
+    auto* const voxels = static_cast<blocklab::Voxel*>(voxelMemory);
     blocklab::AgentState agent;
     agent.position = { static_cast<float>(center.x), static_cast<float>(center.y), static_cast<float>(center.z) };
     blocklab::CudaSharedFuture<blocklab::WorldGenerationOutput> generation
         = generator
-              .generate(world, agent, world.borrowGenerationBuffers({ vertices, TestMaxTerrainVertices }))
+              .generate(world, agent,
+                  {
+                      .voxels = voxels,
+                      .maxVoxelCount = TestMaxTerrainVoxels,
+                      .blocks = world.borrowGenerationBuffers(),
+                  })
               .share();
     world.updateGeneration(generation);
     world.waitForGeneration();
-    blocklab::cudaCheck(cudaFree(vertices), "cudaFree test terrain vertices");
+    blocklab::cudaCheck(cudaFree(voxels), "cudaFree test terrain voxels");
 }
 
 class CountingRenderer final : public blocklab::ObservationRenderer {

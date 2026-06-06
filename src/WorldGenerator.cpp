@@ -8,7 +8,7 @@
 
 namespace blocklab {
 
-WorldGenerator::WorldGenerator(MeshBuildConfig config)
+WorldGenerator::WorldGenerator(WorldGenerationConfig config)
     : m_config(config)
     , m_cudaGenerator(std::make_unique<CudaWorldGenerator>())
 {

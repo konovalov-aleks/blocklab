@@ -142,7 +142,8 @@ public:
     float groundHeight(float x, float z) const;
 
     void collectOverridesInRegion(IVec3 origin, IVec3 size, std::vector<BlockOverride>& out) const;
-    WorldGenerationBuffers borrowGenerationBuffers(std::span<MeshVertex> meshVertices) const;
+
+    PageLockedVector<uint8_t> borrowGenerationBuffers() const;
     void updateGeneration(CudaSharedFuture<WorldGenerationOutput>) const;
     void waitForGeneration() const;
 
