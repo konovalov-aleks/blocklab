@@ -90,6 +90,17 @@ TEST_CASE("CudaSharedFuture is empty when built from empty CudaFuture", "[cuda][
     shared.wait();
 }
 
+TEST_CASE("CudaSharedFuture validity follows the moved control block state", "[cuda][cuda-future]")
+{
+    TestStream stream;
+    blocklab::CudaFuture<int> future(stream.get(), [] { return 1; });
+
+    blocklab::CudaSharedFuture<int> shared(std::move(future));
+
+    CHECK(shared.valid());
+    CHECK_FALSE(future.valid());
+}
+
 TEST_CASE("CudaSharedFuture copies share wait and result state", "[cuda][cuda-future]")
 {
     TestStream stream;
@@ -149,4 +160,67 @@ TEST_CASE("CudaFuture share moves state into CudaSharedFuture", "[cuda][cuda-fut
     CHECK_FALSE(future.valid());
     CHECK(shared.get() == 314);
     CHECK(*readCount == 1);
+}
+
+TEST_CASE("CudaFuture<void> exposes validity and move-only ownership", "[cuda][cuda-future]")
+{
+    blocklab::CudaFuture<void> empty;
+    CHECK_FALSE(empty.valid());
+    CHECK_FALSE(empty.ready());
+    empty.wait();
+
+    TestStream stream;
+    blocklab::CudaFuture<void> future(stream.get());
+    CHECK(future.valid());
+
+    blocklab::CudaFuture<void> moved(std::move(future));
+    CHECK(moved.valid());
+    CHECK_FALSE(future.valid());
+
+    moved.wait();
+    moved.wait();
+    CHECK(moved.ready());
+    CHECK(moved.valid());
+}
+
+TEST_CASE("CudaSharedFuture<void> is empty when built from empty CudaFuture", "[cuda][cuda-future]")
+{
+    blocklab::CudaFuture<void> empty;
+    blocklab::CudaSharedFuture<void> shared(std::move(empty));
+
+    CHECK_FALSE(shared.valid());
+    CHECK_FALSE(shared.ready());
+    CHECK_FALSE(empty.valid());
+    shared.wait();
+}
+
+TEST_CASE("CudaSharedFuture<void> copies share wait state", "[cuda][cuda-future]")
+{
+    TestStream stream;
+    blocklab::CudaFuture<void> future(stream.get());
+
+    blocklab::CudaSharedFuture<void> shared = future.share();
+    blocklab::CudaSharedFuture<void> copy = shared;
+
+    CHECK(shared.valid());
+    CHECK(copy.valid());
+    CHECK_FALSE(future.valid());
+
+    shared.wait();
+    copy.wait();
+    CHECK(shared.ready());
+    CHECK(copy.ready());
+}
+
+TEST_CASE("CudaFuture<void> share moves state into CudaSharedFuture", "[cuda][cuda-future]")
+{
+    TestStream stream;
+    blocklab::CudaFuture<void> future(stream.get());
+
+    blocklab::CudaSharedFuture<void> shared = future.share();
+
+    CHECK(shared.valid());
+    CHECK_FALSE(future.valid());
+    shared.wait();
+    CHECK(shared.ready());
 }

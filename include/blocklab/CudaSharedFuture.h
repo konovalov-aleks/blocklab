@@ -5,6 +5,7 @@
 #include <cuda_runtime.h>
 
 #include <memory>
+#include <type_traits>
 #include <utility>
 
 namespace blocklab {
@@ -20,16 +21,19 @@ public:
             m_control = std::make_shared<CudaFutureControlBlock<T>>(std::move(future.m_control));
     }
 
+    auto& get() const
+        requires(!std::is_void_v<T>)
+    {
+        return m_control->get();
+    }
+
     void wait() const
     {
         if (m_control)
             m_control->wait();
     }
 
-    T& get() const { return m_control->get(); }
-
-    bool valid() const { return static_cast<bool>(m_control); }
-
+    bool valid() const { return m_control && m_control->valid(); }
     bool ready() const { return m_control && m_control->ready(); }
 
 private:

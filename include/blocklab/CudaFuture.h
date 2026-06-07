@@ -5,6 +5,7 @@
 #include <cuda_runtime.h>
 
 #include <functional>
+#include <type_traits>
 #include <utility>
 
 namespace blocklab {
@@ -17,7 +18,14 @@ class CudaFuture {
 public:
     CudaFuture() = default;
 
+    CudaFuture(cudaStream_t stream)
+        requires std::is_void_v<T>
+        : m_control(stream)
+    {
+    }
+
     CudaFuture(cudaStream_t stream, std::function<T()> readResult)
+        requires(!std::is_void_v<T>)
         : m_control(stream, std::move(readResult))
     {
     }
@@ -28,8 +36,13 @@ public:
     CudaFuture(CudaFuture&&) noexcept = default;
     CudaFuture& operator=(CudaFuture&&) noexcept = default;
 
+    auto& get()
+        requires(!std::is_void_v<T>)
+    {
+        return m_control.get();
+    }
+
     void wait() { m_control.wait(); }
-    T& get() { return m_control.get(); }
     bool valid() const { return m_control.valid(); }
     bool ready() const { return m_control.ready(); }
 
