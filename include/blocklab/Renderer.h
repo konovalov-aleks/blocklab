@@ -45,9 +45,7 @@ public:
     const Observation& observation() const { return m_observation; }
     std::size_t lastObservationFrameIndex(std::size_t slot) const;
     void* cudaObservationTensorData(std::size_t frameIndex, uintptr_t streamHandle = 0);
-    void synchronizeObservation(std::size_t frameIndex);
     std::size_t cudaObservationTensorBytes() const;
-    void setCudaObservationExportEnabled(bool enabled);
 
     struct VulkanState;
     struct RenderParams {
@@ -116,7 +114,6 @@ private:
     uint32_t m_pigMeshVertexCount = 0;
     uint64_t m_observationVersion = 0;
     bool m_pigMeshUploaded = false;
-    bool m_cudaObservationExportEnabled = false;
 };
 
 } // namespace blocklab

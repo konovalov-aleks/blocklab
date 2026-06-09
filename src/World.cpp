@@ -132,10 +132,7 @@ void World::updateGeneration(CudaSharedFuture<WorldGenerationOutput> generation)
     m_blockCache.state = BlocksCache::State::Pending;
 }
 
-void World::waitForGeneration() const
-{
-    m_blockCache.waitIfPending();
-}
+void World::waitForGeneration() const { m_blockCache.waitIfPending(); }
 
 void World::resetSeed(uint32_t seed)
 {
@@ -158,11 +155,8 @@ void World::resetCharacters()
 
 bool World::isInsideCacheBounds(IVec3 pos) const
 {
-    return pos.x >= m_blockCache.origin.x
-        && pos.y >= m_blockCache.origin.y
-        && pos.z >= m_blockCache.origin.z
-        && pos.x < m_blockCache.origin.x + m_blockCache.size.x
-        && pos.y < m_blockCache.origin.y + m_blockCache.size.y
+    return pos.x >= m_blockCache.origin.x && pos.y >= m_blockCache.origin.y && pos.z >= m_blockCache.origin.z
+        && pos.x < m_blockCache.origin.x + m_blockCache.size.x && pos.y < m_blockCache.origin.y + m_blockCache.size.y
         && pos.z < m_blockCache.origin.z + m_blockCache.size.z;
 }
 
@@ -174,7 +168,8 @@ Block World::getBlock(IVec3 pos) const
         return Block::Air;
 
     if (!isInsideCacheBounds(pos)) [[unlikely]]
-        fatalError("Requested block (", pos.x, ", ", pos.y, ", ", pos.z, ") is outside of the world generation cache bounds");
+        fatalError(
+            "Requested block (", pos.x, ", ", pos.y, ", ", pos.z, ") is outside of the world generation cache bounds");
 
     if (m_blockCache.blocks.empty()) [[unlikely]]
         fatalError("World generation cache blocks are not ready");

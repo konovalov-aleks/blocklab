@@ -124,8 +124,8 @@ namespace {
         return generatedBlock(params.seed, x, y, z);
     }
 
-    __global__ void buildTerrainKernel(CudaBuildParams params, const CudaOverride* overrides, Voxel* voxels,
-        uint32_t* voxelCount, uint8_t* blocks)
+    __global__ void buildTerrainKernel(
+        CudaBuildParams params, const CudaOverride* overrides, Voxel* voxels, uint32_t* voxelCount, uint8_t* blocks)
     {
         const int32_t index = static_cast<int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
         const int32_t volume = params.width * params.height * params.depth;
@@ -151,9 +151,8 @@ namespace {
         const uint8_t frontBlock = blockAt(params, overrides, x, y, z + 1);
         const uint8_t backBlock = blockAt(params, overrides, x, y, z - 1);
 
-        if (rightBlock != BlockId::Air && leftBlock != BlockId::Air
-         && topBlock != BlockId::Air && bottomBlock != BlockId::Air
-         && frontBlock != BlockId::Air && backBlock != BlockId::Air)
+        if (rightBlock != BlockId::Air && leftBlock != BlockId::Air && topBlock != BlockId::Air
+            && bottomBlock != BlockId::Air && frontBlock != BlockId::Air && backBlock != BlockId::Air)
             return;
 
         uint8_t visibleFaces = 0;
@@ -200,6 +199,12 @@ CudaWorldGenerator::~CudaWorldGenerator()
     cudaFree(m_state->voxelCount);
     cudaFreeHost(m_state->voxelCountHost);
     cudaStreamDestroy(m_state->stream);
+}
+
+cudaStream_t CudaWorldGenerator::stream() const
+{
+    assert(m_state);
+    return m_state->stream;
 }
 
 CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
@@ -250,8 +255,7 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
             "cudaMemcpyAsync overrides");
     }
 
-    cudaCheck(
-        cudaMemsetAsync(m_state->voxelCount, 0, sizeof(uint32_t), m_state->stream), "cudaMemsetAsync voxelCount");
+    cudaCheck(cudaMemsetAsync(m_state->voxelCount, 0, sizeof(uint32_t), m_state->stream), "cudaMemsetAsync voxelCount");
     const CudaBuildParams params {
         .seed = input.seed,
         .centerX = input.center.x,
@@ -268,8 +272,8 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
     };
 
     constexpr int32_t ThreadCount = 256;
-    buildTerrainKernel<<<(volume + ThreadCount - 1) / ThreadCount, ThreadCount, 0, m_state->stream>>>(params,
-        m_state->overrides, buffers.voxels, m_state->voxelCount, outBlocks.data());
+    buildTerrainKernel<<<(volume + ThreadCount - 1) / ThreadCount, ThreadCount, 0, m_state->stream>>>(
+        params, m_state->overrides, buffers.voxels, m_state->voxelCount, outBlocks.data());
     cudaCheck(cudaGetLastError(), "buildTerrainKernel");
 
     cudaCheck(cudaMemcpyAsync(m_state->voxelCountHost, m_state->voxelCount, sizeof(*m_state->voxelCountHost),
@@ -284,13 +288,12 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
     output.buffers = std::move(buffers);
     output.buffers.blocks = std::move(outBlocks);
     auto outputStorage = std::make_shared<WorldGenerationOutput>(std::move(output));
-    return CudaFuture<WorldGenerationOutput>(
-        m_state->stream, [state = m_state.get(), outputStorage]() mutable {
-            state->pending = false;
-            outputStorage->voxelCount
-                = std::min(*state->voxelCountHost, static_cast<uint32_t>(outputStorage->buffers.maxVoxelCount));
-            return std::move(*outputStorage);
-        });
+    return CudaFuture<WorldGenerationOutput>(m_state->stream, [state = m_state.get(), outputStorage]() mutable {
+        state->pending = false;
+        outputStorage->voxelCount
+            = std::min(*state->voxelCountHost, static_cast<uint32_t>(outputStorage->buffers.maxVoxelCount));
+        return std::move(*outputStorage);
+    });
 }
 
 } // namespace blocklab

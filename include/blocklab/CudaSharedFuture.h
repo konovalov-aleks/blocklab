@@ -4,6 +4,7 @@
 
 #include <cuda_runtime.h>
 
+#include <cassert>
 #include <memory>
 #include <type_traits>
 #include <utility>
@@ -24,13 +25,20 @@ public:
     auto& get() const
         requires(!std::is_void_v<T>)
     {
+        assert(m_control);
         return m_control->get();
     }
 
     void wait() const
     {
-        if (m_control)
+        if (m_control) [[likely]]
             m_control->wait();
+    }
+
+    void enqueueGPUWait(cudaStream_t stream)
+    {
+        if (m_control) [[likely]]
+            m_control->enqueueGPUWait(stream);
     }
 
     bool valid() const { return m_control && m_control->valid(); }

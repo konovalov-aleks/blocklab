@@ -16,6 +16,8 @@ WorldGenerator::WorldGenerator(WorldGenerationConfig config)
 
 WorldGenerator::~WorldGenerator() = default;
 
+cudaStream_t WorldGenerator::stream() const { return m_cudaGenerator->stream(); }
+
 CudaFuture<WorldGenerationOutput> WorldGenerator::generate(
     const World& world, const AgentState& agent, WorldGenerationBuffers&& buffers)
 {

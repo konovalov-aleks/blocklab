@@ -36,8 +36,7 @@ namespace {
     constexpr uint32_t MaxEntityInstances = 256;
     constexpr int32_t TerrainMeshHalfExtent = 32;
     constexpr uint32_t TerrainMeshExtent = TerrainMeshHalfExtent * 2;
-    constexpr size_t MaxTerrainVoxels
-        = static_cast<size_t>(TerrainMeshExtent * Chunk::SizeY * TerrainMeshExtent);
+    constexpr size_t MaxTerrainVoxels = static_cast<size_t>(TerrainMeshExtent * Chunk::SizeY * TerrainMeshExtent);
 
     Vec3 cameraForward(float yaw, float pitch)
     {
@@ -120,6 +119,8 @@ namespace {
     class ExternalSemaphore {
     public:
         ExternalSemaphore() = default;
+        ExternalSemaphore(VkDevice, std::uint64_t initialValue = 0);
+
         ~ExternalSemaphore();
 
         ExternalSemaphore(const ExternalSemaphore&) = delete;
@@ -144,65 +145,22 @@ namespace {
             return *this;
         }
 
-        void create(VkDevice device);
-        void wait(cudaStream_t stream);
-        void reset();
+        void wait(cudaStream_t, uint64_t value);
 
         VkSemaphore vulkanSemaphore() const { return m_semaphore; }
         cudaExternalSemaphore_t cudaSemaphore() const { return m_cudaSemaphore; }
 
     private:
+        void reset();
+
         VkDevice m_device = VK_NULL_HANDLE;
         VkSemaphore m_semaphore = VK_NULL_HANDLE;
         cudaExternalSemaphore_t m_cudaSemaphore = nullptr;
     };
 
-    class FrameCompletionFence {
-    public:
-        FrameCompletionFence() = default;
-        explicit FrameCompletionFence(VkDevice device);
-        ~FrameCompletionFence();
-
-        FrameCompletionFence(const FrameCompletionFence&) = delete;
-        FrameCompletionFence& operator=(const FrameCompletionFence&) = delete;
-
-        FrameCompletionFence(FrameCompletionFence&& other) noexcept
-            : m_renderComplete(std::move(other.m_renderComplete))
-            , m_renderCompleteEvent(std::exchange(other.m_renderCompleteEvent, nullptr))
-            , m_signalPending(std::exchange(other.m_signalPending, false))
-            , m_cudaWaitQueued(std::exchange(other.m_cudaWaitQueued, false))
-        {
-        }
-
-        FrameCompletionFence& operator=(FrameCompletionFence&& other) noexcept
-        {
-            if (this == &other)
-                return *this;
-
-            reset();
-            m_renderComplete = std::move(other.m_renderComplete);
-            m_renderCompleteEvent = std::exchange(other.m_renderCompleteEvent, nullptr);
-            m_signalPending = std::exchange(other.m_signalPending, false);
-            m_cudaWaitQueued = std::exchange(other.m_cudaWaitQueued, false);
-            return *this;
-        }
-
-        void create(VkDevice device);
-        void enqueueGPUWait(cudaStream_t stream);
-        void synchronize(cudaStream_t stream);
-        void trackCudaUse(cudaStream_t stream);
-        void reset();
-
-        VkSemaphore semaphoreForSignal();
-
-    private:
-        ExternalSemaphore m_renderComplete;
-        cudaEvent_t m_renderCompleteEvent = nullptr;
-        bool m_signalPending = false;
-        bool m_cudaWaitQueued = false;
-    };
-
     struct OffscreenFrame {
+        static constexpr std::uint64_t NO_OBSERVATION_VERSION = 0;
+
         Image color;
         Image depth;
         VkFramebuffer framebuffer = VK_NULL_HANDLE;
@@ -211,7 +169,10 @@ namespace {
         Buffer observationBuffer;
         float* observationTensor = nullptr;
         bool observationTensorValid = false;
-        FrameCompletionFence completion;
+
+        CudaFuture<void> conversionTaskFuture;
+        ExternalSemaphore frameCompletionSemaphore;
+        std::uint64_t observationVersion = NO_OBSERVATION_VERSION;
         VkFence fence = VK_NULL_HANDLE;
     };
 
@@ -298,7 +259,6 @@ struct Renderer::VulkanState {
     VkSemaphore imageAvailable = VK_NULL_HANDLE;
     VkSemaphore renderFinished = VK_NULL_HANDLE;
     VkFence inFlight = VK_NULL_HANDLE;
-    cudaStream_t renderWaitStream = nullptr;
     VkDeviceSize terrainVoxelBufferCapacityBytes = 0;
     uint32_t batchSize = 1;
 };
@@ -384,19 +344,22 @@ namespace {
         return buffer;
     }
 
-    ExternalSemaphore::~ExternalSemaphore() { reset(); }
-
-    void ExternalSemaphore::create(VkDevice device)
+    ExternalSemaphore::ExternalSemaphore(VkDevice device, std::uint64_t initialValue)
+        : m_device(device)
     {
-        reset();
-        m_device = device;
         const VkExportSemaphoreCreateInfo exportInfo {
             .sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
             .handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
         };
+        VkSemaphoreTypeCreateInfo typeCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+            .pNext = &exportInfo,
+            .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
+            .initialValue = initialValue,
+        };
         const VkSemaphoreCreateInfo semaphoreInfo {
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-            .pNext = &exportInfo,
+            .pNext = &typeCreateInfo,
         };
         vkCheck(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_semaphore), "vkCreateSemaphore external");
 
@@ -414,18 +377,21 @@ namespace {
         vkCheck(vkGetSemaphoreFdKHRFn(m_device, &fdInfo, &fd), "vkGetSemaphoreFdKHR");
 
         cudaExternalSemaphoreHandleDesc externalSemaphoreDesc {};
-        externalSemaphoreDesc.type = cudaExternalSemaphoreHandleTypeOpaqueFd;
+        externalSemaphoreDesc.type = cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd;
         externalSemaphoreDesc.handle.fd = fd;
         cudaCheck(cudaImportExternalSemaphore(&m_cudaSemaphore, &externalSemaphoreDesc),
             "cudaImportExternalSemaphore render");
     }
 
-    void ExternalSemaphore::wait(cudaStream_t stream)
+    ExternalSemaphore::~ExternalSemaphore() { reset(); }
+
+    void ExternalSemaphore::wait(cudaStream_t stream, uint64_t value)
     {
         if (!m_cudaSemaphore) [[unlikely]]
             fatalError("External semaphore is not initialized");
 
         cudaExternalSemaphoreWaitParams waitParams {};
+        waitParams.params.fence.value = value;
         cudaCheck(cudaWaitExternalSemaphoresAsync(&m_cudaSemaphore, &waitParams, 1, stream),
             "cudaWaitExternalSemaphoresAsync render complete");
     }
@@ -439,69 +405,6 @@ namespace {
         m_device = VK_NULL_HANDLE;
         m_semaphore = VK_NULL_HANDLE;
         m_cudaSemaphore = nullptr;
-    }
-
-    FrameCompletionFence::~FrameCompletionFence() { reset(); }
-
-    FrameCompletionFence::FrameCompletionFence(VkDevice device) { create(device); }
-
-    void FrameCompletionFence::create(VkDevice device)
-    {
-        reset();
-        m_renderComplete.create(device);
-        cudaCheck(cudaEventCreateWithFlags(&m_renderCompleteEvent, cudaEventDisableTiming),
-            "cudaEventCreate render complete");
-        m_signalPending = false;
-        m_cudaWaitQueued = false;
-    }
-
-    VkSemaphore FrameCompletionFence::semaphoreForSignal()
-    {
-        m_signalPending = true;
-        m_cudaWaitQueued = false;
-        return m_renderComplete.vulkanSemaphore();
-    }
-
-    void FrameCompletionFence::enqueueGPUWait(cudaStream_t stream)
-    {
-        if (!m_signalPending)
-            return;
-
-        if (m_cudaWaitQueued)
-            cudaCheck(cudaStreamWaitEvent(stream, m_renderCompleteEvent, 0), "cudaStreamWaitEvent render complete");
-        else {
-            m_renderComplete.wait(stream);
-            cudaCheck(cudaEventRecord(m_renderCompleteEvent, stream), "cudaEventRecord render complete");
-            m_cudaWaitQueued = true;
-        }
-    }
-
-    void FrameCompletionFence::synchronize(cudaStream_t stream)
-    {
-        enqueueGPUWait(stream);
-        if (!m_signalPending)
-            return;
-
-        cudaCheck(cudaEventSynchronize(m_renderCompleteEvent), "cudaEventSynchronize render complete");
-        m_signalPending = false;
-        m_cudaWaitQueued = false;
-    }
-
-    void FrameCompletionFence::trackCudaUse(cudaStream_t stream)
-    {
-        // Reusing this frame must wait for CUDA work that reads or writes frame-owned resources.
-        cudaCheck(cudaEventRecord(m_renderCompleteEvent, stream), "cudaEventRecord render complete");
-    }
-
-    void FrameCompletionFence::reset()
-    {
-        if (m_renderCompleteEvent) {
-            cudaCheck(cudaEventDestroy(m_renderCompleteEvent), "cudaEventDestroy render complete");
-            m_renderCompleteEvent = nullptr;
-        }
-        m_renderComplete.reset();
-        m_signalPending = false;
-        m_cudaWaitQueued = false;
     }
 
     void destroyBuffer(Renderer::VulkanState& vk, Buffer& buffer)
@@ -795,6 +698,7 @@ namespace {
             extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
         VkPhysicalDeviceVulkan12Features features12 {
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+            .timelineSemaphore = VK_TRUE,
             .shaderOutputViewportIndex = VK_TRUE,
             .shaderOutputLayer = VK_TRUE,
         };
@@ -1193,23 +1097,21 @@ namespace {
         };
         vkCheck(vkAllocateCommandBuffers(vk.device, &allocInfo, vk.commandBuffers.data()), "vkAllocateCommandBuffers");
 
-        const VkSemaphoreCreateInfo semaphoreInfo { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
         const VkFenceCreateInfo fenceInfo { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
             .flags = VK_FENCE_CREATE_SIGNALED_BIT };
         if (vk.swapchain) {
+            const VkSemaphoreCreateInfo semaphoreInfo { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
             vkCheck(
                 vkCreateSemaphore(vk.device, &semaphoreInfo, nullptr, &vk.imageAvailable), "vkCreateSemaphore image");
             vkCheck(
                 vkCreateSemaphore(vk.device, &semaphoreInfo, nullptr, &vk.renderFinished), "vkCreateSemaphore render");
             vkCheck(vkCreateFence(vk.device, &fenceInfo, nullptr, &vk.inFlight), "vkCreateFence");
         } else {
-            cudaCheck(
-                cudaStreamCreateWithFlags(&vk.renderWaitStream, cudaStreamNonBlocking), "cudaStreamCreate render wait");
             for (std::size_t i = 0; i < vk.offscreenFrames.size(); ++i) {
                 vk.offscreenFrames[i].commandBuffer = vk.commandBuffers[i];
                 vkCheck(vkCreateFence(vk.device, &fenceInfo, nullptr, &vk.offscreenFrames[i].fence),
                     "vkCreateFence offscreen");
-                vk.offscreenFrames[i].completion = FrameCompletionFence(vk.device);
+                vk.offscreenFrames[i].frameCompletionSemaphore = { vk.device };
             }
         }
     }
@@ -1356,9 +1258,7 @@ namespace {
         for (OffscreenFrame& frame : vk.offscreenFrames) {
             if (frame.observationTensor)
                 cudaCheck(cudaFree(frame.observationTensor), "cudaFree observation tensor");
-            if (vk.renderWaitStream)
-                frame.completion.synchronize(vk.renderWaitStream);
-            frame.completion.reset();
+            frame.frameCompletionSemaphore = {};
             destroyBuffer(vk, frame.observationBuffer);
             destroyBuffer(vk, frame.paramsBuffer);
             if (frame.fence)
@@ -1372,10 +1272,6 @@ namespace {
         destroyBuffer(vk, vk.instanceBuffer);
         destroyBuffer(vk, vk.pigVertexBuffer);
         destroyBuffer(vk, vk.terrainVoxelBuffer);
-        if (vk.renderWaitStream) {
-            cudaCheck(cudaStreamDestroy(vk.renderWaitStream), "cudaStreamDestroy render wait");
-            vk.renderWaitStream = nullptr;
-        }
         if (vk.descriptorPool)
             vkDestroyDescriptorPool(vk.device, vk.descriptorPool, nullptr);
 
@@ -1472,8 +1368,6 @@ void Renderer::resize(int32_t width, int32_t height)
     m_config.height = std::max(1, height);
 }
 
-void Renderer::setCudaObservationExportEnabled(bool enabled) { m_cudaObservationExportEnabled = enabled; }
-
 std::size_t Renderer::lastObservationFrameIndex(std::size_t slot) const
 {
     if (!m_vk || m_vk->swapchain || m_vk->offscreenFrames.empty())
@@ -1489,24 +1383,17 @@ void* Renderer::cudaObservationTensorData(std::size_t frameIndex, uintptr_t stre
         return nullptr;
     if (frameIndex >= m_vk->offscreenFrames.size()) [[unlikely]]
         fatalError("Invalid observation frame index: ", frameIndex);
+
     OffscreenFrame& frame = m_vk->offscreenFrames[frameIndex];
+    assert(frame.observationVersion != OffscreenFrame::NO_OBSERVATION_VERSION);
     auto stream = reinterpret_cast<cudaStream_t>(streamHandle);
-    frame.completion.enqueueGPUWait(stream);
+    frame.conversionTaskFuture.enqueueGPUWait(stream);
+    frame.frameCompletionSemaphore.wait(stream, frame.observationVersion);
     convertRgba8ToFloatNchw(frame.observationBuffer.cudaPtr, frame.observationTensor, m_vk->batchSize,
         m_vk->renderExtent.width, m_vk->renderExtent.height, streamHandle);
-    frame.completion.trackCudaUse(stream);
+    frame.conversionTaskFuture = { stream };
     frame.observationTensorValid = true;
     return frame.observationTensor;
-}
-
-void Renderer::synchronizeObservation(std::size_t frameIndex)
-{
-    if (!m_vk || m_vk->swapchain || m_vk->offscreenFrames.empty())
-        return;
-    if (frameIndex >= m_vk->offscreenFrames.size())
-        fatalError("Invalid observation frame index: ", frameIndex);
-    OffscreenFrame& frame = m_vk->offscreenFrames[frameIndex];
-    frame.completion.synchronize(m_vk->renderWaitStream);
 }
 
 std::size_t Renderer::cudaObservationTensorBytes() const
@@ -1626,7 +1513,15 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
             return;
     } else {
         offscreenFrame = &vk.offscreenFrames[vk.nextOffscreenFrame];
-        offscreenFrame->completion.synchronize(vk.renderWaitStream);
+
+        // The observation is valid until step() or reset() is called.
+        // So, it's not mandatory to wait until previous observation conversion is completed
+        // TODO But for better stability and API simplification it's better to implement a GPU-side fence for that.
+
+        submitFence = offscreenFrame->fence;
+        vkWaitForFences(vk.device, 1, &offscreenFrame->fence, VK_TRUE, UINT64_MAX);
+        vkResetFences(vk.device, 1, &offscreenFrame->fence);
+
         vk.lastSubmittedOffscreenFrame = vk.nextOffscreenFrame;
         vk.nextOffscreenFrame = (vk.nextOffscreenFrame + 1U) % vk.offscreenFrames.size();
         offscreenFrame->observationTensorValid = false;
@@ -1683,8 +1578,9 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
     }
 
     // TODO implement
-    // some slots may still be pending generation at this point, but we have to draw the ones that are ready, to avoid stalling the GPU for too long. We will draw the pending ones in the next frame.
-    //std::vector<uint32_t> postponedSlots;
+    // some slots may still be pending generation at this point, but we have to draw the ones that are ready, to avoid
+    // stalling the GPU for too long. We will draw the pending ones in the next frame.
+    // std::vector<uint32_t> postponedSlots;
 
     pipelineBound = false;
     for (uint32_t envIndex = 0; envIndex < slots.size(); ++envIndex) {
@@ -1708,11 +1604,11 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
             // 6 faces, every face has 2 triangles, every triangle has 3 vertices = 36.
             constexpr uint32_t verticesPerVoxel = 36;
             vkCmdDraw(commandBuffer, verticesPerVoxel * slot.terrainVoxelCount, 1,
-                      verticesPerVoxel * slot.terrainVoxelOffset, 0);
+                verticesPerVoxel * slot.terrainVoxelOffset, 0);
         }
     }
     vkCmdEndRenderPass(commandBuffer);
-    if (offscreenFrame && m_cudaObservationExportEnabled) {
+    if (offscreenFrame) {
         const VkBufferImageCopy copyRegion {
             .bufferOffset = 0,
             .bufferRowLength = 0,
@@ -1726,14 +1622,27 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
         };
         vkCmdCopyImageToBuffer(commandBuffer, offscreenFrame->color.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             offscreenFrame->observationBuffer.buffer, 1, &copyRegion);
+
+        offscreenFrame->observationVersion = m_observationVersion;
     }
     vkCheck(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
 
     const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     const VkSemaphore signalSemaphore
-        = offscreenFrame ? offscreenFrame->completion.semaphoreForSignal() : vk.renderFinished;
+        = offscreenFrame ? offscreenFrame->frameCompletionSemaphore.vulkanSemaphore() : vk.renderFinished;
+
+    const uint64_t signalValues[] = { m_observationVersion };
+    const VkTimelineSemaphoreSubmitInfo timelineSubmitInfo {
+        .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+        .pNext = nullptr,
+        .waitSemaphoreValueCount = 0,
+        .pWaitSemaphoreValues = nullptr,
+        .signalSemaphoreValueCount = std::size(signalValues),
+        .pSignalSemaphoreValues = signalValues,
+    };
     const VkSubmitInfo submitInfo {
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .pNext = vk.swapchain ? nullptr : &timelineSubmitInfo,
         .waitSemaphoreCount = vk.swapchain ? 1U : 0U,
         .pWaitSemaphores = vk.swapchain ? &vk.imageAvailable : nullptr,
         .pWaitDstStageMask = vk.swapchain ? &waitStage : nullptr,
@@ -1742,9 +1651,8 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
         .signalSemaphoreCount = 1U,
         .pSignalSemaphores = &signalSemaphore,
     };
+    // TODO migrate to vkQueueSubmit2
     vkCheck(vkQueueSubmit(vk.graphicsQueue, 1, &submitInfo, submitFence), "vkQueueSubmit");
-    if (offscreenFrame)
-        offscreenFrame->completion.enqueueGPUWait(vk.renderWaitStream);
 
     if (vk.swapchain) {
         const VkPresentInfoKHR presentInfo {
@@ -1763,13 +1671,14 @@ const Observation& Renderer::renderObservations(std::span<const World> worlds, s
 {
     if (worlds.size() != agents.size()) [[unlikely]]
         fatalError("renderObservations world/agent count mismatch");
+
+    ++m_observationVersion;
     validateBatchSize(worlds.size());
     for (std::size_t i = 0; i < worlds.size(); ++i) {
         renderObservationSlot(i, worlds[i], agents[i]);
         m_renderParams[i] = buildRenderParams(agents[i], worlds[i]);
     }
     drawFrame({ m_renderParams.get(), m_batchSize }, { m_slots.get(), m_batchSize });
-    ++m_observationVersion;
     m_observation.setVersion(m_observationVersion);
     for (uint32_t i = 0; i < m_batchSize; ++i) {
         RenderSlot& slot = m_slots[i];
@@ -1792,8 +1701,11 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
         = meshDelta.x > MeshCacheStride || meshDelta.y > MeshCacheStride || meshDelta.z > MeshCacheStride;
     if (slot.lastWorldVersion != world.version() || agentLeftMeshCache) {
         if (!m_vk->swapchain) {
-            for (OffscreenFrame& frame : m_vk->offscreenFrames)
-                frame.completion.synchronize(m_vk->renderWaitStream);
+            // TODO get rid of CPU synchronization. It's better to use one more semaphore instead
+            for (OffscreenFrame& frame : m_vk->offscreenFrames) {
+                if (frame.observationVersion != OffscreenFrame::NO_OBSERVATION_VERSION) [[likely]]
+                    frame.frameCompletionSemaphore.wait(m_worldGenerator.stream(), frame.observationVersion);
+            }
         } else
             vkWaitForFences(m_vk->device, 1, &m_vk->inFlight, VK_TRUE, UINT64_MAX);
 
@@ -1804,9 +1716,7 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
         buffers.blocks = world.borrowGenerationBuffers();
 
         CudaSharedFuture<WorldGenerationOutput> generation
-            = m_worldGenerator
-                  .generate(world, agent, std::move(buffers))
-                  .share();
+            = m_worldGenerator.generate(world, agent, std::move(buffers)).share();
         world.updateGeneration(generation);
         slot.pendingGeneration = std::move(generation);
         slot.terrainVoxelCount = 0;

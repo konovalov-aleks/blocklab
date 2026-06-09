@@ -43,6 +43,8 @@ public:
     }
 
     void wait() { m_control.wait(); }
+    void enqueueGPUWait(cudaStream_t stream) { m_control.enqueueGPUWait(stream); }
+
     bool valid() const { return m_control.valid(); }
     bool ready() const { return m_control.ready(); }
 

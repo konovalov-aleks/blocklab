@@ -3,6 +3,8 @@
 #include "blocklab/CudaFuture.h"
 #include "blocklab/WorldGenerator.h"
 
+#include <cuda_runtime.h>
+
 #include <memory>
 
 namespace blocklab {
@@ -14,6 +16,8 @@ public:
 
     CudaWorldGenerator(const CudaWorldGenerator&) = delete;
     CudaWorldGenerator& operator=(const CudaWorldGenerator&) = delete;
+
+    cudaStream_t stream() const;
 
     CudaFuture<WorldGenerationOutput> generate(const WorldGenerationInput&, WorldGenerationBuffers&&);
 

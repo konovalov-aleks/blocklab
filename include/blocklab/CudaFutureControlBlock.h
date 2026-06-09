@@ -4,6 +4,7 @@
 
 #include <cuda_runtime.h>
 
+#include <cassert>
 #include <functional>
 #include <optional>
 #include <utility>
@@ -50,12 +51,20 @@ namespace details {
 
         void wait()
         {
-            if (!m_pending)
+            if (!m_pending || !valid())
                 return;
 
             cudaCheck(cudaEventSynchronize(m_done), "cudaEventSynchronize future");
             m_pending = false;
             destroyEvent();
+        }
+
+        void enqueueGPUWait(cudaStream_t stream)
+        {
+            if (!m_pending || !valid())
+                return;
+
+            cudaCheck(cudaStreamWaitEvent(stream, m_done, 0), "cudaStreamWaitEvent future");
         }
 
         bool valid() const { return m_stream; }
@@ -129,6 +138,7 @@ public:
 
     T& get()
     {
+        assert(valid());
         wait();
         if (!m_result)
             m_result = m_readResult();

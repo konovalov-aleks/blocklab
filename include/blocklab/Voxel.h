@@ -8,12 +8,12 @@
 namespace blocklab {
 
 enum VisibleFace : uint8_t {
-    Left   = 1 << 0,
-    Right  = 1 << 1,
-    Top    = 1 << 2,
+    Left = 1 << 0,
+    Right = 1 << 1,
+    Top = 1 << 2,
     Bottom = 1 << 3,
-    Front  = 1 << 4,
-    Back   = 1 << 5
+    Front = 1 << 4,
+    Back = 1 << 5
 };
 
 struct Voxel;

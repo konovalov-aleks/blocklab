@@ -51,6 +51,9 @@ public:
     explicit WorldGenerator(WorldGenerationConfig config = {});
     ~WorldGenerator();
 
+    // TODO join WorldGenerator and CudaWorldGenerator
+    cudaStream_t stream() const;
+
     CudaFuture<WorldGenerationOutput> generate(const World&, const AgentState&, WorldGenerationBuffers&& buffers);
 
 private:
