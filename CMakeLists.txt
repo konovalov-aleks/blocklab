@@ -21,6 +21,8 @@ find_package(pybind11 CONFIG QUIET)
 find_program(GLSLC_EXECUTABLE glslc REQUIRED)
 
 set(BLOCKLAB_SHADER_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
+file(GLOB BLOCKLAB_SHADER_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.hlsl)
+add_custom_target(blocklab_shaders)
 function(blocklab_compile_shader target_name source_file stage entrypoint output_name)
     set(output_file ${BLOCKLAB_SHADER_OUTPUT_DIR}/${output_name}.spv)
     add_custom_command(
@@ -32,12 +34,14 @@ function(blocklab_compile_shader target_name source_file stage entrypoint output
             -fentry-point=${entrypoint}
             ${CMAKE_CURRENT_SOURCE_DIR}/${source_file}
             -o ${output_file}
-        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${source_file}
+        DEPENDS ${BLOCKLAB_SHADER_SOURCES}
         VERBATIM
     )
     add_custom_target(${target_name} DEPENDS ${output_file})
+    add_dependencies(blocklab_shaders ${target_name})
 endfunction()
 
+blocklab_compile_shader(blocklab_voxel_vertex_shader shaders/voxel.vert.hlsl vertex voxelVertexMain voxel_vertex)
 blocklab_compile_shader(blocklab_mesh_vertex_shader shaders/mesh.vert.hlsl vertex meshVertexMain mesh_vertex)
 blocklab_compile_shader(blocklab_mesh_fragment_shader shaders/mesh.frag.hlsl fragment meshFragmentMain mesh_fragment)
 
@@ -123,7 +127,7 @@ target_link_libraries(blocklab_render
         CUDA::cudart
         glfw
 )
-add_dependencies(blocklab_render blocklab_mesh_vertex_shader blocklab_mesh_fragment_shader)
+add_dependencies(blocklab_render blocklab_shaders)
 target_compile_definitions(blocklab_render PRIVATE BLOCKLAB_SHADER_DIR="${BLOCKLAB_SHADER_OUTPUT_DIR}")
 
 blocklab_enable_strict_warnings(blocklab_render)
@@ -206,3 +210,27 @@ target_link_libraries(blocklab_hash_test PRIVATE blocklab_env Catch2::Catch2With
 blocklab_enable_strict_warnings(blocklab_hash_test)
 
 add_test(NAME blocklab_hash_test COMMAND blocklab_hash_test)
+
+set(BLOCKLAB_PYTHON_TEST_EXECUTABLE ${CMAKE_CURRENT_SOURCE_DIR}/.venv/bin/python)
+set(BLOCKLAB_VULKAN_VALIDATION_RUNNER ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_vulkan_validation.py)
+
+add_test(NAME blocklab_cpp_vulkan_validation
+    COMMAND ${Python_EXECUTABLE} ${BLOCKLAB_VULKAN_VALIDATION_RUNNER} --
+        $<TARGET_FILE:blocklab_benchmark>
+        --seconds 2
+        --batch-size 8
+        --warmup-steps 16
+)
+
+add_test(NAME blocklab_python_vulkan_validation
+    COMMAND ${Python_EXECUTABLE} ${BLOCKLAB_VULKAN_VALIDATION_RUNNER} --
+        ${BLOCKLAB_PYTHON_TEST_EXECUTABLE}
+        -m blocklab.examples.benchmark
+        --seconds 2
+        --num-envs 8
+        --warmup-steps 16
+        --materialize-observation
+)
+set_tests_properties(blocklab_python_vulkan_validation PROPERTIES
+    ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/python"
+)

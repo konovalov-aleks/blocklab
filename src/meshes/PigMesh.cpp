@@ -6,8 +6,10 @@
 namespace blocklab {
 namespace {
 
+    constexpr float meshMaterialId(Material material) { return static_cast<float>(static_cast<uint32_t>(material)); }
+
     void appendMeshFace(MeshVertex*& vertices, Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, Vec3 color, float shade,
-        MeshMaterial material, float animationPhase)
+        Material material, float animationPhase)
     {
         const Vec4 packedColor { color, shade };
         const float materialId = meshMaterialId(material);
@@ -42,7 +44,7 @@ namespace {
         const Vec3 p101 { max.x, min.y, max.z };
         const Vec3 p011 { min.x, max.y, max.z };
         const Vec3 p111 { max.x, max.y, max.z };
-        const MeshMaterial material = color.g > 0.6f ? MeshMaterial::PigSnout : MeshMaterial::PigSkin;
+        const Material material = color.g > 0.6f ? Material::PigSnout : Material::PigSkin;
         appendMeshFace(vertices, p010, p011, p111, p110, color, 1.0f, material, animationPhase);
         appendMeshFace(vertices, p000, p100, p101, p001, color, 0.48f, material, animationPhase);
         appendMeshFace(vertices, p100, p110, p111, p101, color, 0.78f, material, animationPhase);
@@ -54,7 +56,7 @@ namespace {
     void appendMeshPatch(MeshVertex*& vertices, Vec3 min, Vec3 max, float z, Vec3 color)
     {
         appendMeshFace(vertices, { min.x, min.y, z }, { max.x, min.y, z }, { max.x, max.y, z }, { min.x, max.y, z },
-            color, 1.0f, MeshMaterial::VertexColor, 0.0f);
+            color, 1.0f, Material::VertexColor, 0.0f);
     }
 
 } // namespace

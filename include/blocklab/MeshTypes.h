@@ -1,13 +1,14 @@
 #pragma once
 
-#include "blocklab/Block.h"
-#include "blocklab/Math.h"
+#include <blocklab/Block.h>
+#include <blocklab/Math.h>
+#include <blocklab/Voxel.h>
 
 #include <cstdint>
 
 namespace blocklab {
 
-enum class MeshMaterial : uint32_t {
+enum class Material : uint8_t {
     GrassTop = 0,
     Dirt = 1,
     Stone = 2,
@@ -17,16 +18,10 @@ enum class MeshMaterial : uint32_t {
     VertexColor = 8,
 };
 
-constexpr float meshMaterialId(MeshMaterial material) { return static_cast<float>(static_cast<uint32_t>(material)); }
-
 struct MeshVertex {
     Vec4 position;
     Vec4 colorAndShade;
     Vec4 uvMaterial;
-};
-
-struct MeshBuildConfig {
-    int32_t halfExtent = 32;
 };
 
 } // namespace blocklab

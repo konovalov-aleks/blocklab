@@ -1,11 +1,11 @@
 #pragma once
 
-#include "blocklab/CudaHelpers.h"
+#include "blocklab/CudaFutureControlBlock.h"
 
 #include <cuda_runtime.h>
 
 #include <functional>
-#include <optional>
+#include <type_traits>
 #include <utility>
 
 namespace blocklab {
@@ -18,66 +18,42 @@ class CudaFuture {
 public:
     CudaFuture() = default;
 
+    CudaFuture(cudaStream_t stream)
+        requires std::is_void_v<T>
+        : m_control(stream)
+    {
+    }
+
     CudaFuture(cudaStream_t stream, std::function<T()> readResult)
-        : m_stream(stream)
-        , m_readResult(std::move(readResult))
-        , m_pending(true)
+        requires(!std::is_void_v<T>)
+        : m_control(stream, std::move(readResult))
     {
     }
 
     CudaFuture(const CudaFuture&) = delete;
     CudaFuture& operator=(const CudaFuture&) = delete;
 
-    CudaFuture(CudaFuture&& other) noexcept
-        : m_stream(std::exchange(other.m_stream, nullptr))
-        , m_readResult(std::move(other.m_readResult))
-        , m_result(std::move(other.m_result))
-        , m_pending(std::exchange(other.m_pending, false))
+    CudaFuture(CudaFuture&&) noexcept = default;
+    CudaFuture& operator=(CudaFuture&&) noexcept = default;
+
+    auto& get()
+        requires(!std::is_void_v<T>)
     {
-        other.m_result.reset();
+        return m_control.get();
     }
 
-    CudaFuture& operator=(CudaFuture&& other) noexcept
-    {
-        if (this == &other)
-            return *this;
+    void wait() { m_control.wait(); }
+    void enqueueGPUWait(cudaStream_t stream) { m_control.enqueueGPUWait(stream); }
 
-        m_stream = std::exchange(other.m_stream, nullptr);
-        m_readResult = std::move(other.m_readResult);
-        m_result = std::move(other.m_result);
-        other.m_result.reset();
-        m_pending = std::exchange(other.m_pending, false);
-        return *this;
-    }
-
-    void wait()
-    {
-        if (!m_pending)
-            return;
-
-        cudaCheck(cudaStreamSynchronize(m_stream), "cudaStreamSynchronize future");
-        m_pending = false;
-    }
-
-    T& get()
-    {
-        wait();
-        if (!m_result)
-            m_result = m_readResult();
-        return *m_result;
-    }
-
-    bool valid() const { return m_stream || m_result.has_value(); }
+    bool valid() const { return m_control.valid(); }
+    bool ready() const { return m_control.ready(); }
 
     CudaSharedFuture<T> share();
 
 private:
     friend class CudaSharedFuture<T>;
 
-    cudaStream_t m_stream = nullptr;
-    std::function<T()> m_readResult;
-    std::optional<T> m_result;
-    bool m_pending = false;
+    CudaFutureControlBlock<T> m_control;
 };
 
 } // namespace blocklab

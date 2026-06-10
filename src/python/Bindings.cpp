@@ -84,7 +84,6 @@ namespace {
         {
             if (numEnvs == 0U) [[unlikely]]
                 fatalError("num_envs must be positive");
-            m_renderer.setCudaObservationExportEnabled(true);
             m_environment.reset(seed);
         }
 
@@ -288,8 +287,8 @@ PYBIND11_MODULE(_native, module)
         .def_readonly("truncated", &blocklab::StepResult::truncated);
 
     py::class_<blocklab::NativeEnvironment>(module, "NativeEnvironment")
-        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t>(), py::arg("num_envs") = 1,
-            py::arg("width") = 160, py::arg("height") = 90, py::arg("seed") = 1)
+        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t>(), py::arg("num_envs") = 1, py::arg("width") = 160,
+            py::arg("height") = 90, py::arg("seed") = 1)
         .def("reset", &blocklab::NativeEnvironment::reset, py::arg("seed") = 1)
         .def("step", &blocklab::NativeEnvironment::step, py::arg("actions"))
         .def("observe", &blocklab::NativeEnvironment::observe)

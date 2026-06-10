@@ -1,17 +1,5 @@
-struct RenderFrameInfo {
-    int animationTimeMs;
-};
-
-struct RenderParams {
-    float4 origin;
-    float4 forward;
-    float4 right;
-    float4 up;
-    int4 worldOriginAndWidth;
-    int4 regionAndHeight;
-    RenderFrameInfo frameInfo;
-    float4 tuning;
-};
+#include "render_params.hlsl"
+#include "vertex_output.hlsl"
 
 struct MeshVertex {
     float4 position;
@@ -24,25 +12,8 @@ struct EntityInstance {
     float4 velocityAndKind;
 };
 
-struct DrawPushConstants {
-    uint envIndex;
-    uint layerIndex;
-    uint _padding0;
-    uint _padding1;
-};
-
 static const uint EntityKindNone = 0;
 static const uint EntityKindPig = 1;
-
-struct VertexOutput {
-    float4 position : SV_Position;
-    float4 color : TEXCOORD0;
-    float3 worldPosition : TEXCOORD1;
-    float shade : TEXCOORD2;
-    float fog : TEXCOORD3;
-    float3 uvMaterial : TEXCOORD4;
-    uint layer : SV_RenderTargetArrayIndex;
-};
 
 StructuredBuffer<MeshVertex> vertices : register(t0, space0);
 StructuredBuffer<EntityInstance> instances : register(t1, space0);

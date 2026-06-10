@@ -8,13 +8,15 @@
 
 namespace blocklab {
 
-WorldGenerator::WorldGenerator(MeshBuildConfig config)
+WorldGenerator::WorldGenerator(WorldGenerationConfig config)
     : m_config(config)
     , m_cudaGenerator(std::make_unique<CudaWorldGenerator>())
 {
 }
 
 WorldGenerator::~WorldGenerator() = default;
+
+cudaStream_t WorldGenerator::stream() const { return m_cudaGenerator->stream(); }
 
 CudaFuture<WorldGenerationOutput> WorldGenerator::generate(
     const World& world, const AgentState& agent, WorldGenerationBuffers&& buffers)
@@ -26,16 +28,18 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::generate(
     };
     const int32_t extent = m_config.halfExtent * 2;
     // The cached/rendered area is half-open: [center - halfExtent, center + halfExtent).
-    const IVec3 origin { center.x - m_config.halfExtent, 0, center.z - m_config.halfExtent };
+    const int32_t originX = center.x - m_config.halfExtent;
+    const int32_t originZ = center.z - m_config.halfExtent;
     const IVec3 size { extent, Chunk::SizeY, extent };
 
-    world.collectOverridesInRegion(origin, size, m_overrides);
+    world.collectOverridesInRegion({ originX, 0, originZ }, size, m_overrides);
     const WorldGenerationInput input {
         .seed = world.seed(),
         .worldVersion = world.version(),
         .center = center,
-        .origin = origin,
         .size = size,
+        .originX = originX,
+        .originZ = originZ,
         .halfExtent = m_config.halfExtent,
         .overrides = m_overrides,
     };

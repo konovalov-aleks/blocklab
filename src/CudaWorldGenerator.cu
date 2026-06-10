@@ -6,24 +6,41 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <memory>
-#include <stdexcept>
 
 namespace blocklab {
+
+class Voxel {
+public:
+    __device__ Voxel(uint3 pos, uint8_t blockType, uint8_t visibleFaces)
+        : m_data(blockType | (visibleFaces << 5) | (pos.z << 11) | (pos.y << 17) | (pos.x << 26))
+    {
+        assert((blockType & ((1 << 5) - 1)) == blockType);
+        assert((visibleFaces & ((1 << 6) - 1)) == visibleFaces);
+        assert((pos.z & ((1 << 6) - 1)) == pos.z);
+        assert((pos.y & ((1 << 9) - 1)) == pos.y);
+        assert((pos.x & ((1 << 6) - 1)) == pos.x);
+    }
+
+private:
+    // x : 6
+    // y : 9
+    // z : 6
+    // visibleFacesMask: 6
+    // blockType: 5
+    uint32_t m_data;
+};
+static_assert(sizeof(Voxel) == VoxelSize);
+static_assert(static_cast<uint8_t>(Block::COUNT) <= (1 << 5));
+
 namespace {
 
     constexpr int32_t ChunkSizeY = 32;
     constexpr int32_t CoordBias = 1 << 20;
     constexpr int64_t CoordMask = (int64_t { 1 } << 21) - 1;
-
-    struct CudaVertex {
-        float4 position;
-        float4 colorAndShade;
-        float4 uvMaterial;
-    };
 
     struct CudaOverride {
         int64_t key;
@@ -42,10 +59,8 @@ namespace {
         int32_t originY;
         int32_t originZ;
         int32_t overrideCount;
-        uint32_t maxVertices;
+        uint32_t maxVoxels;
     };
-
-    static_assert(sizeof(MeshVertex) == sizeof(CudaVertex));
 
     int64_t packKeyHost(int32_t x, int32_t y, int32_t z)
     {
@@ -121,91 +136,15 @@ namespace {
         return generatedBlock(params.seed, x, y, z);
     }
 
-    __device__ float3 topColor(uint8_t block)
-    {
-        if (block == BlockId::Grass)
-            return make_float3(0.28f, 0.62f, 0.24f);
-        if (block == BlockId::Dirt)
-            return make_float3(0.49f, 0.33f, 0.20f);
-        if (block == BlockId::Stone)
-            return make_float3(0.50f, 0.52f, 0.54f);
-        return make_float3(1.0f, 0.0f, 1.0f);
-    }
-
-    __device__ float3 sideColor(uint8_t block)
-    {
-        if (block == BlockId::Grass)
-            return make_float3(0.43f, 0.35f, 0.20f);
-        return topColor(block);
-    }
-
-    __device__ MeshMaterial topMaterial(uint8_t block)
-    {
-        if (block == BlockId::Grass)
-            return MeshMaterial::GrassTop;
-        if (block == BlockId::Dirt)
-            return MeshMaterial::Dirt;
-        if (block == BlockId::Stone)
-            return MeshMaterial::Stone;
-        return MeshMaterial::VertexColor;
-    }
-
-    __device__ MeshMaterial sideMaterial(uint8_t block)
-    {
-        if (block == BlockId::Grass)
-            return MeshMaterial::GrassSide;
-        return topMaterial(block);
-    }
-
-    __device__ void writeVertex(
-        CudaVertex& vertex, float3 position, float3 color, float shade, float2 uv, MeshMaterial material)
-    {
-        vertex.position = make_float4(position.x, position.y, position.z, 1.0f);
-        vertex.colorAndShade = make_float4(color.x, color.y, color.z, shade);
-        vertex.uvMaterial = make_float4(uv.x, uv.y, static_cast<float>(static_cast<uint32_t>(material)), 0.0f);
-    }
-
-    __device__ float2 faceUv(
-        float3 p, float3 p0, float3 p1, float3 p2, float3 p3, float2 fallback, MeshMaterial material)
-    {
-        if (material != MeshMaterial::GrassSide)
-            return fallback;
-
-        const float minY = fminf(fminf(p0.y, p1.y), fminf(p2.y, p3.y));
-        const float maxY = fmaxf(fmaxf(p0.y, p1.y), fmaxf(p2.y, p3.y));
-        const float minX = fminf(fminf(p0.x, p1.x), fminf(p2.x, p3.x));
-        const float maxX = fmaxf(fmaxf(p0.x, p1.x), fmaxf(p2.x, p3.x));
-        const float minZ = fminf(fminf(p0.z, p1.z), fminf(p2.z, p3.z));
-        const float maxZ = fmaxf(fmaxf(p0.z, p1.z), fmaxf(p2.z, p3.z));
-        const float xSpan = fmaxf(maxX - minX, 0.001f);
-        const float ySpan = fmaxf(maxY - minY, 0.001f);
-        const float zSpan = fmaxf(maxZ - minZ, 0.001f);
-        const float horizontal = xSpan >= zSpan ? (p.x - minX) / xSpan : (p.z - minZ) / zSpan;
-        return make_float2(horizontal, (p.y - minY) / ySpan);
-    }
-
-    __device__ void appendFace(CudaVertex* vertices, uint32_t* vertexCount, const CudaBuildParams params, float3 p0,
-        float3 p1, float3 p2, float3 p3, float3 color, float shade, MeshMaterial material)
-    {
-        const uint32_t base = atomicAdd(vertexCount, 6U);
-        if (base + 5U >= params.maxVertices)
-            return;
-        const float2 uv0 = faceUv(p0, p0, p1, p2, p3, make_float2(0.0f, 0.0f), material);
-        const float2 uv1 = faceUv(p1, p0, p1, p2, p3, make_float2(1.0f, 0.0f), material);
-        const float2 uv2 = faceUv(p2, p0, p1, p2, p3, make_float2(1.0f, 1.0f), material);
-        const float2 uv3 = faceUv(p3, p0, p1, p2, p3, make_float2(0.0f, 1.0f), material);
-        writeVertex(vertices[base + 0U], p0, color, shade, uv0, material);
-        writeVertex(vertices[base + 1U], p1, color, shade, uv1, material);
-        writeVertex(vertices[base + 2U], p2, color, shade, uv2, material);
-        writeVertex(vertices[base + 3U], p0, color, shade, uv0, material);
-        writeVertex(vertices[base + 4U], p2, color, shade, uv2, material);
-        writeVertex(vertices[base + 5U], p3, color, shade, uv3, material);
-    }
-
-    __global__ void buildTerrainMeshKernel(CudaBuildParams params, const CudaOverride* overrides, CudaVertex* vertices,
-        uint32_t* vertexCount, uint8_t* blocks)
+    __global__ void buildTerrainKernel(CudaBuildParams params, const CudaOverride* overrides, TerrainHeader* header,
+        Voxel* voxels, uint32_t* voxelCount, uint8_t* blocks)
     {
         const int32_t index = static_cast<int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
+        if (index == 0) {
+            header->originX = params.originX;
+            header->originZ = params.originZ;
+        }
+
         const int32_t volume = params.width * params.height * params.depth;
         if (index >= volume)
             return;
@@ -221,48 +160,39 @@ namespace {
         blocks[index] = block;
         if (block == BlockId::Air)
             return;
-        if (blockAt(params, overrides, x + 1, y, z) != 0 && blockAt(params, overrides, x - 1, y, z) != 0
-            && blockAt(params, overrides, x, y + 1, z) != 0 && blockAt(params, overrides, x, y - 1, z) != 0
-            && blockAt(params, overrides, x, y, z + 1) != 0 && blockAt(params, overrides, x, y, z - 1) != 0) {
+
+        const uint8_t rightBlock = blockAt(params, overrides, x + 1, y, z);
+        const uint8_t leftBlock = blockAt(params, overrides, x - 1, y, z);
+        const uint8_t topBlock = blockAt(params, overrides, x, y + 1, z);
+        const uint8_t bottomBlock = blockAt(params, overrides, x, y - 1, z);
+        const uint8_t frontBlock = blockAt(params, overrides, x, y, z + 1);
+        const uint8_t backBlock = blockAt(params, overrides, x, y, z - 1);
+
+        if (rightBlock != BlockId::Air && leftBlock != BlockId::Air && topBlock != BlockId::Air
+            && bottomBlock != BlockId::Air && frontBlock != BlockId::Air && backBlock != BlockId::Air)
             return;
-        }
 
-        const float fx = static_cast<float>(x);
-        const float fy = static_cast<float>(y);
-        const float fz = static_cast<float>(z);
-        const float3 p000 = make_float3(fx + 0.0f, fy + 0.0f, fz + 0.0f);
-        const float3 p100 = make_float3(fx + 1.0f, fy + 0.0f, fz + 0.0f);
-        const float3 p010 = make_float3(fx + 0.0f, fy + 1.0f, fz + 0.0f);
-        const float3 p110 = make_float3(fx + 1.0f, fy + 1.0f, fz + 0.0f);
-        const float3 p001 = make_float3(fx + 0.0f, fy + 0.0f, fz + 1.0f);
-        const float3 p101 = make_float3(fx + 1.0f, fy + 0.0f, fz + 1.0f);
-        const float3 p011 = make_float3(fx + 0.0f, fy + 1.0f, fz + 1.0f);
-        const float3 p111 = make_float3(fx + 1.0f, fy + 1.0f, fz + 1.0f);
-        const float3 top = topColor(block);
-        const float3 side = sideColor(block);
-        const MeshMaterial topTile = topMaterial(block);
-        const MeshMaterial sideTile = sideMaterial(block);
+        uint8_t visibleFaces = 0;
+        visibleFaces |= rightBlock == BlockId::Air ? VisibleFace::Right : 0;
+        visibleFaces |= leftBlock == BlockId::Air ? VisibleFace::Left : 0;
+        visibleFaces |= topBlock == BlockId::Air ? VisibleFace::Top : 0;
+        visibleFaces |= bottomBlock == BlockId::Air ? VisibleFace::Bottom : 0;
+        visibleFaces |= frontBlock == BlockId::Air ? VisibleFace::Front : 0;
+        visibleFaces |= backBlock == BlockId::Air ? VisibleFace::Back : 0;
 
-        if (blockAt(params, overrides, x, y + 1, z) == 0)
-            appendFace(vertices, vertexCount, params, p010, p011, p111, p110, top, 1.00f, topTile);
-        if (blockAt(params, overrides, x, y - 1, z) == 0)
-            appendFace(vertices, vertexCount, params, p000, p100, p101, p001, side, 0.48f, sideTile);
-        if (blockAt(params, overrides, x + 1, y, z) == 0)
-            appendFace(vertices, vertexCount, params, p100, p110, p111, p101, side, 0.78f, sideTile);
-        if (blockAt(params, overrides, x - 1, y, z) == 0)
-            appendFace(vertices, vertexCount, params, p000, p001, p011, p010, side, 0.78f, sideTile);
-        if (blockAt(params, overrides, x, y, z + 1) == 0)
-            appendFace(vertices, vertexCount, params, p001, p101, p111, p011, side, 0.68f, sideTile);
-        if (blockAt(params, overrides, x, y, z - 1) == 0)
-            appendFace(vertices, vertexCount, params, p000, p010, p110, p100, side, 0.68f, sideTile);
+        const uint32_t voxelIndex = atomicAdd(voxelCount, 1);
+        if (voxelIndex >= params.maxVoxels)
+            return;
+
+        voxels[voxelIndex] = Voxel(make_uint3(localX, localY, localZ), block, visibleFaces);
     }
 
 } // namespace
 
 struct CudaWorldGenerator::State {
     CudaOverride* overrides = nullptr;
-    uint32_t* vertexCount = nullptr;
-    uint32_t* vertexCountHost = nullptr;
+    uint32_t* voxelCount = nullptr;
+    uint32_t* voxelCountHost = nullptr;
     cudaStream_t stream = nullptr;
     PageLockedVector<CudaOverride> packedOverrides;
     uint32_t overrideCapacity = 0;
@@ -273,8 +203,8 @@ CudaWorldGenerator::CudaWorldGenerator()
     : m_state(std::make_unique<State>())
 {
     cudaCheck(cudaStreamCreateWithFlags(&m_state->stream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags");
-    cudaCheck(cudaMalloc(&m_state->vertexCount, sizeof(uint32_t)), "cudaMalloc vertexCount");
-    cudaCheck(cudaMallocHost(&m_state->vertexCountHost, sizeof(uint32_t)), "cudaMallocHost vertexCount");
+    cudaCheck(cudaMalloc(&m_state->voxelCount, sizeof(uint32_t)), "cudaMalloc voxelCount");
+    cudaCheck(cudaMallocHost(&m_state->voxelCountHost, sizeof(uint32_t)), "cudaMallocHost voxelCount");
 }
 
 CudaWorldGenerator::~CudaWorldGenerator()
@@ -283,9 +213,15 @@ CudaWorldGenerator::~CudaWorldGenerator()
         return;
     cudaStreamSynchronize(m_state->stream);
     cudaFree(m_state->overrides);
-    cudaFree(m_state->vertexCount);
-    cudaFreeHost(m_state->vertexCountHost);
+    cudaFree(m_state->voxelCount);
+    cudaFreeHost(m_state->voxelCountHost);
     cudaStreamDestroy(m_state->stream);
+}
+
+cudaStream_t CudaWorldGenerator::stream() const
+{
+    assert(m_state);
+    return m_state->stream;
 }
 
 CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
@@ -336,8 +272,7 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
             "cudaMemcpyAsync overrides");
     }
 
-    cudaCheck(
-        cudaMemsetAsync(m_state->vertexCount, 0, sizeof(uint32_t), m_state->stream), "cudaMemsetAsync vertexCount");
+    cudaCheck(cudaMemsetAsync(m_state->voxelCount, 0, sizeof(uint32_t), m_state->stream), "cudaMemsetAsync voxelCount");
     const CudaBuildParams params {
         .seed = input.seed,
         .centerX = input.center.x,
@@ -346,38 +281,36 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
         .width = width,
         .height = height,
         .depth = depth,
-        .originX = input.origin.x,
+        .originX = input.originX,
         .originY = 0,
-        .originZ = input.origin.z,
+        .originZ = input.originZ,
         .overrideCount = static_cast<int32_t>(packedOverrides.size()),
-        .maxVertices = static_cast<uint32_t>(buffers.meshVertices.size()),
+        .maxVoxels = static_cast<uint32_t>(buffers.maxVoxelCount),
     };
 
     constexpr int32_t ThreadCount = 256;
-    buildTerrainMeshKernel<<<(volume + ThreadCount - 1) / ThreadCount, ThreadCount, 0, m_state->stream>>>(params,
-        m_state->overrides, reinterpret_cast<CudaVertex*>(buffers.meshVertices.data()), m_state->vertexCount,
-        outBlocks.data());
-    cudaCheck(cudaGetLastError(), "buildTerrainMeshKernel");
+    buildTerrainKernel<<<(volume + ThreadCount - 1) / ThreadCount, ThreadCount, 0, m_state->stream>>>(
+        params, m_state->overrides, buffers.header, buffers.voxels, m_state->voxelCount, outBlocks.data());
+    cudaCheck(cudaGetLastError(), "buildTerrainKernel");
 
-    cudaCheck(cudaMemcpyAsync(m_state->vertexCountHost, m_state->vertexCount, sizeof(*m_state->vertexCountHost),
+    cudaCheck(cudaMemcpyAsync(m_state->voxelCountHost, m_state->voxelCount, sizeof(*m_state->voxelCountHost),
                   cudaMemcpyDeviceToHost, m_state->stream),
-        "cudaMemcpyAsync vertexCount");
+        "cudaMemcpyAsync voxelCount");
 
     m_state->pending = true;
     WorldGenerationOutput output;
-    output.origin = input.origin;
+    output.origin = { input.originX, 0, input.originZ };
     output.size = input.size;
     output.worldVersion = input.worldVersion;
     output.buffers = std::move(buffers);
     output.buffers.blocks = std::move(outBlocks);
     auto outputStorage = std::make_shared<WorldGenerationOutput>(std::move(output));
-    return CudaFuture<WorldGenerationOutput>(
-        m_state->stream, [state = m_state.get(), outputStorage]() mutable {
-            state->pending = false;
-            outputStorage->meshVertexCount
-                = std::min(*state->vertexCountHost, static_cast<uint32_t>(outputStorage->buffers.meshVertices.size()));
-            return std::move(*outputStorage);
-        });
+    return CudaFuture<WorldGenerationOutput>(m_state->stream, [state = m_state.get(), outputStorage]() mutable {
+        state->pending = false;
+        outputStorage->voxelCount
+            = std::min(*state->voxelCountHost, static_cast<uint32_t>(outputStorage->buffers.maxVoxelCount));
+        return std::move(*outputStorage);
+    });
 }
 
 } // namespace blocklab

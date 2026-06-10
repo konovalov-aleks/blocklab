@@ -45,9 +45,7 @@ public:
     const Observation& observation() const { return m_observation; }
     std::size_t lastObservationFrameIndex(std::size_t slot) const;
     void* cudaObservationTensorData(std::size_t frameIndex, uintptr_t streamHandle = 0);
-    void synchronizeObservation(std::size_t frameIndex);
     std::size_t cudaObservationTensorBytes() const;
-    void setCudaObservationExportEnabled(bool enabled);
 
     struct VulkanState;
     struct RenderParams {
@@ -78,24 +76,26 @@ public:
 
 private:
     struct RenderSlot {
-        uint64_t lastWorldVersion = 0;
         IVec3 lastMeshCenter { std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::min(),
             std::numeric_limits<int32_t>::min() };
-        uint32_t terrainVertexOffset = 0;
-        uint32_t terrainVertexCount = 0;
-        uint32_t pigVertexOffset = 0;
+
+        uint32_t terrainVoxelOffset = 0;
+        uint32_t terrainVoxelCount = 0;
+
         uint32_t pigVertexCount = 0;
+
         uint32_t instanceOffset = 0;
         uint32_t instanceCount = 0;
+
         CudaSharedFuture<WorldGenerationOutput> pendingGeneration;
         std::size_t lastObservationFrame = 0;
+        uint64_t lastWorldVersion = 0;
     };
 
     RenderParams buildRenderParams(const AgentState&, const World&) const;
     void uploadInstances(std::size_t slot, const World&);
-    void drawFrame(std::span<const RenderParams>, std::span<RenderSlot>);
+    void drawFrame();
     void initializeBatchData();
-    void validateBatchSize(std::size_t batchSize) const;
     void renderObservationSlot(std::size_t slot, const World&, const AgentState&);
 
     RenderConfig m_config;
@@ -110,11 +110,9 @@ private:
     std::unique_ptr<RenderSlot[]> m_slots;
     std::unique_ptr<RenderParams[]> m_renderParams;
     uint32_t m_batchSize = 0;
-    uint32_t m_pigMeshVertexOffset = 0;
     uint32_t m_pigMeshVertexCount = 0;
     uint64_t m_observationVersion = 0;
     bool m_pigMeshUploaded = false;
-    bool m_cudaObservationExportEnabled = false;
 };
 
 } // namespace blocklab

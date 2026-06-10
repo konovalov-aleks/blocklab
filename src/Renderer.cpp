@@ -36,8 +36,7 @@ namespace {
     constexpr uint32_t MaxEntityInstances = 256;
     constexpr int32_t TerrainMeshHalfExtent = 32;
     constexpr uint32_t TerrainMeshExtent = TerrainMeshHalfExtent * 2;
-    constexpr uint32_t MaxTerrainVertices
-        = static_cast<uint32_t>(TerrainMeshExtent * Chunk::SizeY * TerrainMeshExtent * 36);
+    constexpr size_t MaxTerrainVoxels = static_cast<size_t>(TerrainMeshExtent * Chunk::SizeY * TerrainMeshExtent);
 
     Vec3 cameraForward(float yaw, float pitch)
     {
@@ -120,6 +119,8 @@ namespace {
     class ExternalSemaphore {
     public:
         ExternalSemaphore() = default;
+        ExternalSemaphore(VkDevice, std::uint64_t initialValue = 0);
+
         ~ExternalSemaphore();
 
         ExternalSemaphore(const ExternalSemaphore&) = delete;
@@ -144,65 +145,22 @@ namespace {
             return *this;
         }
 
-        void create(VkDevice device);
-        void wait(cudaStream_t stream);
-        void reset();
+        void wait(cudaStream_t, uint64_t value);
 
         VkSemaphore vulkanSemaphore() const { return m_semaphore; }
         cudaExternalSemaphore_t cudaSemaphore() const { return m_cudaSemaphore; }
 
     private:
+        void reset();
+
         VkDevice m_device = VK_NULL_HANDLE;
         VkSemaphore m_semaphore = VK_NULL_HANDLE;
         cudaExternalSemaphore_t m_cudaSemaphore = nullptr;
     };
 
-    class FrameCompletionFence {
-    public:
-        FrameCompletionFence() = default;
-        explicit FrameCompletionFence(VkDevice device);
-        ~FrameCompletionFence();
-
-        FrameCompletionFence(const FrameCompletionFence&) = delete;
-        FrameCompletionFence& operator=(const FrameCompletionFence&) = delete;
-
-        FrameCompletionFence(FrameCompletionFence&& other) noexcept
-            : m_renderComplete(std::move(other.m_renderComplete))
-            , m_renderCompleteEvent(std::exchange(other.m_renderCompleteEvent, nullptr))
-            , m_signalPending(std::exchange(other.m_signalPending, false))
-            , m_cudaWaitQueued(std::exchange(other.m_cudaWaitQueued, false))
-        {
-        }
-
-        FrameCompletionFence& operator=(FrameCompletionFence&& other) noexcept
-        {
-            if (this == &other)
-                return *this;
-
-            reset();
-            m_renderComplete = std::move(other.m_renderComplete);
-            m_renderCompleteEvent = std::exchange(other.m_renderCompleteEvent, nullptr);
-            m_signalPending = std::exchange(other.m_signalPending, false);
-            m_cudaWaitQueued = std::exchange(other.m_cudaWaitQueued, false);
-            return *this;
-        }
-
-        void create(VkDevice device);
-        void enqueueGPUWait(cudaStream_t stream);
-        void synchronize(cudaStream_t stream);
-        void trackCudaUse(cudaStream_t stream);
-        void reset();
-
-        VkSemaphore semaphoreForSignal();
-
-    private:
-        ExternalSemaphore m_renderComplete;
-        cudaEvent_t m_renderCompleteEvent = nullptr;
-        bool m_signalPending = false;
-        bool m_cudaWaitQueued = false;
-    };
-
     struct OffscreenFrame {
+        static constexpr std::uint64_t NO_OBSERVATION_VERSION = 0;
+
         Image color;
         Image depth;
         VkFramebuffer framebuffer = VK_NULL_HANDLE;
@@ -211,8 +169,10 @@ namespace {
         Buffer observationBuffer;
         float* observationTensor = nullptr;
         bool observationTensorValid = false;
-        FrameCompletionFence completion;
-        VkDescriptorSet paramsDescriptorSet = VK_NULL_HANDLE;
+
+        CudaFuture<void> conversionTaskFuture;
+        ExternalSemaphore frameCompletionSemaphore;
+        std::uint64_t observationVersion = NO_OBSERVATION_VERSION;
         VkFence fence = VK_NULL_HANDLE;
     };
 
@@ -275,24 +235,32 @@ struct Renderer::VulkanState {
     std::size_t nextOffscreenFrame = 0;
     std::size_t lastSubmittedOffscreenFrame = 0;
     VkRenderPass renderPass = VK_NULL_HANDLE;
-    VkDescriptorSetLayout vertexSetLayout = VK_NULL_HANDLE;
-    VkDescriptorSetLayout paramsSetLayout = VK_NULL_HANDLE;
+
+    VkDescriptorSetLayout drawResourceSetLayout = VK_NULL_HANDLE;
+
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-    VkPipeline pipeline = VK_NULL_HANDLE;
+
+    VkPipeline meshPipeline = VK_NULL_HANDLE;
+    VkPipeline voxelPipeline = VK_NULL_HANDLE;
+
     std::vector<VkFramebuffer> framebuffers;
     VkCommandPool commandPool = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> commandBuffers;
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
-    VkDescriptorSet vertexDescriptorSet = VK_NULL_HANDLE;
-    VkDescriptorSet paramsDescriptorSet = VK_NULL_HANDLE;
-    Buffer vertexBuffer;
+
+    VkDescriptorSet terrainDescriptorSet = VK_NULL_HANDLE;
+    VkDescriptorSet pigDescriptorSet = VK_NULL_HANDLE;
+
+    Buffer terrainHeaderBuffer;
+    Buffer terrainVoxelBuffer;
+    Buffer pigVertexBuffer;
     Buffer instanceBuffer;
     Buffer paramsBuffer;
+
     VkSemaphore imageAvailable = VK_NULL_HANDLE;
     VkSemaphore renderFinished = VK_NULL_HANDLE;
     VkFence inFlight = VK_NULL_HANDLE;
-    cudaStream_t renderWaitStream = nullptr;
-    VkDeviceSize vertexCapacityBytes = 0;
+    VkDeviceSize terrainVoxelBufferCapacityBytes = 0;
     uint32_t batchSize = 1;
 };
 
@@ -340,6 +308,11 @@ namespace {
             vk, size, usage, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     }
 
+    Buffer createDeviceBuffer(Renderer::VulkanState& vk, VkDeviceSize size, VkBufferUsageFlags usage)
+    {
+        return createBuffer(vk, size, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    }
+
     Buffer createExportedDeviceBuffer(Renderer::VulkanState& vk, VkDeviceSize size, VkBufferUsageFlags usage)
     {
         Buffer buffer = createBuffer(vk, size, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, true);
@@ -372,22 +345,22 @@ namespace {
         return buffer;
     }
 
-    ExternalSemaphore::~ExternalSemaphore()
+    ExternalSemaphore::ExternalSemaphore(VkDevice device, std::uint64_t initialValue)
+        : m_device(device)
     {
-        reset();
-    }
-
-    void ExternalSemaphore::create(VkDevice device)
-    {
-        reset();
-        m_device = device;
         const VkExportSemaphoreCreateInfo exportInfo {
             .sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
             .handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
         };
+        VkSemaphoreTypeCreateInfo typeCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+            .pNext = &exportInfo,
+            .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
+            .initialValue = initialValue,
+        };
         const VkSemaphoreCreateInfo semaphoreInfo {
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-            .pNext = &exportInfo,
+            .pNext = &typeCreateInfo,
         };
         vkCheck(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_semaphore), "vkCreateSemaphore external");
 
@@ -405,18 +378,21 @@ namespace {
         vkCheck(vkGetSemaphoreFdKHRFn(m_device, &fdInfo, &fd), "vkGetSemaphoreFdKHR");
 
         cudaExternalSemaphoreHandleDesc externalSemaphoreDesc {};
-        externalSemaphoreDesc.type = cudaExternalSemaphoreHandleTypeOpaqueFd;
+        externalSemaphoreDesc.type = cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd;
         externalSemaphoreDesc.handle.fd = fd;
         cudaCheck(cudaImportExternalSemaphore(&m_cudaSemaphore, &externalSemaphoreDesc),
             "cudaImportExternalSemaphore render");
     }
 
-    void ExternalSemaphore::wait(cudaStream_t stream)
+    ExternalSemaphore::~ExternalSemaphore() { reset(); }
+
+    void ExternalSemaphore::wait(cudaStream_t stream, uint64_t value)
     {
         if (!m_cudaSemaphore) [[unlikely]]
             fatalError("External semaphore is not initialized");
 
         cudaExternalSemaphoreWaitParams waitParams {};
+        waitParams.params.fence.value = value;
         cudaCheck(cudaWaitExternalSemaphoresAsync(&m_cudaSemaphore, &waitParams, 1, stream),
             "cudaWaitExternalSemaphoresAsync render complete");
     }
@@ -432,75 +408,6 @@ namespace {
         m_cudaSemaphore = nullptr;
     }
 
-    FrameCompletionFence::~FrameCompletionFence()
-    {
-        reset();
-    }
-
-    FrameCompletionFence::FrameCompletionFence(VkDevice device)
-    {
-        create(device);
-    }
-
-    void FrameCompletionFence::create(VkDevice device)
-    {
-        reset();
-        m_renderComplete.create(device);
-        cudaCheck(cudaEventCreateWithFlags(&m_renderCompleteEvent, cudaEventDisableTiming),
-            "cudaEventCreate render complete");
-        m_signalPending = false;
-        m_cudaWaitQueued = false;
-    }
-
-    VkSemaphore FrameCompletionFence::semaphoreForSignal()
-    {
-        m_signalPending = true;
-        m_cudaWaitQueued = false;
-        return m_renderComplete.vulkanSemaphore();
-    }
-
-    void FrameCompletionFence::enqueueGPUWait(cudaStream_t stream)
-    {
-        if (!m_signalPending)
-            return;
-
-        if (m_cudaWaitQueued)
-            cudaCheck(cudaStreamWaitEvent(stream, m_renderCompleteEvent, 0), "cudaStreamWaitEvent render complete");
-        else {
-            m_renderComplete.wait(stream);
-            cudaCheck(cudaEventRecord(m_renderCompleteEvent, stream), "cudaEventRecord render complete");
-            m_cudaWaitQueued = true;
-        }
-    }
-
-    void FrameCompletionFence::synchronize(cudaStream_t stream)
-    {
-        enqueueGPUWait(stream);
-        if (!m_signalPending)
-            return;
-
-        cudaCheck(cudaEventSynchronize(m_renderCompleteEvent), "cudaEventSynchronize render complete");
-        m_signalPending = false;
-        m_cudaWaitQueued = false;
-    }
-
-    void FrameCompletionFence::trackCudaUse(cudaStream_t stream)
-    {
-        // Reusing this frame must wait for CUDA work that reads or writes frame-owned resources.
-        cudaCheck(cudaEventRecord(m_renderCompleteEvent, stream), "cudaEventRecord render complete");
-    }
-
-    void FrameCompletionFence::reset()
-    {
-        if (m_renderCompleteEvent) {
-            cudaCheck(cudaEventDestroy(m_renderCompleteEvent), "cudaEventDestroy render complete");
-            m_renderCompleteEvent = nullptr;
-        }
-        m_renderComplete.reset();
-        m_signalPending = false;
-        m_cudaWaitQueued = false;
-    }
-
     void destroyBuffer(Renderer::VulkanState& vk, Buffer& buffer)
     {
         if (buffer.cudaPtr)
@@ -512,6 +419,52 @@ namespace {
         if (buffer.memory)
             vkFreeMemory(vk.device, buffer.memory, nullptr);
         buffer = {};
+    }
+
+    void copyBuffer(Renderer::VulkanState& vk, VkBuffer source, VkBuffer destination, VkDeviceSize size)
+    {
+        const VkCommandBufferAllocateInfo allocInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = vk.commandPool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        vkCheck(vkAllocateCommandBuffers(vk.device, &allocInfo, &commandBuffer), "vkAllocateCommandBuffers copy");
+
+        const VkCommandBufferBeginInfo beginInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        };
+        vkCheck(vkBeginCommandBuffer(commandBuffer, &beginInfo), "vkBeginCommandBuffer copy");
+        const VkBufferCopy copyRegion {
+            .srcOffset = 0,
+            .dstOffset = 0,
+            .size = size,
+        };
+        vkCmdCopyBuffer(commandBuffer, source, destination, 1, &copyRegion);
+        vkCheck(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer copy");
+
+        const VkSubmitInfo submitInfo {
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &commandBuffer,
+        };
+        vkCheck(vkQueueSubmit(vk.graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE), "vkQueueSubmit copy");
+        vkCheck(vkQueueWaitIdle(vk.graphicsQueue), "vkQueueWaitIdle copy");
+        vkFreeCommandBuffers(vk.device, vk.commandPool, 1, &commandBuffer);
+    }
+
+    void uploadDeviceBuffer(Renderer::VulkanState& vk, Buffer& destination, const void* data, VkDeviceSize size)
+    {
+        Buffer staging = createHostBuffer(vk, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        void* mapped = nullptr;
+        vkCheck(vkMapMemory(vk.device, staging.memory, 0, size, 0, &mapped), "vkMapMemory staging upload");
+        std::memcpy(mapped, data, static_cast<std::size_t>(size));
+        vkUnmapMemory(vk.device, staging.memory);
+
+        copyBuffer(vk, staging.buffer, destination.buffer, size);
+        destroyBuffer(vk, staging);
     }
 
     void destroyImage(Renderer::VulkanState& vk, Image& image)
@@ -746,6 +699,7 @@ namespace {
             extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
         VkPhysicalDeviceVulkan12Features features12 {
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+            .timelineSemaphore = VK_TRUE,
             .shaderOutputViewportIndex = VK_TRUE,
             .shaderOutputLayer = VK_TRUE,
         };
@@ -935,7 +889,7 @@ namespace {
             .bindingCount = 3,
             .pBindings = vertexBindings,
         };
-        vkCheck(vkCreateDescriptorSetLayout(vk.device, &vertexLayoutInfo, nullptr, &vk.vertexSetLayout),
+        vkCheck(vkCreateDescriptorSetLayout(vk.device, &vertexLayoutInfo, nullptr, &vk.drawResourceSetLayout),
             "vkCreateDescriptorSetLayout vertices");
 
         const VkPushConstantRange pushConstantRange {
@@ -943,7 +897,7 @@ namespace {
             .offset = 0,
             .size = sizeof(Renderer::DrawPushConstants),
         };
-        const VkDescriptorSetLayout layouts[] { vk.vertexSetLayout };
+        const VkDescriptorSetLayout layouts[] { vk.drawResourceSetLayout };
         const VkPipelineLayoutCreateInfo pipelineLayoutInfo {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .setLayoutCount = 1,
@@ -954,16 +908,18 @@ namespace {
         vkCheck(vkCreatePipelineLayout(vk.device, &pipelineLayoutInfo, nullptr, &vk.pipelineLayout),
             "vkCreatePipelineLayout");
 
-        const VkShaderModule vertexShader
+        const VkShaderModule voxelVertexShader
+            = createShaderModule(vk.device, readFile(std::filesystem::path(BLOCKLAB_SHADER_DIR) / "voxel_vertex.spv"));
+        const VkShaderModule meshVertexShader
             = createShaderModule(vk.device, readFile(std::filesystem::path(BLOCKLAB_SHADER_DIR) / "mesh_vertex.spv"));
         const VkShaderModule fragmentShader
             = createShaderModule(vk.device, readFile(std::filesystem::path(BLOCKLAB_SHADER_DIR) / "mesh_fragment.spv"));
 
-        const VkPipelineShaderStageCreateInfo stages[] {
+        const VkPipelineShaderStageCreateInfo meshStages[] {
             {
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                 .stage = VK_SHADER_STAGE_VERTEX_BIT,
-                .module = vertexShader,
+                .module = meshVertexShader,
                 .pName = "meshVertexMain",
             },
             {
@@ -973,10 +929,26 @@ namespace {
                 .pName = "meshFragmentMain",
             },
         };
-        const VkPipelineVertexInputStateCreateInfo vertexInput {
+
+        const VkPipelineShaderStageCreateInfo voxelStages[] {
+            {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage = VK_SHADER_STAGE_VERTEX_BIT,
+                .module = voxelVertexShader,
+                .pName = "voxelVertexMain",
+            },
+            {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+                .module = fragmentShader,
+                .pName = "meshFragmentMain",
+            },
+        };
+
+        const VkPipelineVertexInputStateCreateInfo emptyVertexInput {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
         };
-        const VkPipelineInputAssemblyStateCreateInfo inputAssembly {
+        const VkPipelineInputAssemblyStateCreateInfo triangleInputAssembly {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
             .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
         };
@@ -1022,25 +994,50 @@ namespace {
             .attachmentCount = 1,
             .pAttachments = &colorBlendAttachment,
         };
-        const VkGraphicsPipelineCreateInfo pipelineInfo {
-            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-            .stageCount = 2,
-            .pStages = stages,
-            .pVertexInputState = &vertexInput,
-            .pInputAssemblyState = &inputAssembly,
-            .pViewportState = &viewportState,
-            .pRasterizationState = &rasterizer,
-            .pMultisampleState = &multisample,
-            .pDepthStencilState = &depthStencil,
-            .pColorBlendState = &colorBlend,
-            .layout = vk.pipelineLayout,
-            .renderPass = vk.renderPass,
-            .subpass = 0,
-        };
-        vkCheck(vkCreateGraphicsPipelines(vk.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vk.pipeline),
+        const VkGraphicsPipelineCreateInfo pipelineInfo[]
+            = { {
+                    // mesh drawing pipeline
+                    .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                    .stageCount = std::size(meshStages),
+                    .pStages = meshStages,
+                    .pVertexInputState = &emptyVertexInput,
+                    .pInputAssemblyState = &triangleInputAssembly,
+                    .pViewportState = &viewportState,
+                    .pRasterizationState = &rasterizer,
+                    .pMultisampleState = &multisample,
+                    .pDepthStencilState = &depthStencil,
+                    .pColorBlendState = &colorBlend,
+                    .layout = vk.pipelineLayout,
+                    .renderPass = vk.renderPass,
+                    .subpass = 0,
+                },
+                  {
+                      // voxel drawing pipeline
+                      .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                      .stageCount = std::size(voxelStages),
+                      .pStages = voxelStages,
+                      .pVertexInputState = &emptyVertexInput,
+                      .pInputAssemblyState = &triangleInputAssembly,
+                      .pViewportState = &viewportState,
+                      .pRasterizationState = &rasterizer,
+                      .pMultisampleState = &multisample,
+                      .pDepthStencilState = &depthStencil,
+                      .pColorBlendState = &colorBlend,
+                      .layout = vk.pipelineLayout,
+                      .renderPass = vk.renderPass,
+                      .subpass = 0,
+                  } };
+
+        VkPipeline pipelines[2];
+        vkCheck(vkCreateGraphicsPipelines(
+                    vk.device, VK_NULL_HANDLE, std::size(pipelineInfo), pipelineInfo, nullptr, pipelines),
             "vkCreateGraphicsPipelines");
+        vk.meshPipeline = pipelines[0];
+        vk.voxelPipeline = pipelines[1];
+
+        vkDestroyShaderModule(vk.device, voxelVertexShader, nullptr);
         vkDestroyShaderModule(vk.device, fragmentShader, nullptr);
-        vkDestroyShaderModule(vk.device, vertexShader, nullptr);
+        vkDestroyShaderModule(vk.device, meshVertexShader, nullptr);
     }
 
     void createFramebuffers(Renderer::VulkanState& vk)
@@ -1101,34 +1098,37 @@ namespace {
         };
         vkCheck(vkAllocateCommandBuffers(vk.device, &allocInfo, vk.commandBuffers.data()), "vkAllocateCommandBuffers");
 
-        const VkSemaphoreCreateInfo semaphoreInfo { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
         const VkFenceCreateInfo fenceInfo { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
             .flags = VK_FENCE_CREATE_SIGNALED_BIT };
         if (vk.swapchain) {
+            const VkSemaphoreCreateInfo semaphoreInfo { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
             vkCheck(
                 vkCreateSemaphore(vk.device, &semaphoreInfo, nullptr, &vk.imageAvailable), "vkCreateSemaphore image");
             vkCheck(
                 vkCreateSemaphore(vk.device, &semaphoreInfo, nullptr, &vk.renderFinished), "vkCreateSemaphore render");
             vkCheck(vkCreateFence(vk.device, &fenceInfo, nullptr, &vk.inFlight), "vkCreateFence");
         } else {
-            cudaCheck(cudaStreamCreateWithFlags(&vk.renderWaitStream, cudaStreamNonBlocking),
-                "cudaStreamCreate render wait");
             for (std::size_t i = 0; i < vk.offscreenFrames.size(); ++i) {
                 vk.offscreenFrames[i].commandBuffer = vk.commandBuffers[i];
                 vkCheck(vkCreateFence(vk.device, &fenceInfo, nullptr, &vk.offscreenFrames[i].fence),
                     "vkCreateFence offscreen");
-                vk.offscreenFrames[i].completion = FrameCompletionFence(vk.device);
+                vk.offscreenFrames[i].frameCompletionSemaphore = { vk.device };
             }
         }
     }
 
     void createDescriptors(Renderer::VulkanState& vk)
     {
-        // Vertex buffer layout: per-env terrain regions first, followed by one shared static pig mesh.
-        vk.vertexCapacityBytes
-            = (static_cast<VkDeviceSize>(MaxTerrainVertices) * vk.batchSize + PigMesh::verticesCount())
-            * sizeof(MeshVertex);
-        vk.vertexBuffer = createExportedDeviceBuffer(vk, vk.vertexCapacityBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        const VkDeviceSize terrainHeadersSizeBytes = sizeof(TerrainHeader) * vk.batchSize;
+        vk.terrainHeaderBuffer
+            = createExportedDeviceBuffer(vk, terrainHeadersSizeBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+
+        vk.terrainVoxelBufferCapacityBytes = static_cast<VkDeviceSize>(MaxTerrainVoxels) * vk.batchSize * VoxelSize;
+        vk.terrainVoxelBuffer
+            = createExportedDeviceBuffer(vk, vk.terrainVoxelBufferCapacityBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        vk.pigVertexBuffer
+            = createDeviceBuffer(vk, static_cast<VkDeviceSize>(PigMesh::verticesCount()) * sizeof(MeshVertex),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         vk.instanceBuffer = createHostBuffer(vk, sizeof(Renderer::EntityInstance) * MaxEntityInstances * vk.batchSize,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         vk.paramsBuffer
@@ -1146,27 +1146,36 @@ namespace {
         }
 
         const VkDescriptorPoolSize poolSizes[] {
-            { .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 3 },
+            { .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 6 },
         };
         const VkDescriptorPoolCreateInfo poolInfo {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-            .maxSets = 1U,
+            .maxSets = 2U,
             .poolSizeCount = 1,
             .pPoolSizes = poolSizes,
         };
         vkCheck(vkCreateDescriptorPool(vk.device, &poolInfo, nullptr, &vk.descriptorPool), "vkCreateDescriptorPool");
 
-        const VkDescriptorSetLayout layouts[] { vk.vertexSetLayout };
+        const VkDescriptorSetLayout layouts[] { vk.drawResourceSetLayout, vk.drawResourceSetLayout };
+        VkDescriptorSet descriptorSets[2] {};
         const VkDescriptorSetAllocateInfo allocInfo {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .descriptorPool = vk.descriptorPool,
-            .descriptorSetCount = 1,
+            .descriptorSetCount = 2,
             .pSetLayouts = layouts,
         };
-        vkCheck(vkAllocateDescriptorSets(vk.device, &allocInfo, &vk.vertexDescriptorSet), "vkAllocateDescriptorSets");
+        vkCheck(vkAllocateDescriptorSets(vk.device, &allocInfo, descriptorSets), "vkAllocateDescriptorSets");
+        vk.terrainDescriptorSet = descriptorSets[0];
+        vk.pigDescriptorSet = descriptorSets[1];
 
-        const VkDescriptorBufferInfo vertexInfo {
-            .buffer = vk.vertexBuffer.buffer, .offset = 0, .range = vk.vertexBuffer.size
+        const VkDescriptorBufferInfo terrainHeaderInfo {
+            .buffer = vk.terrainHeaderBuffer.buffer, .offset = 0, .range = vk.terrainHeaderBuffer.size
+        };
+        const VkDescriptorBufferInfo voxelInfo {
+            .buffer = vk.terrainVoxelBuffer.buffer, .offset = 0, .range = vk.terrainVoxelBuffer.size
+        };
+        const VkDescriptorBufferInfo pigVertexInfo {
+            .buffer = vk.pigVertexBuffer.buffer, .offset = 0, .range = vk.pigVertexBuffer.size
         };
         const VkDescriptorBufferInfo instanceInfo {
             .buffer = vk.instanceBuffer.buffer, .offset = 0, .range = vk.instanceBuffer.size
@@ -1174,32 +1183,63 @@ namespace {
         const VkDescriptorBufferInfo paramsInfo {
             .buffer = vk.paramsBuffer.buffer, .offset = 0, .range = vk.paramsBuffer.size
         };
-        const VkWriteDescriptorSet vertexWrite {
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = vk.vertexDescriptorSet,
-            .dstBinding = 0,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &vertexInfo,
+
+        const std::array<VkWriteDescriptorSet, 3> terrainWrites = {
+            VkWriteDescriptorSet {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = vk.terrainDescriptorSet,
+                .dstBinding = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pBufferInfo = &terrainHeaderInfo,
+            },
+            VkWriteDescriptorSet {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = vk.terrainDescriptorSet,
+                .dstBinding = 1,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pBufferInfo = &voxelInfo,
+            },
+            VkWriteDescriptorSet {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = vk.terrainDescriptorSet,
+                .dstBinding = 2,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pBufferInfo = &paramsInfo,
+            },
         };
-        const VkWriteDescriptorSet instanceWrite {
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = vk.vertexDescriptorSet,
-            .dstBinding = 1,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &instanceInfo,
+
+        const std::array<VkWriteDescriptorSet, 3> pigWrites = {
+            VkWriteDescriptorSet {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = vk.pigDescriptorSet,
+                .dstBinding = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pBufferInfo = &pigVertexInfo,
+            },
+            VkWriteDescriptorSet {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = vk.pigDescriptorSet,
+                .dstBinding = 1,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pBufferInfo = &instanceInfo,
+            },
+            VkWriteDescriptorSet {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = vk.pigDescriptorSet,
+                .dstBinding = 2,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pBufferInfo = &paramsInfo,
+            },
         };
-        const VkWriteDescriptorSet paramsWrite {
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = vk.vertexDescriptorSet,
-            .dstBinding = 2,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &paramsInfo,
-        };
-        const VkWriteDescriptorSet storageWrites[] { vertexWrite, instanceWrite, paramsWrite };
-        vkUpdateDescriptorSets(vk.device, 3, storageWrites, 0, nullptr);
+        vkUpdateDescriptorSets(
+            vk.device, static_cast<uint32_t>(terrainWrites.size()), terrainWrites.data(), 0, nullptr);
+        vkUpdateDescriptorSets(vk.device, static_cast<uint32_t>(pigWrites.size()), pigWrites.data(), 0, nullptr);
     }
 
     void initVulkan(Renderer::VulkanState& vk, GLFWwindow* window, RenderConfig config)
@@ -1234,9 +1274,7 @@ namespace {
         for (OffscreenFrame& frame : vk.offscreenFrames) {
             if (frame.observationTensor)
                 cudaCheck(cudaFree(frame.observationTensor), "cudaFree observation tensor");
-            if (vk.renderWaitStream)
-                frame.completion.synchronize(vk.renderWaitStream);
-            frame.completion.reset();
+            frame.frameCompletionSemaphore = {};
             destroyBuffer(vk, frame.observationBuffer);
             destroyBuffer(vk, frame.paramsBuffer);
             if (frame.fence)
@@ -1248,34 +1286,39 @@ namespace {
         }
         destroyBuffer(vk, vk.paramsBuffer);
         destroyBuffer(vk, vk.instanceBuffer);
-        destroyBuffer(vk, vk.vertexBuffer);
-        if (vk.renderWaitStream) {
-            cudaCheck(cudaStreamDestroy(vk.renderWaitStream), "cudaStreamDestroy render wait");
-            vk.renderWaitStream = nullptr;
-        }
+        destroyBuffer(vk, vk.pigVertexBuffer);
+        destroyBuffer(vk, vk.terrainHeaderBuffer);
+        destroyBuffer(vk, vk.terrainVoxelBuffer);
         if (vk.descriptorPool)
             vkDestroyDescriptorPool(vk.device, vk.descriptorPool, nullptr);
+
         if (vk.inFlight)
             vkDestroyFence(vk.device, vk.inFlight, nullptr);
         if (vk.renderFinished)
             vkDestroySemaphore(vk.device, vk.renderFinished, nullptr);
         if (vk.imageAvailable)
             vkDestroySemaphore(vk.device, vk.imageAvailable, nullptr);
+
         if (vk.commandPool)
             vkDestroyCommandPool(vk.device, vk.commandPool, nullptr);
         for (VkFramebuffer framebuffer : vk.framebuffers)
             vkDestroyFramebuffer(vk.device, framebuffer, nullptr);
-        if (vk.pipeline)
-            vkDestroyPipeline(vk.device, vk.pipeline, nullptr);
+
+        if (vk.meshPipeline)
+            vkDestroyPipeline(vk.device, vk.meshPipeline, nullptr);
+        if (vk.voxelPipeline)
+            vkDestroyPipeline(vk.device, vk.voxelPipeline, nullptr);
+
         if (vk.pipelineLayout)
             vkDestroyPipelineLayout(vk.device, vk.pipelineLayout, nullptr);
-        if (vk.paramsSetLayout)
-            vkDestroyDescriptorSetLayout(vk.device, vk.paramsSetLayout, nullptr);
-        if (vk.vertexSetLayout)
-            vkDestroyDescriptorSetLayout(vk.device, vk.vertexSetLayout, nullptr);
+        if (vk.drawResourceSetLayout)
+            vkDestroyDescriptorSetLayout(vk.device, vk.drawResourceSetLayout, nullptr);
+
         if (vk.renderPass)
             vkDestroyRenderPass(vk.device, vk.renderPass, nullptr);
+
         destroyImage(vk, vk.depthImage);
+
         for (VkImageView view : vk.swapchainImageViews)
             vkDestroyImageView(vk.device, view, nullptr);
         if (vk.swapchain)
@@ -1340,8 +1383,6 @@ void Renderer::resize(int32_t width, int32_t height)
     m_config.height = std::max(1, height);
 }
 
-void Renderer::setCudaObservationExportEnabled(bool enabled) { m_cudaObservationExportEnabled = enabled; }
-
 std::size_t Renderer::lastObservationFrameIndex(std::size_t slot) const
 {
     if (!m_vk || m_vk->swapchain || m_vk->offscreenFrames.empty())
@@ -1357,24 +1398,17 @@ void* Renderer::cudaObservationTensorData(std::size_t frameIndex, uintptr_t stre
         return nullptr;
     if (frameIndex >= m_vk->offscreenFrames.size()) [[unlikely]]
         fatalError("Invalid observation frame index: ", frameIndex);
+
     OffscreenFrame& frame = m_vk->offscreenFrames[frameIndex];
+    assert(frame.observationVersion != OffscreenFrame::NO_OBSERVATION_VERSION);
     auto stream = reinterpret_cast<cudaStream_t>(streamHandle);
-    frame.completion.enqueueGPUWait(stream);
+    frame.conversionTaskFuture.enqueueGPUWait(stream);
+    frame.frameCompletionSemaphore.wait(stream, frame.observationVersion);
     convertRgba8ToFloatNchw(frame.observationBuffer.cudaPtr, frame.observationTensor, m_vk->batchSize,
         m_vk->renderExtent.width, m_vk->renderExtent.height, streamHandle);
-    frame.completion.trackCudaUse(stream);
+    frame.conversionTaskFuture = { stream };
     frame.observationTensorValid = true;
     return frame.observationTensor;
-}
-
-void Renderer::synchronizeObservation(std::size_t frameIndex)
-{
-    if (!m_vk || m_vk->swapchain || m_vk->offscreenFrames.empty())
-        return;
-    if (frameIndex >= m_vk->offscreenFrames.size())
-        fatalError("Invalid observation frame index: ", frameIndex);
-    OffscreenFrame& frame = m_vk->offscreenFrames[frameIndex];
-    frame.completion.synchronize(m_vk->renderWaitStream);
 }
 
 std::size_t Renderer::cudaObservationTensorBytes() const
@@ -1396,22 +1430,16 @@ void Renderer::initializeBatchData()
         m_vk->swapchain ? ObservationDevice::VulkanSwapchain : ObservationDevice::Cuda,
         m_vk->swapchain ? ObservationFormat::RGBA8 : ObservationFormat::FloatNCHW, m_batchSize);
     m_observation.setVersion(m_observationVersion);
-    m_pigMeshVertexOffset = MaxTerrainVertices * m_vk->batchSize;
     if (!m_pigMeshUploaded) {
         PigMesh pigMeshGenerator;
         const std::span<MeshVertex> pigMesh = pigMeshGenerator.generate();
         m_pigMeshVertexCount = static_cast<uint32_t>(pigMesh.size());
-        MeshVertex* const vertices = static_cast<MeshVertex*>(m_vk->vertexBuffer.cudaPtr);
-        cudaCheck(cudaMemcpy(vertices + m_pigMeshVertexOffset, pigMesh.data(), sizeof(MeshVertex) * pigMesh.size(),
-                      cudaMemcpyHostToDevice),
-            "cudaMemcpy pig mesh to Vulkan vertex buffer");
-        cudaCheck(cudaDeviceSynchronize(), "cudaDeviceSynchronize pig mesh upload");
+        uploadDeviceBuffer(*m_vk, m_vk->pigVertexBuffer, pigMesh.data(), sizeof(MeshVertex) * pigMesh.size());
         m_pigMeshUploaded = true;
     }
     for (uint32_t i = 0; i < m_batchSize; ++i) {
         RenderSlot& slot = m_slots[i];
-        slot.terrainVertexOffset = i * MaxTerrainVertices;
-        slot.pigVertexOffset = m_pigMeshVertexOffset;
+        slot.terrainVoxelOffset = i * MaxTerrainVoxels;
         slot.pigVertexCount = m_pigMeshVertexCount;
         slot.instanceOffset = i * MaxEntityInstances;
         m_observation.setSlot(i,
@@ -1419,12 +1447,6 @@ void Renderer::initializeBatchData()
                     ? reinterpret_cast<void*>(m_vk->swapchain)
                     : reinterpret_cast<void*>(m_vk->offscreenFrames[0].color.image)));
     }
-}
-
-void Renderer::validateBatchSize(std::size_t batchSize) const
-{
-    if (batchSize != m_batchSize) [[unlikely]]
-        fatalError("Renderer batch size cannot change after initialization");
 }
 
 Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, const World& world) const
@@ -1481,7 +1503,7 @@ void Renderer::uploadInstances(std::size_t slotIndex, const World& world)
     vkUnmapMemory(vk.device, vk.instanceBuffer.memory);
 }
 
-void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderSlot> slots)
+void Renderer::drawFrame()
 {
     VulkanState& vk = *m_vk;
     OffscreenFrame* offscreenFrame = nullptr;
@@ -1500,18 +1522,26 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
             return;
     } else {
         offscreenFrame = &vk.offscreenFrames[vk.nextOffscreenFrame];
-        offscreenFrame->completion.synchronize(vk.renderWaitStream);
+
+        // The observation is valid until step() or reset() is called.
+        // So, it's not mandatory to wait until previous observation conversion is completed
+        // TODO But for better stability and API simplification it's better to implement a GPU-side fence for that.
+
+        submitFence = offscreenFrame->fence;
+        vkWaitForFences(vk.device, 1, &offscreenFrame->fence, VK_TRUE, UINT64_MAX);
+        vkResetFences(vk.device, 1, &offscreenFrame->fence);
+
         vk.lastSubmittedOffscreenFrame = vk.nextOffscreenFrame;
         vk.nextOffscreenFrame = (vk.nextOffscreenFrame + 1U) % vk.offscreenFrames.size();
         offscreenFrame->observationTensorValid = false;
-        for (RenderSlot& slot : slots)
-            slot.lastObservationFrame = vk.lastSubmittedOffscreenFrame;
+        for (uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex)
+            m_slots[envIndex].lastObservationFrame = vk.lastSubmittedOffscreenFrame;
     }
 
     void* mapped = nullptr;
-    const VkDeviceSize paramsBytes = sizeof(RenderParams) * params.size();
+    const VkDeviceSize paramsBytes = sizeof(RenderParams) * m_batchSize;
     vkCheck(vkMapMemory(vk.device, vk.paramsBuffer.memory, 0, paramsBytes, 0, &mapped), "vkMapMemory params");
-    std::memcpy(mapped, params.data(), static_cast<std::size_t>(paramsBytes));
+    std::memcpy(mapped, m_renderParams.get(), static_cast<std::size_t>(paramsBytes));
     vkUnmapMemory(vk.device, vk.paramsBuffer.memory);
 
     VkCommandBuffer commandBuffer = offscreenFrame ? offscreenFrame->commandBuffer : vk.commandBuffers[imageIndex];
@@ -1531,32 +1561,63 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
         .pClearValues = clearValues,
     };
     vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipeline);
-    vkCmdBindDescriptorSets(
-        commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipelineLayout, 0, 1, &vk.vertexDescriptorSet, 0, nullptr);
-    for (uint32_t envIndex = 0; envIndex < slots.size(); ++envIndex) {
-        RenderSlot& slot = slots[envIndex];
-        if (slot.pendingGeneration.valid()) {
-            const WorldGenerationOutput& output = slot.pendingGeneration.get();
-            slot.terrainVertexCount = output.meshVertexCount;
-            slot.lastWorldVersion = output.worldVersion;
-            slot.pendingGeneration = {};
-        }
+
+    const auto pushConstants = [&vk, commandBuffer, offscreenFrame](uint32_t envIndex) {
         DrawPushConstants pushConstants {
             .envIndex = envIndex,
             .layerIndex = offscreenFrame ? envIndex : 0U,
         };
         vkCmdPushConstants(
             commandBuffer, vk.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pushConstants), &pushConstants);
-        if (slot.terrainVertexCount > 0)
-            vkCmdDraw(commandBuffer, slot.terrainVertexCount, 1, slot.terrainVertexOffset, slot.instanceOffset);
+    };
+
+    bool pipelineBound = false;
+    for (uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex) {
+        RenderSlot& slot = m_slots[envIndex];
+        pushConstants(envIndex);
         if (slot.pigVertexCount > 0 && slot.instanceCount > 0) {
-            vkCmdDraw(
-                commandBuffer, slot.pigVertexCount, slot.instanceCount, slot.pigVertexOffset, slot.instanceOffset + 1U);
+            if (!pipelineBound) {
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.meshPipeline);
+                pipelineBound = true;
+            }
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipelineLayout, 0, 1,
+                &vk.pigDescriptorSet, 0, nullptr);
+            vkCmdDraw(commandBuffer, slot.pigVertexCount, slot.instanceCount, 0, slot.instanceOffset + 1U);
+        }
+    }
+
+    // TODO implement
+    // some slots may still be pending generation at this point, but we have to draw the ones that are ready, to avoid
+    // stalling the GPU for too long. We will draw the pending ones in the next frame.
+    // std::vector<uint32_t> postponedSlots;
+
+    pipelineBound = false;
+    for (uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex) {
+        RenderSlot& slot = m_slots[envIndex];
+        if (slot.pendingGeneration.valid()) {
+            // TODO theoretically we could postpone this slot and switch to another slot, to reduce stalling.
+            const WorldGenerationOutput& output = slot.pendingGeneration.get();
+            slot.terrainVoxelCount = output.voxelCount;
+            slot.lastWorldVersion = output.worldVersion;
+            slot.pendingGeneration = {};
+        }
+        pushConstants(envIndex);
+
+        if (slot.terrainVoxelCount > 0) {
+            if (!pipelineBound) {
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.voxelPipeline);
+                pipelineBound = true;
+            }
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipelineLayout, 0, 1,
+                &vk.terrainDescriptorSet, 0, nullptr);
+            // 6 faces, every face has 2 triangles, every triangle has 3 vertices = 36.
+            constexpr uint32_t verticesPerVoxel = 36;
+            vkCmdDraw(commandBuffer, verticesPerVoxel * slot.terrainVoxelCount, 1,
+                verticesPerVoxel * slot.terrainVoxelOffset, 0);
         }
     }
     vkCmdEndRenderPass(commandBuffer);
-    if (offscreenFrame && m_cudaObservationExportEnabled) {
+    if (offscreenFrame) {
         const VkBufferImageCopy copyRegion {
             .bufferOffset = 0,
             .bufferRowLength = 0,
@@ -1564,20 +1625,33 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
             .imageSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                 .mipLevel = 0,
                 .baseArrayLayer = 0,
-                .layerCount = static_cast<uint32_t>(slots.size()) },
+                .layerCount = m_batchSize },
             .imageOffset = { 0, 0, 0 },
             .imageExtent = { vk.renderExtent.width, vk.renderExtent.height, 1 },
         };
         vkCmdCopyImageToBuffer(commandBuffer, offscreenFrame->color.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             offscreenFrame->observationBuffer.buffer, 1, &copyRegion);
+
+        offscreenFrame->observationVersion = m_observationVersion;
     }
     vkCheck(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
 
     const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    const VkSemaphore signalSemaphore = offscreenFrame ? offscreenFrame->completion.semaphoreForSignal()
-                                                       : vk.renderFinished;
+    const VkSemaphore signalSemaphore
+        = offscreenFrame ? offscreenFrame->frameCompletionSemaphore.vulkanSemaphore() : vk.renderFinished;
+
+    const uint64_t signalValues[] = { m_observationVersion };
+    const VkTimelineSemaphoreSubmitInfo timelineSubmitInfo {
+        .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+        .pNext = nullptr,
+        .waitSemaphoreValueCount = 0,
+        .pWaitSemaphoreValues = nullptr,
+        .signalSemaphoreValueCount = std::size(signalValues),
+        .pSignalSemaphoreValues = signalValues,
+    };
     const VkSubmitInfo submitInfo {
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .pNext = vk.swapchain ? nullptr : &timelineSubmitInfo,
         .waitSemaphoreCount = vk.swapchain ? 1U : 0U,
         .pWaitSemaphores = vk.swapchain ? &vk.imageAvailable : nullptr,
         .pWaitDstStageMask = vk.swapchain ? &waitStage : nullptr,
@@ -1586,9 +1660,8 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
         .signalSemaphoreCount = 1U,
         .pSignalSemaphores = &signalSemaphore,
     };
+    // TODO migrate to vkQueueSubmit2
     vkCheck(vkQueueSubmit(vk.graphicsQueue, 1, &submitInfo, submitFence), "vkQueueSubmit");
-    if (offscreenFrame)
-        offscreenFrame->completion.enqueueGPUWait(vk.renderWaitStream);
 
     if (vk.swapchain) {
         const VkPresentInfoKHR presentInfo {
@@ -1607,13 +1680,14 @@ const Observation& Renderer::renderObservations(std::span<const World> worlds, s
 {
     if (worlds.size() != agents.size()) [[unlikely]]
         fatalError("renderObservations world/agent count mismatch");
-    validateBatchSize(worlds.size());
+
+    ++m_observationVersion;
+    assert(worlds.size() == m_batchSize);
     for (std::size_t i = 0; i < worlds.size(); ++i) {
         renderObservationSlot(i, worlds[i], agents[i]);
         m_renderParams[i] = buildRenderParams(agents[i], worlds[i]);
     }
-    drawFrame({ m_renderParams.get(), m_batchSize }, { m_slots.get(), m_batchSize });
-    ++m_observationVersion;
+    drawFrame();
     m_observation.setVersion(m_observationVersion);
     for (uint32_t i = 0; i < m_batchSize; ++i) {
         RenderSlot& slot = m_slots[i];
@@ -1636,20 +1710,25 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
         = meshDelta.x > MeshCacheStride || meshDelta.y > MeshCacheStride || meshDelta.z > MeshCacheStride;
     if (slot.lastWorldVersion != world.version() || agentLeftMeshCache) {
         if (!m_vk->swapchain) {
-            for (OffscreenFrame& frame : m_vk->offscreenFrames)
-                frame.completion.synchronize(m_vk->renderWaitStream);
+            // TODO get rid of CPU synchronization. It's better to use one more semaphore instead
+            for (OffscreenFrame& frame : m_vk->offscreenFrames) {
+                if (frame.observationVersion != OffscreenFrame::NO_OBSERVATION_VERSION) [[likely]]
+                    frame.frameCompletionSemaphore.wait(m_worldGenerator.stream(), frame.observationVersion);
+            }
         } else
             vkWaitForFences(m_vk->device, 1, &m_vk->inFlight, VK_TRUE, UINT64_MAX);
 
-        MeshVertex* const vertices = static_cast<MeshVertex*>(m_vk->vertexBuffer.cudaPtr);
+        WorldGenerationBuffers buffers;
+        buffers.header = &reinterpret_cast<TerrainHeader*>(m_vk->terrainHeaderBuffer.cudaPtr)[slotIndex];
+        buffers.maxVoxelCount = MaxTerrainVoxels;
+        buffers.voxels = reinterpret_cast<Voxel*>(
+            static_cast<std::byte*>(m_vk->terrainVoxelBuffer.cudaPtr) + slot.terrainVoxelOffset * VoxelSize);
+        buffers.blocks = world.borrowGenerationBuffers();
+
         CudaSharedFuture<WorldGenerationOutput> generation
-            = m_worldGenerator
-                  .generate(world, agent,
-                      world.borrowGenerationBuffers({ vertices + slot.terrainVertexOffset, MaxTerrainVertices }))
-                  .share();
+            = m_worldGenerator.generate(world, agent, std::move(buffers)).share();
         world.updateGeneration(generation);
         slot.pendingGeneration = std::move(generation);
-        slot.terrainVertexCount = 0;
         slot.lastWorldVersion = world.version();
         slot.lastMeshCenter = agentBlock;
     }
