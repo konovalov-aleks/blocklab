@@ -235,9 +235,9 @@ struct Renderer::VulkanState {
     std::size_t nextOffscreenFrame = 0;
     std::size_t lastSubmittedOffscreenFrame = 0;
     VkRenderPass renderPass = VK_NULL_HANDLE;
-    VkDescriptorSetLayout vertexSetLayout = VK_NULL_HANDLE;
-    VkDescriptorSetLayout paramsSetLayout = VK_NULL_HANDLE;
-    // TODO use separate pipeline layouts for mesh and voxel pipelines
+
+    VkDescriptorSetLayout drawResourceSetLayout = VK_NULL_HANDLE;
+
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
 
     VkPipeline meshPipeline = VK_NULL_HANDLE;
@@ -251,6 +251,7 @@ struct Renderer::VulkanState {
     VkDescriptorSet terrainDescriptorSet = VK_NULL_HANDLE;
     VkDescriptorSet pigDescriptorSet = VK_NULL_HANDLE;
 
+    Buffer terrainHeaderBuffer;
     Buffer terrainVoxelBuffer;
     Buffer pigVertexBuffer;
     Buffer instanceBuffer;
@@ -888,7 +889,7 @@ namespace {
             .bindingCount = 3,
             .pBindings = vertexBindings,
         };
-        vkCheck(vkCreateDescriptorSetLayout(vk.device, &vertexLayoutInfo, nullptr, &vk.vertexSetLayout),
+        vkCheck(vkCreateDescriptorSetLayout(vk.device, &vertexLayoutInfo, nullptr, &vk.drawResourceSetLayout),
             "vkCreateDescriptorSetLayout vertices");
 
         const VkPushConstantRange pushConstantRange {
@@ -896,7 +897,7 @@ namespace {
             .offset = 0,
             .size = sizeof(Renderer::DrawPushConstants),
         };
-        const VkDescriptorSetLayout layouts[] { vk.vertexSetLayout };
+        const VkDescriptorSetLayout layouts[] { vk.drawResourceSetLayout };
         const VkPipelineLayoutCreateInfo pipelineLayoutInfo {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .setLayoutCount = 1,
@@ -1118,6 +1119,10 @@ namespace {
 
     void createDescriptors(Renderer::VulkanState& vk)
     {
+        const VkDeviceSize terrainHeadersSizeBytes = sizeof(TerrainHeader) * vk.batchSize;
+        vk.terrainHeaderBuffer
+            = createExportedDeviceBuffer(vk, terrainHeadersSizeBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+
         vk.terrainVoxelBufferCapacityBytes = static_cast<VkDeviceSize>(MaxTerrainVoxels) * vk.batchSize * VoxelSize;
         vk.terrainVoxelBuffer
             = createExportedDeviceBuffer(vk, vk.terrainVoxelBufferCapacityBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -1151,7 +1156,7 @@ namespace {
         };
         vkCheck(vkCreateDescriptorPool(vk.device, &poolInfo, nullptr, &vk.descriptorPool), "vkCreateDescriptorPool");
 
-        const VkDescriptorSetLayout layouts[] { vk.vertexSetLayout, vk.vertexSetLayout };
+        const VkDescriptorSetLayout layouts[] { vk.drawResourceSetLayout, vk.drawResourceSetLayout };
         VkDescriptorSet descriptorSets[2] {};
         const VkDescriptorSetAllocateInfo allocInfo {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -1163,6 +1168,9 @@ namespace {
         vk.terrainDescriptorSet = descriptorSets[0];
         vk.pigDescriptorSet = descriptorSets[1];
 
+        const VkDescriptorBufferInfo terrainHeaderInfo {
+            .buffer = vk.terrainHeaderBuffer.buffer, .offset = 0, .range = vk.terrainHeaderBuffer.size
+        };
         const VkDescriptorBufferInfo voxelInfo {
             .buffer = vk.terrainVoxelBuffer.buffer, .offset = 0, .range = vk.terrainVoxelBuffer.size
         };
@@ -1176,11 +1184,19 @@ namespace {
             .buffer = vk.paramsBuffer.buffer, .offset = 0, .range = vk.paramsBuffer.size
         };
 
-        const std::array<VkWriteDescriptorSet, 2> terrainWrites = {
+        const std::array<VkWriteDescriptorSet, 3> terrainWrites = {
             VkWriteDescriptorSet {
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 .dstSet = vk.terrainDescriptorSet,
                 .dstBinding = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pBufferInfo = &terrainHeaderInfo,
+            },
+            VkWriteDescriptorSet {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = vk.terrainDescriptorSet,
+                .dstBinding = 1,
                 .descriptorCount = 1,
                 .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                 .pBufferInfo = &voxelInfo,
@@ -1188,7 +1204,7 @@ namespace {
             VkWriteDescriptorSet {
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 .dstSet = vk.terrainDescriptorSet,
-                .dstBinding = 1,
+                .dstBinding = 2,
                 .descriptorCount = 1,
                 .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                 .pBufferInfo = &paramsInfo,
@@ -1271,6 +1287,7 @@ namespace {
         destroyBuffer(vk, vk.paramsBuffer);
         destroyBuffer(vk, vk.instanceBuffer);
         destroyBuffer(vk, vk.pigVertexBuffer);
+        destroyBuffer(vk, vk.terrainHeaderBuffer);
         destroyBuffer(vk, vk.terrainVoxelBuffer);
         if (vk.descriptorPool)
             vkDestroyDescriptorPool(vk.device, vk.descriptorPool, nullptr);
@@ -1294,10 +1311,8 @@ namespace {
 
         if (vk.pipelineLayout)
             vkDestroyPipelineLayout(vk.device, vk.pipelineLayout, nullptr);
-        if (vk.paramsSetLayout)
-            vkDestroyDescriptorSetLayout(vk.device, vk.paramsSetLayout, nullptr);
-        if (vk.vertexSetLayout)
-            vkDestroyDescriptorSetLayout(vk.device, vk.vertexSetLayout, nullptr);
+        if (vk.drawResourceSetLayout)
+            vkDestroyDescriptorSetLayout(vk.device, vk.drawResourceSetLayout, nullptr);
 
         if (vk.renderPass)
             vkDestroyRenderPass(vk.device, vk.renderPass, nullptr);
@@ -1434,12 +1449,6 @@ void Renderer::initializeBatchData()
     }
 }
 
-void Renderer::validateBatchSize(std::size_t batchSize) const
-{
-    if (batchSize != m_batchSize) [[unlikely]]
-        fatalError("Renderer batch size cannot change after initialization");
-}
-
 Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, const World& world) const
 {
     const Vec3 origin = agent.position + Vec3 { 0.0f, EyeHeight, 0.0f };
@@ -1494,7 +1503,7 @@ void Renderer::uploadInstances(std::size_t slotIndex, const World& world)
     vkUnmapMemory(vk.device, vk.instanceBuffer.memory);
 }
 
-void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderSlot> slots)
+void Renderer::drawFrame()
 {
     VulkanState& vk = *m_vk;
     OffscreenFrame* offscreenFrame = nullptr;
@@ -1525,14 +1534,14 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
         vk.lastSubmittedOffscreenFrame = vk.nextOffscreenFrame;
         vk.nextOffscreenFrame = (vk.nextOffscreenFrame + 1U) % vk.offscreenFrames.size();
         offscreenFrame->observationTensorValid = false;
-        for (RenderSlot& slot : slots)
-            slot.lastObservationFrame = vk.lastSubmittedOffscreenFrame;
+        for (uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex)
+            m_slots[envIndex].lastObservationFrame = vk.lastSubmittedOffscreenFrame;
     }
 
     void* mapped = nullptr;
-    const VkDeviceSize paramsBytes = sizeof(RenderParams) * params.size();
+    const VkDeviceSize paramsBytes = sizeof(RenderParams) * m_batchSize;
     vkCheck(vkMapMemory(vk.device, vk.paramsBuffer.memory, 0, paramsBytes, 0, &mapped), "vkMapMemory params");
-    std::memcpy(mapped, params.data(), static_cast<std::size_t>(paramsBytes));
+    std::memcpy(mapped, m_renderParams.get(), static_cast<std::size_t>(paramsBytes));
     vkUnmapMemory(vk.device, vk.paramsBuffer.memory);
 
     VkCommandBuffer commandBuffer = offscreenFrame ? offscreenFrame->commandBuffer : vk.commandBuffers[imageIndex];
@@ -1563,8 +1572,8 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
     };
 
     bool pipelineBound = false;
-    for (uint32_t envIndex = 0; envIndex < slots.size(); ++envIndex) {
-        RenderSlot& slot = slots[envIndex];
+    for (uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex) {
+        RenderSlot& slot = m_slots[envIndex];
         pushConstants(envIndex);
         if (slot.pigVertexCount > 0 && slot.instanceCount > 0) {
             if (!pipelineBound) {
@@ -1583,8 +1592,8 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
     // std::vector<uint32_t> postponedSlots;
 
     pipelineBound = false;
-    for (uint32_t envIndex = 0; envIndex < slots.size(); ++envIndex) {
-        RenderSlot& slot = slots[envIndex];
+    for (uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex) {
+        RenderSlot& slot = m_slots[envIndex];
         if (slot.pendingGeneration.valid()) {
             // TODO theoretically we could postpone this slot and switch to another slot, to reduce stalling.
             const WorldGenerationOutput& output = slot.pendingGeneration.get();
@@ -1616,7 +1625,7 @@ void Renderer::drawFrame(std::span<const RenderParams> params, std::span<RenderS
             .imageSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                 .mipLevel = 0,
                 .baseArrayLayer = 0,
-                .layerCount = static_cast<uint32_t>(slots.size()) },
+                .layerCount = m_batchSize },
             .imageOffset = { 0, 0, 0 },
             .imageExtent = { vk.renderExtent.width, vk.renderExtent.height, 1 },
         };
@@ -1673,12 +1682,12 @@ const Observation& Renderer::renderObservations(std::span<const World> worlds, s
         fatalError("renderObservations world/agent count mismatch");
 
     ++m_observationVersion;
-    validateBatchSize(worlds.size());
+    assert(worlds.size() == m_batchSize);
     for (std::size_t i = 0; i < worlds.size(); ++i) {
         renderObservationSlot(i, worlds[i], agents[i]);
         m_renderParams[i] = buildRenderParams(agents[i], worlds[i]);
     }
-    drawFrame({ m_renderParams.get(), m_batchSize }, { m_slots.get(), m_batchSize });
+    drawFrame();
     m_observation.setVersion(m_observationVersion);
     for (uint32_t i = 0; i < m_batchSize; ++i) {
         RenderSlot& slot = m_slots[i];
@@ -1710,6 +1719,7 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
             vkWaitForFences(m_vk->device, 1, &m_vk->inFlight, VK_TRUE, UINT64_MAX);
 
         WorldGenerationBuffers buffers;
+        buffers.header = &reinterpret_cast<TerrainHeader*>(m_vk->terrainHeaderBuffer.cudaPtr)[slotIndex];
         buffers.maxVoxelCount = MaxTerrainVoxels;
         buffers.voxels = reinterpret_cast<Voxel*>(
             static_cast<std::byte*>(m_vk->terrainVoxelBuffer.cudaPtr) + slot.terrainVoxelOffset * VoxelSize);
@@ -1719,7 +1729,6 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
             = m_worldGenerator.generate(world, agent, std::move(buffers)).share();
         world.updateGeneration(generation);
         slot.pendingGeneration = std::move(generation);
-        slot.terrainVoxelCount = 0;
         slot.lastWorldVersion = world.version();
         slot.lastMeshCenter = agentBlock;
     }

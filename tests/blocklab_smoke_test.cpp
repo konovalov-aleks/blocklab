@@ -22,15 +22,18 @@ void updateWorldCacheAt(const blocklab::World& world, blocklab::IVec3 center)
 {
     blocklab::WorldGenerator generator({ .halfExtent = TestGenerationHalfExtent });
     void* voxelMemory = nullptr;
-    blocklab::cudaCheck(cudaMalloc(&voxelMemory, blocklab::VoxelSize * TestMaxTerrainVoxels),
-        "cudaMalloc test terrain voxels");
+    blocklab::cudaCheck(
+        cudaMalloc(&voxelMemory, blocklab::VoxelSize * TestMaxTerrainVoxels), "cudaMalloc test terrain voxels");
     auto* const voxels = static_cast<blocklab::Voxel*>(voxelMemory);
+    blocklab::TerrainHeader* terrainHeader = nullptr;
+    blocklab::cudaCheck(cudaMalloc(&terrainHeader, sizeof(blocklab::TerrainHeader)), "cudaMalloc test terrain header");
     blocklab::AgentState agent;
     agent.position = { static_cast<float>(center.x), static_cast<float>(center.y), static_cast<float>(center.z) };
     blocklab::CudaSharedFuture<blocklab::WorldGenerationOutput> generation
         = generator
               .generate(world, agent,
                   {
+                      .header = terrainHeader,
                       .voxels = voxels,
                       .maxVoxelCount = TestMaxTerrainVoxels,
                       .blocks = world.borrowGenerationBuffers(),
@@ -38,6 +41,7 @@ void updateWorldCacheAt(const blocklab::World& world, blocklab::IVec3 center)
               .share();
     world.updateGeneration(generation);
     world.waitForGeneration();
+    blocklab::cudaCheck(cudaFree(terrainHeader), "cudaFree test terrain header");
     blocklab::cudaCheck(cudaFree(voxels), "cudaFree test terrain voxels");
 }
 

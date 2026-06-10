@@ -16,7 +16,7 @@ enum VisibleFace : uint8_t {
     Back = 1 << 5
 };
 
-struct Voxel;
-static constexpr size_t VoxelSize = 16;
+class Voxel;
+static constexpr size_t VoxelSize = 4;
 
 } // namespace blocklab

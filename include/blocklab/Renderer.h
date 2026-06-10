@@ -94,9 +94,8 @@ private:
 
     RenderParams buildRenderParams(const AgentState&, const World&) const;
     void uploadInstances(std::size_t slot, const World&);
-    void drawFrame(std::span<const RenderParams>, std::span<RenderSlot>);
+    void drawFrame();
     void initializeBatchData();
-    void validateBatchSize(std::size_t batchSize) const;
     void renderObservationSlot(std::size_t slot, const World&, const AgentState&);
 
     RenderConfig m_config;

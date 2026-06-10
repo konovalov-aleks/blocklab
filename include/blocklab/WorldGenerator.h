@@ -16,6 +16,12 @@ namespace blocklab {
 
 class CudaWorldGenerator;
 
+struct TerrainHeader {
+    int32_t originX;
+    int32_t originZ;
+};
+static_assert(sizeof(TerrainHeader) == 8, "The layout must match the structure layout in the voxel shader");
+
 struct WorldGenerationConfig {
     int32_t halfExtent = 32;
 };
@@ -24,13 +30,16 @@ struct WorldGenerationInput {
     uint32_t seed = 1;
     uint64_t worldVersion = 0;
     IVec3 center {};
-    IVec3 origin {};
     IVec3 size {};
+    int32_t originX = 0;
+    int32_t originZ = 0;
     int32_t halfExtent = 0;
     std::span<const BlockOverride> overrides;
 };
 
 struct WorldGenerationBuffers {
+    TerrainHeader* header;
+
     Voxel* voxels;
     size_t maxVoxelCount;
 

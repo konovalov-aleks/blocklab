@@ -6,23 +6,35 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 
 namespace blocklab {
 
-struct alignas(16) Voxel {
-    __device__ Voxel(int3 pos, uint8_t material, uint8_t visibleFaces)
-        : position(pos)
-        , blockTypeAndVisibleFaces((static_cast<uint32_t>(material) << 8) | visibleFaces)
+class Voxel {
+public:
+    __device__ Voxel(uint3 pos, uint8_t blockType, uint8_t visibleFaces)
+        : m_data(blockType | (visibleFaces << 5) | (pos.z << 11) | (pos.y << 17) | (pos.x << 26))
     {
+        assert((blockType & ((1 << 5) - 1)) == blockType);
+        assert((visibleFaces & ((1 << 6) - 1)) == visibleFaces);
+        assert((pos.z & ((1 << 6) - 1)) == pos.z);
+        assert((pos.y & ((1 << 9) - 1)) == pos.y);
+        assert((pos.x & ((1 << 6) - 1)) == pos.x);
     }
 
-    int3 position;
-    uint32_t blockTypeAndVisibleFaces; // [blockType:8 bits][visible faces: 8 bits]    };
+private:
+    // x : 6
+    // y : 9
+    // z : 6
+    // visibleFacesMask: 6
+    // blockType: 5
+    uint32_t m_data;
 };
 static_assert(sizeof(Voxel) == VoxelSize);
+static_assert(static_cast<uint8_t>(Block::COUNT) <= (1 << 5));
 
 namespace {
 
@@ -124,10 +136,15 @@ namespace {
         return generatedBlock(params.seed, x, y, z);
     }
 
-    __global__ void buildTerrainKernel(
-        CudaBuildParams params, const CudaOverride* overrides, Voxel* voxels, uint32_t* voxelCount, uint8_t* blocks)
+    __global__ void buildTerrainKernel(CudaBuildParams params, const CudaOverride* overrides, TerrainHeader* header,
+        Voxel* voxels, uint32_t* voxelCount, uint8_t* blocks)
     {
         const int32_t index = static_cast<int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
+        if (index == 0) {
+            header->originX = params.originX;
+            header->originZ = params.originZ;
+        }
+
         const int32_t volume = params.width * params.height * params.depth;
         if (index >= volume)
             return;
@@ -167,7 +184,7 @@ namespace {
         if (voxelIndex >= params.maxVoxels)
             return;
 
-        voxels[voxelIndex] = Voxel(make_int3(x, y, z), block, visibleFaces);
+        voxels[voxelIndex] = Voxel(make_uint3(localX, localY, localZ), block, visibleFaces);
     }
 
 } // namespace
@@ -264,16 +281,16 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
         .width = width,
         .height = height,
         .depth = depth,
-        .originX = input.origin.x,
+        .originX = input.originX,
         .originY = 0,
-        .originZ = input.origin.z,
+        .originZ = input.originZ,
         .overrideCount = static_cast<int32_t>(packedOverrides.size()),
         .maxVoxels = static_cast<uint32_t>(buffers.maxVoxelCount),
     };
 
     constexpr int32_t ThreadCount = 256;
     buildTerrainKernel<<<(volume + ThreadCount - 1) / ThreadCount, ThreadCount, 0, m_state->stream>>>(
-        params, m_state->overrides, buffers.voxels, m_state->voxelCount, outBlocks.data());
+        params, m_state->overrides, buffers.header, buffers.voxels, m_state->voxelCount, outBlocks.data());
     cudaCheck(cudaGetLastError(), "buildTerrainKernel");
 
     cudaCheck(cudaMemcpyAsync(m_state->voxelCountHost, m_state->voxelCount, sizeof(*m_state->voxelCountHost),
@@ -282,7 +299,7 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
 
     m_state->pending = true;
     WorldGenerationOutput output;
-    output.origin = input.origin;
+    output.origin = { input.originX, 0, input.originZ };
     output.size = input.size;
     output.worldVersion = input.worldVersion;
     output.buffers = std::move(buffers);

@@ -13,6 +13,8 @@ enum class Block : uint8_t {
     Grass,
     Dirt,
     Stone,
+
+    COUNT
 };
 
 struct BlockId {

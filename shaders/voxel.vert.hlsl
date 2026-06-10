@@ -2,9 +2,18 @@
 #include "render_params.hlsl"
 #include "vertex_output.hlsl"
 
+struct TerrainHeader {
+    int originX;
+    int originZ;
+};
+
 struct Voxel {
-    int3 position;
-    uint blockTypeAndVisibleFaces; // [blockType:8 bits][visible faces: 8 bits]
+    // x : 6
+    // y : 9
+    // z : 6
+    // visibleFacesMask: 6
+    // blockType: 5
+    uint data;
 };
 
 static const int N_VERTICES_PER_VOXEL = 36;
@@ -71,8 +80,9 @@ static const float2 CUBE_UV[36] = {
     float2(0,0), float2(0,1), float2(1,1), float2(0,0), float2(1,1), float2(1,0),
 };
 
-StructuredBuffer<Voxel> voxels : register(t0, space0);
-StructuredBuffer<RenderParams> paramsBuffer : register(t1, space0);
+StructuredBuffer<TerrainHeader> terrainHeaders : register(t0, space0);
+StructuredBuffer<Voxel> voxels : register(t1, space0);
+StructuredBuffer<RenderParams> paramsBuffer : register(t2, space0);
 
 [[vk::push_constant]] cbuffer PushConstants
 {
@@ -87,14 +97,25 @@ VertexOutput voxelVertexMain(uint vertexId : SV_VertexID)
 
     RenderParams params = paramsBuffer[pushConstants.envIndex];
     Voxel voxel = voxels[voxelIndex];
-    const uint visibleFaces = voxel.blockTypeAndVisibleFaces & 0xFF;
-    const uint blockType = voxel.blockTypeAndVisibleFaces >> 8;
+    // x : 6
+    // y : 9
+    // z : 6
+    // visibleFacesMask: 6
+    // blockType: 5
+    const uint blockType = voxel.data & ((1 << 5) - 1);
+    const uint visibleFaces = (voxel.data >> 5) & ((1 << 6) - 1);
+    const int localPosZ = (voxel.data >> 11) & ((1 << 6) - 1);
+    const int localPosY = (voxel.data >> 17) & ((1 << 9) - 1);
+    const int localPosX = (voxel.data >> 26) & ((1 << 6) - 1);
+    const int posZ = localPosZ + terrainHeaders[pushConstants.envIndex].originZ;
+    const int posX = localPosX + terrainHeaders[pushConstants.envIndex].originX;
+    const int3 blockPos = int3(posX, localPosY, posZ);
 
     // use a degenerate triangle for invisible faces, so we don't have to discard anything in the pixel shader
     float multiplier = (visibleFaces & FACE_MASKS[faceIndex]) ? 1.0 : 0.0;
 
     float3 vertexOffset = CUBE_VERTICES[vertexInVoxelIndex];
-    float3 worldPosition = multiplier * (float3(voxel.position) + vertexOffset);
+    float3 worldPosition = multiplier * (blockPos + vertexOffset);
     float3 relative = worldPosition - params.origin.xyz;
 
     float viewX = dot(relative, params.right.xyz);
