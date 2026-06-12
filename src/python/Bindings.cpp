@@ -1,9 +1,10 @@
-#include "blocklab/Agent.h"
-#include "blocklab/CudaHelpers.h"
-#include "blocklab/Environment.h"
-#include "blocklab/Error.h"
-#include "blocklab/Observation.h"
-#include "blocklab/Renderer.h"
+#include <blocklab/Agent.h>
+#include <blocklab/CudaHelpers.h>
+#include <blocklab/Environment.h>
+#include <blocklab/Error.h>
+#include <blocklab/Observation.h>
+#include <blocklab/graphics/Renderer.h>
+#include <blocklab/graphics/Vulkan.h>
 
 #include <cuda_runtime.h>
 #include <pybind11/numpy.h>
@@ -73,13 +74,15 @@ namespace {
             , m_rewards(std::make_unique<float[]>(numEnvs))
             , m_terminated(std::make_unique<bool[]>(numEnvs))
             , m_truncated(std::make_unique<bool[]>(numEnvs))
-            , m_renderer(RenderConfig {
-                  .width = static_cast<int32_t>(width),
-                  .height = static_cast<int32_t>(height),
-                  .batchSize = numEnvs,
-                  .visible = false,
-                  .present = false,
-              })
+            , m_vulkan(VulkanInstance(false))
+            , m_renderer(m_vulkan,
+                  RenderConfig {
+                      .width = static_cast<int32_t>(width),
+                      .height = static_cast<int32_t>(height),
+                      .batchSize = numEnvs,
+                      .visible = false,
+                      .present = false,
+                  })
             , m_environment(m_renderer, numEnvs)
         {
             if (numEnvs == 0U) [[unlikely]]
@@ -233,6 +236,7 @@ namespace {
         std::unique_ptr<float[]> m_rewards;
         std::unique_ptr<bool[]> m_terminated;
         std::unique_ptr<bool[]> m_truncated;
+        Vulkan m_vulkan;
         Renderer m_renderer;
         Environment m_environment;
     };
@@ -247,7 +251,6 @@ PYBIND11_MODULE(_native, module)
     py::enum_<blocklab::ObservationDevice>(module, "ObservationDevice")
         .value("NONE", blocklab::ObservationDevice::None)
         .value("CPU", blocklab::ObservationDevice::Cpu)
-        .value("VULKAN_SWAPCHAIN", blocklab::ObservationDevice::VulkanSwapchain)
         .value("VULKAN_IMAGE", blocklab::ObservationDevice::VulkanImage)
         .value("CUDA", blocklab::ObservationDevice::Cuda);
 

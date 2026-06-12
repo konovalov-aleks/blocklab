@@ -1,7 +1,8 @@
 #pragma once
 
-#include "blocklab/Environment.h"
-#include "blocklab/WorldGenerator.h"
+#include <blocklab/Environment.h>
+#include <blocklab/WorldGenerator.h>
+#include <blocklab/graphics/Vulkan.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -9,8 +10,6 @@
 #include <memory>
 #include <span>
 #include <vector>
-
-struct GLFWwindow;
 
 namespace blocklab {
 
@@ -25,22 +24,18 @@ struct RenderConfig {
     int32_t width = 320;
     int32_t height = 180;
     uint32_t batchSize = 1;
-    bool visible = true;
-    bool present = true;
+    bool visible = true; // TODO remove
+    bool present = true; // TODO remove
 };
 
 class Renderer final : public ObservationRenderer {
 public:
-    explicit Renderer(RenderConfig config = {});
+    Renderer(Vulkan&, RenderConfig config = {});
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
 
-    bool shouldClose() const;
-    void pollEvents();
-    GLFWwindow* window() const { return m_window; }
-    void resize(int32_t width, int32_t height);
     const Observation& renderObservations(std::span<const World>, std::span<const AgentState>) override;
     const Observation& observation() const { return m_observation; }
     std::size_t lastObservationFrameIndex(std::size_t slot) const;
@@ -99,13 +94,12 @@ private:
     void renderObservationSlot(std::size_t slot, const World&, const AgentState&);
 
     RenderConfig m_config;
-    GLFWwindow* m_window = nullptr;
-    VulkanState* m_vk = nullptr;
+
+    Vulkan& m_vk;
+    std::unique_ptr<VulkanState> m_state;
+
     WorldGenerator m_worldGenerator;
     Observation m_observation;
-    uint64_t m_lastWorldVersion = 0;
-    IVec3 m_lastMeshCenter { std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::min(),
-        std::numeric_limits<int32_t>::min() };
     std::vector<EntityInstance> m_instances;
     std::unique_ptr<RenderSlot[]> m_slots;
     std::unique_ptr<RenderParams[]> m_renderParams;

@@ -106,8 +106,11 @@ blocklab_enable_strict_warnings(blocklab_env)
 add_library(blocklab_render
     src/CudaObservation.cu
     src/CudaWorldGenerator.cu
+    src/graphics/Display.cpp
+    src/graphics/GLFWInit.cpp
+    src/graphics/Renderer.cpp
+    src/graphics/Vulkan.cpp
     src/meshes/PigMesh.cpp
-    src/Renderer.cpp
     src/WorldGenerator.cpp
 )
 
@@ -129,6 +132,7 @@ target_link_libraries(blocklab_render
 )
 add_dependencies(blocklab_render blocklab_shaders)
 target_compile_definitions(blocklab_render PRIVATE BLOCKLAB_SHADER_DIR="${BLOCKLAB_SHADER_OUTPUT_DIR}")
+target_compile_definitions(blocklab_render PUBLIC VULKAN_HPP_NO_EXCEPTIONS VULKAN_HPP_NO_STRUCT_CONSTRUCTORS)
 
 blocklab_enable_strict_warnings(blocklab_render)
 set_source_files_properties(src/CudaObservation.cu src/CudaWorldGenerator.cu PROPERTIES CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED ON)

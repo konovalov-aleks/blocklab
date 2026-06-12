@@ -1,6 +1,6 @@
 #pragma once
 
-#include "blocklab/Renderer.h"
+#include <blocklab/graphics/Renderer.h>
 
 #include <charconv>
 #include <cstdio>

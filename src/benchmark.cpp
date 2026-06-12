@@ -1,7 +1,8 @@
-#include "blocklab/Agent.h"
-#include "blocklab/CliParsing.h"
-#include "blocklab/Environment.h"
-#include "blocklab/Renderer.h"
+#include <blocklab/Agent.h>
+#include <blocklab/CliParsing.h>
+#include <blocklab/Environment.h>
+#include <blocklab/graphics/Renderer.h>
+#include <blocklab/graphics/Vulkan.h>
 
 #include <algorithm>
 #include <chrono>
@@ -225,15 +226,16 @@ int main(int argc, char** argv)
     for (uint32_t i = 0; i < config.batchSize; ++i)
         randomAgents.emplace_back(config);
     std::vector<blocklab::AgentAction> actions(config.batchSize);
-    blocklab::Renderer renderer(config.renderConfig);
+    blocklab::Vulkan vk(blocklab::VulkanInstance { false });
+    blocklab::Renderer renderer(vk, config.renderConfig);
     blocklab::Environment env(renderer, config.batchSize);
     std::unique_ptr<blocklab::Renderer> visualRenderer;
     if (config.visualize)
-        visualRenderer = std::make_unique<blocklab::Renderer>(config.visualConfig);
+        visualRenderer = std::make_unique<blocklab::Renderer>(vk, config.visualConfig);
     uint64_t lastInitialOverridesApplied = resetEnvironment(env, config, config.seed);
 
     for (uint64_t step = 0; step < config.warmupSteps; ++step) {
-        renderer.pollEvents();
+        // renderer.pollEvents();
         for (uint32_t i = 0; i < config.batchSize; ++i)
             actions[i] = randomAgents[i].nextAction(rng);
         const std::span<const blocklab::StepResult> results = env.step(actions);
@@ -259,13 +261,13 @@ int main(int argc, char** argv)
     }
 
     while (true) {
-        renderer.pollEvents();
+        // renderer.pollEvents();
 
-        if (visualRenderer) {
-            visualRenderer->pollEvents();
-            if (visualRenderer->shouldClose())
-                break;
-        }
+        /*        if (visualRenderer) {
+                    visualRenderer->pollEvents();
+                    if (visualRenderer->shouldClose())
+                        break;
+                }*/
         for (uint32_t i = 0; i < config.batchSize; ++i)
             actions[i] = randomAgents[i].nextAction(rng);
         const std::span<const blocklab::StepResult> results = env.step(actions);
