@@ -35,7 +35,7 @@ public:
             m_control->wait();
     }
 
-    void enqueueGPUWait(cudaStream_t stream)
+    void enqueueGPUWait(cudaStream_t stream) const
     {
         if (m_control) [[likely]]
             m_control->enqueueGPUWait(stream);

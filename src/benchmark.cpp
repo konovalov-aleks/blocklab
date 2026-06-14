@@ -31,8 +31,7 @@ struct BenchmarkConfig {
     int32_t minActionSteps = 20;
     int32_t maxActionSteps = 160;
     uint64_t initialOverrides = 1000;
-    blocklab::RenderConfig renderConfig { .width = 320, .height = 180, .visible = false, .present = false };
-    blocklab::RenderConfig visualConfig { .width = 320, .height = 180, .visible = true, .present = true };
+    blocklab::RenderConfig renderConfig { .width = 320, .height = 180 };
 };
 
 struct BenchmarkStats {
@@ -172,11 +171,7 @@ BenchmarkConfig parseArgs(int argc, char** argv)
                 std::fprintf(stderr, "Invalid --resolution value. Expected WIDTHxHEIGHT.\n");
                 std::exit(EXIT_FAILURE);
             }
-            renderConfig->visible = config.renderConfig.visible;
-            renderConfig->present = config.renderConfig.present;
             config.renderConfig = *renderConfig;
-            config.visualConfig.width = renderConfig->width;
-            config.visualConfig.height = renderConfig->height;
         } else if (arg == "--initial-overrides" || arg.starts_with("--initial-overrides="))
             config.initialOverrides = blocklab::cli::parseInt<uint64_t>(
                 blocklab::cli::optionValue(i, argc, argv, arg, "--initial-overrides"))
@@ -185,7 +180,6 @@ BenchmarkConfig parseArgs(int argc, char** argv)
             usage(EXIT_FAILURE);
     }
     config.renderConfig.batchSize = config.batchSize;
-    config.visualConfig.batchSize = 1;
     return config;
 }
 
@@ -356,8 +350,7 @@ int main(int argc, char** argv)
                 "  initial_overrides_requested: %llu\n"
                 "  initial_overrides_applied: %llu\n"
                 "  world_overrides: %llu\n"
-                "  observation_version: %llu\n"
-                "  observation_handle: 0x%llx\n",
+                "  observation_version: %llu\n",
         config.batchSize, static_cast<unsigned long long>(stats.iterations),
         static_cast<unsigned long long>(totalSteps), static_cast<unsigned long long>(config.warmupSteps), totalSeconds,
         static_cast<double>(totalSteps) / totalSeconds,
@@ -365,5 +358,5 @@ int main(int argc, char** argv)
         static_cast<unsigned long long>(stats.episodes), static_cast<unsigned long long>(stats.blocksCollected),
         static_cast<unsigned long long>(stats.blocksPlaced), static_cast<unsigned long long>(config.initialOverrides),
         static_cast<unsigned long long>(lastInitialOverridesApplied), static_cast<unsigned long long>(worldOverrides),
-        static_cast<unsigned long long>(observation.version()), static_cast<unsigned long long>(observation.handle(0)));
+        static_cast<unsigned long long>(observation.version()));
 }

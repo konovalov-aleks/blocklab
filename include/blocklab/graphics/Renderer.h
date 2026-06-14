@@ -24,8 +24,6 @@ struct RenderConfig {
     int32_t width = 320;
     int32_t height = 180;
     uint32_t batchSize = 1;
-    bool visible = true; // TODO remove
-    bool present = true; // TODO remove
 };
 
 class Renderer final : public ObservationRenderer {
@@ -38,8 +36,6 @@ public:
 
     const Observation& renderObservations(std::span<const World>, std::span<const AgentState>) override;
     const Observation& observation() const { return m_observation; }
-    std::size_t lastObservationFrameIndex(std::size_t slot) const;
-    void* cudaObservationTensorData(std::size_t frameIndex, uintptr_t streamHandle = 0);
     std::size_t cudaObservationTensorBytes() const;
 
     struct VulkanState;
@@ -83,7 +79,6 @@ private:
         uint32_t instanceCount = 0;
 
         CudaSharedFuture<WorldGenerationOutput> pendingGeneration;
-        std::size_t lastObservationFrame = 0;
         uint64_t lastWorldVersion = 0;
     };
 

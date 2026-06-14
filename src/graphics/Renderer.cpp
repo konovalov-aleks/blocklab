@@ -155,9 +155,8 @@ namespace {
         vk::CommandBuffer commandBuffer;
         Buffer observationBuffer;
         float* observationTensor = nullptr;
-        bool observationTensorValid = false;
+        CudaSharedFuture<void> conversionTaskFuture;
 
-        CudaFuture<void> conversionTaskFuture;
         ExternalSemaphore frameCompletionSemaphore;
         std::uint64_t observationVersion = NO_OBSERVATION_VERSION;
         vk::UniqueFence fence;
@@ -224,6 +223,7 @@ struct Renderer::VulkanState {
     Buffer paramsBuffer;
 
     VkDeviceSize terrainVoxelBufferCapacityBytes = 0;
+    cudaStream_t observationConversionStream = nullptr;
     std::uint32_t batchSize = 1;
 };
 
@@ -919,15 +919,21 @@ namespace {
         createFramebuffers(vk, state);
         createCommandsAndSync(vk, state);
         createDescriptors(vk, state);
+        cudaCheck(cudaStreamCreateWithFlags(&state.observationConversionStream, cudaStreamNonBlocking),
+            "cudaStreamCreateWithFlags observation");
     }
 
     void destroyVulkan(Vulkan& vk, Renderer::VulkanState& state)
     {
         vkCheck(vk.device().waitIdle(), "VkDevice::waitIdle");
+        if (state.observationConversionStream)
+            cudaCheck(cudaStreamSynchronize(state.observationConversionStream), "cudaStreamSynchronize observation");
         for (OffscreenFrame& frame : state.frames) {
             if (frame.observationTensor)
                 cudaCheck(cudaFree(frame.observationTensor), "cudaFree observation tensor");
         }
+        if (state.observationConversionStream)
+            cudaCheck(cudaStreamDestroy(state.observationConversionStream), "cudaStreamDestroy observation");
     }
 
 } // namespace
@@ -944,34 +950,6 @@ Renderer::Renderer(Vulkan& vk, RenderConfig config)
 
 Renderer::~Renderer() { destroyVulkan(m_vk, *m_state); }
 
-std::size_t Renderer::lastObservationFrameIndex(std::size_t slot) const
-{
-    if (m_state->frames.empty())
-        return 0;
-    if (slot >= m_batchSize) [[unlikely]]
-        fatalError("Invalid render slot: ", slot);
-    return m_slots[slot].lastObservationFrame;
-}
-
-void* Renderer::cudaObservationTensorData(std::size_t frameIndex, uintptr_t streamHandle)
-{
-    if (m_state->frames.empty())
-        return nullptr;
-    if (frameIndex >= m_state->frames.size()) [[unlikely]]
-        fatalError("Invalid observation frame index: ", frameIndex);
-
-    OffscreenFrame& frame = m_state->frames[frameIndex];
-    assert(frame.observationVersion != OffscreenFrame::NO_OBSERVATION_VERSION);
-    auto stream = reinterpret_cast<cudaStream_t>(streamHandle);
-    frame.conversionTaskFuture.enqueueGPUWait(stream);
-    frame.frameCompletionSemaphore.wait(stream, frame.observationVersion);
-    convertRgba8ToFloatNchw(frame.observationBuffer.cudaPtr, frame.observationTensor, m_state->batchSize,
-        m_state->renderExtent.width, m_state->renderExtent.height, streamHandle);
-    frame.conversionTaskFuture = { stream };
-    frame.observationTensorValid = true;
-    return frame.observationTensor;
-}
-
 std::size_t Renderer::cudaObservationTensorBytes() const
 {
     return static_cast<std::size_t>(m_state->renderExtent.width)
@@ -983,8 +961,7 @@ void Renderer::initializeBatchData()
     m_batchSize = m_state->batchSize;
     m_slots = std::make_unique<RenderSlot[]>(m_batchSize);
     m_renderParams = std::make_unique<RenderParams[]>(m_batchSize);
-    m_observation.reset(m_state->renderExtent.width, m_state->renderExtent.height, 3U, ObservationDevice::Cuda,
-        ObservationFormat::FloatNCHW, m_batchSize);
+    m_observation.reset(m_state->renderExtent.width, m_state->renderExtent.height, m_batchSize);
     m_observation.setVersion(m_observationVersion);
     if (!m_pigMeshUploaded) {
         PigMesh pigMeshGenerator;
@@ -999,9 +976,6 @@ void Renderer::initializeBatchData()
         slot.terrainVoxelOffset = i * MaxTerrainVoxels;
         slot.pigVertexCount = m_pigMeshVertexCount;
         slot.instanceOffset = i * MaxEntityInstances;
-        m_observation.setSlot(i,
-            reinterpret_cast<uintptr_t>(
-                reinterpret_cast<void*>(static_cast<VkImage>(*m_state->frames[0].color.image))));
     }
 }
 
@@ -1061,9 +1035,8 @@ void Renderer::drawFrame()
 {
     OffscreenFrame& offscreenFrame = m_state->frames[m_state->nextFrame];
 
-    // The observation is valid until step() or reset() is called.
-    // So, it's not mandatory to wait until previous observation conversion is completed
-    // TODO But for better stability and API simplification it's better to implement a GPU-side fence for that.
+    if (offscreenFrame.observationVersion != OffscreenFrame::NO_OBSERVATION_VERSION)
+        offscreenFrame.conversionTaskFuture.wait();
 
     vkCheck(m_vk.device().waitForFences(1, &*offscreenFrame.fence, vk::True, std::numeric_limits<std::uint64_t>::max()),
         "VkDevice::waitForFences");
@@ -1071,9 +1044,6 @@ void Renderer::drawFrame()
 
     m_state->lastSubmittedFrame = m_state->nextFrame;
     m_state->nextFrame = (m_state->nextFrame + 1U) % m_state->frames.size();
-    offscreenFrame.observationTensorValid = false;
-    for (uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex)
-        m_slots[envIndex].lastObservationFrame = m_state->lastSubmittedFrame;
 
     const VkDeviceSize paramsBytes = sizeof(RenderParams) * m_batchSize;
     void* mapped
@@ -1184,6 +1154,14 @@ void Renderer::drawFrame()
     } };
     // TODO migrate to submit2
     vkCheck(m_vk.graphicsQueue().submit(submitInfo, *offscreenFrame.fence), "VkQueue::submit");
+
+    cudaStream_t stream = m_state->observationConversionStream;
+    offscreenFrame.frameCompletionSemaphore.wait(stream, offscreenFrame.observationVersion);
+    convertRgba8ToFloatNchw(offscreenFrame.observationBuffer.cudaPtr, offscreenFrame.observationTensor,
+        m_state->batchSize, m_state->renderExtent.width, m_state->renderExtent.height,
+        reinterpret_cast<std::uintptr_t>(stream));
+    CudaFuture<void> conversionTask(stream);
+    offscreenFrame.conversionTaskFuture = conversionTask.share();
 }
 
 const Observation& Renderer::renderObservations(std::span<const World> worlds, std::span<const AgentState> agents)
@@ -1198,13 +1176,9 @@ const Observation& Renderer::renderObservations(std::span<const World> worlds, s
         m_renderParams[i] = buildRenderParams(agents[i], worlds[i]);
     }
     drawFrame();
+    OffscreenFrame& frame = m_state->frames[m_state->lastSubmittedFrame];
     m_observation.setVersion(m_observationVersion);
-    for (uint32_t i = 0; i < m_batchSize; ++i) {
-        RenderSlot& slot = m_slots[i];
-        const uintptr_t handle = reinterpret_cast<uintptr_t>(
-            static_cast<VkImage>(*m_state->frames[slot.lastObservationFrame].color.image));
-        m_observation.setSlot(i, handle);
-    }
+    m_observation.setData(frame.observationTensor, frame.conversionTaskFuture);
     return m_observation;
 }
 

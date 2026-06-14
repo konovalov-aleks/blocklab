@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -55,11 +56,9 @@ public:
                 { blocklab::floorToInt32(agents[i].position.x), blocklab::floorToInt32(agents[i].position.y),
                     blocklab::floorToInt32(agents[i].position.z) });
         }
-        m_observation.reset(4U, 4U, 4U, blocklab::ObservationDevice::Cpu, blocklab::ObservationFormat::FloatNCHW,
-            static_cast<uint32_t>(worlds.size()));
+        m_observation.reset(4U, 4U, static_cast<std::uint32_t>(worlds.size()));
         m_observation.setVersion(++m_version);
-        for (uint32_t i = 0; i < worlds.size(); ++i)
-            m_observation.setSlot(i, 0x1234);
+        m_observation.setData(reinterpret_cast<float*>(0x1234), {});
         return m_observation;
     }
 
@@ -76,8 +75,9 @@ TEST_CASE("Environment reset returns renderer observation", "[environment]")
     blocklab::Environment env(renderer, 1);
     env.reset(42);
     const blocklab::Observation& initial = env.observe();
-    CHECK(initial.device() == blocklab::ObservationDevice::Cpu);
-    CHECK(initial.handle(0) == 0x1234);
+    CHECK(initial.channels() == 3);
+    CHECK(initial.batchSize() == 1);
+    CHECK(initial.data() == reinterpret_cast<float*>(0x1234));
 }
 
 TEST_CASE("Environment can step a moving agent", "[environment]")
@@ -92,7 +92,7 @@ TEST_CASE("Environment can step a moving agent", "[environment]")
         action.pitchDelta = 0.001f;
         const blocklab::AgentAction actions[] { action };
         const blocklab::StepResult result = env.step(actions).front();
-        CHECK(env.observe().device() == blocklab::ObservationDevice::Cpu);
+        CHECK(env.observe().channels() == 3);
         CHECK(result.reward > -10.0f);
     }
 }
@@ -359,15 +359,15 @@ TEST_CASE("Environment returns renderer observations when renderer is installed"
     blocklab::Environment renderEnv(renderer, 1);
     renderEnv.reset(9);
     const uint64_t renderedResetVersion = renderEnv.observe().version();
-    CHECK(renderEnv.observe().device() == blocklab::ObservationDevice::Cpu);
-    CHECK(renderEnv.observe().handle(0) == 0x1234);
+    CHECK(renderEnv.observe().batchSize() == 1);
+    CHECK(renderEnv.observe().data() == reinterpret_cast<float*>(0x1234));
     CHECK(renderedResetVersion != 0);
 
     const blocklab::AgentAction action;
     const blocklab::AgentAction actions[] { action };
     const blocklab::StepResult renderedStep = renderEnv.step(actions).front();
-    CHECK(renderEnv.observe().device() == blocklab::ObservationDevice::Cpu);
-    CHECK(renderEnv.observe().handle(0) == 0x1234);
+    CHECK(renderEnv.observe().batchSize() == 1);
+    CHECK(renderEnv.observe().data() == reinterpret_cast<float*>(0x1234));
     CHECK(renderEnv.observe().version() > renderedResetVersion);
     CHECK(!renderedStep.terminated);
 }

@@ -81,8 +81,6 @@ namespace {
                       .width = static_cast<int32_t>(width),
                       .height = static_cast<int32_t>(height),
                       .batchSize = numEnvs,
-                      .visible = false,
-                      .present = false,
                   })
             , m_environment(m_renderer, numEnvs)
         {
@@ -123,28 +121,17 @@ namespace {
 
         Observation observe() const { return m_environment.observe(); }
 
-        std::vector<std::size_t> lastObservationFrameIndices() const
+        py::capsule observationDlpack(const Observation& observation, std::uintptr_t streamHandle = 0)
         {
-            std::vector<std::size_t> indices;
-            indices.reserve(m_numEnvs);
-            for (uint32_t i = 0; i < m_numEnvs; ++i)
-                indices.push_back(m_renderer.lastObservationFrameIndex(i));
-            return indices;
-        }
-
-        py::capsule observationDlpack(const std::vector<std::size_t>& frameIndices, uintptr_t streamHandle = 0)
-        {
-            if (frameIndices.size() != m_numEnvs) [[unlikely]]
-                fatalError("Observation frame index count does not match environment count");
-            const std::size_t frameIndex = frameIndices.front();
-            for (std::size_t index : frameIndices) {
-                if (index != frameIndex) [[unlikely]]
-                    fatalError("Layered observations must come from the same offscreen frame");
-            }
-
-            void* const data = m_renderer.cudaObservationTensorData(frameIndex, streamHandle);
+            void* const data = observation.data();
             if (!data) [[unlikely]]
-                fatalError("native observation is not backed by CUDA-visible Vulkan memory");
+                fatalError("native observation has no CUDA tensor data");
+            if (observation.batchSize() != m_numEnvs || observation.width() != m_width
+                || observation.height() != m_height) [[unlikely]]
+                fatalError("native observation metadata does not match environment");
+
+            cudaStream_t stream = reinterpret_cast<cudaStream_t>(streamHandle);
+            observation.enqueueReadyWait(stream);
 
             int deviceId = 0;
             const cudaError_t cudaResult = cudaGetDevice(&deviceId);
@@ -200,7 +187,7 @@ namespace {
         {
             py::dict info;
             info["version"] = version;
-            info["frame_indices"] = lastObservationFrameIndices();
+            info["observation"] = m_environment.observe();
             return info;
         }
 
@@ -250,30 +237,17 @@ PYBIND11_MODULE(_native, module)
 {
     module.doc() = "Native BlockLab CUDA/Vulkan environment bindings";
 
-    py::enum_<blocklab::ObservationDevice>(module, "ObservationDevice")
-        .value("NONE", blocklab::ObservationDevice::None)
-        .value("CPU", blocklab::ObservationDevice::Cpu)
-        .value("VULKAN_IMAGE", blocklab::ObservationDevice::VulkanImage)
-        .value("CUDA", blocklab::ObservationDevice::Cuda);
-
-    py::enum_<blocklab::ObservationFormat>(module, "ObservationFormat")
-        .value("RGBA8", blocklab::ObservationFormat::RGBA8)
-        .value("FLOAT_NCHW", blocklab::ObservationFormat::FloatNCHW);
-
     py::class_<blocklab::Observation>(module, "Observation")
         .def_property_readonly("width", &blocklab::Observation::width)
         .def_property_readonly("height", &blocklab::Observation::height)
         .def_property_readonly("channels", &blocklab::Observation::channels)
-        .def_property_readonly("device", &blocklab::Observation::device)
-        .def_property_readonly("format", &blocklab::Observation::format)
         .def_property_readonly("version", &blocklab::Observation::version)
         .def_property_readonly("batch_size", &blocklab::Observation::batchSize)
-        .def("handle", &blocklab::Observation::handle, py::arg("batch_index") = 0)
         .def("__repr__", [](const blocklab::Observation& observation) {
             return "<blocklab.Observation width=" + std::to_string(observation.width()) + " height="
                 + std::to_string(observation.height()) + " channels=" + std::to_string(observation.channels())
-                + " batch_size=" + std::to_string(observation.batchSize()) + " handle="
-                + std::to_string(observation.handle()) + " version=" + std::to_string(observation.version()) + ">";
+                + " batch_size=" + std::to_string(observation.batchSize())
+                + " version=" + std::to_string(observation.version()) + ">";
         });
 
     py::class_<blocklab::AgentAction>(module, "AgentAction")
@@ -297,7 +271,6 @@ PYBIND11_MODULE(_native, module)
         .def("reset", &blocklab::NativeEnvironment::reset, py::arg("seed") = 1)
         .def("step", &blocklab::NativeEnvironment::step, py::arg("actions"))
         .def("observe", &blocklab::NativeEnvironment::observe)
-        .def("last_observation_frame_indices", &blocklab::NativeEnvironment::lastObservationFrameIndices)
-        .def("observation_dlpack", &blocklab::NativeEnvironment::observationDlpack, py::arg("frame_indices"),
+        .def("observation_dlpack", &blocklab::NativeEnvironment::observationDlpack, py::arg("observation"),
             py::arg("stream") = 0);
 }
