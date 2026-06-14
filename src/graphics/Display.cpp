@@ -1,5 +1,6 @@
 #include <blocklab/graphics/Display.h>
 
+#include <blocklab/CudaHelpers.h>
 #include <blocklab/Error.h>
 #include <blocklab/graphics/Vulkan.h>
 
@@ -22,10 +23,13 @@ Display::Display(int width, int height, VulkanInstance& vkInstance)
     VkSurfaceKHR surface;
     vkCheck(glfwCreateWindowSurface(vkInstance.get(), m_window, nullptr, &surface), "glfwCreateWindowSurface");
     m_surface = vk::UniqueSurfaceKHR(surface, vkInstance.get());
+
+    cudaCheck(cudaStreamCreateWithFlags(&m_conversionStream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags");
 }
 
 Display::~Display()
 {
+    cudaCheck(cudaStreamDestroy(m_conversionStream), "cudaStreamDestroy");
     m_surface.reset();
     glfwDestroyWindow(m_window);
 }
@@ -86,9 +90,11 @@ void Display::pollEvents() const { glfwPollEvents(); }
 
 bool Display::shouldClose() const { return glfwWindowShouldClose(m_window); }
 
-void Display::show(const Observation&)
+void Display::show(const Observation& observation)
 {
     assert(m_vk);
+
+    observation.enqueueReadyWait(m_conversionStream);
 
     const std::uint32_t nextImageIndex
         = vkCheck(m_vk->device().acquireNextImageKHR(

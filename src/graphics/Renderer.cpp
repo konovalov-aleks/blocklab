@@ -3,7 +3,10 @@
 #include <blocklab/CudaHelpers.h>
 #include <blocklab/CudaObservation.h>
 #include <blocklab/Error.h>
+#include <blocklab/graphics/Memory.h>
 #include <blocklab/graphics/Vulkan.h>
+#include <blocklab/graphics/VulkanBuffer.h>
+#include <blocklab/graphics/VulkanCudaInteropBuffer.h>
 #include <blocklab/meshes/PigMesh.h>
 
 #include <cuda_runtime.h>
@@ -50,53 +53,6 @@ namespace {
         file.read(bytes.data(), size);
         return bytes;
     }
-
-    uint32_t findMemoryType(vk::PhysicalDevice physicalDevice, uint32_t typeBits, vk::MemoryPropertyFlags flags)
-    {
-        vk::PhysicalDeviceMemoryProperties properties = physicalDevice.getMemoryProperties();
-        for (uint32_t i = 0; i < properties.memoryTypeCount; ++i) {
-            if ((typeBits & (1U << i)) && (properties.memoryTypes[i].propertyFlags & flags) == flags)
-                return i;
-        }
-        fatalError("No compatible Vulkan memory type");
-    }
-
-    struct Buffer {
-        Buffer() = default;
-
-        Buffer(const Buffer&) = delete;
-        Buffer& operator=(const Buffer&) = delete;
-
-        Buffer(Buffer&& other) { *this = std::move(other); }
-
-        Buffer& operator=(Buffer&& other)
-        {
-            if (this != &other) {
-                buffer = std::move(other.buffer);
-                memory = std::move(other.memory);
-                size = other.size;
-                memorySize = other.memorySize;
-                std::swap(cudaMemory, other.cudaMemory);
-                std::swap(cudaPtr, other.cudaPtr);
-            }
-            return *this;
-        }
-
-        ~Buffer()
-        {
-            if (cudaPtr)
-                cudaCheck(cudaFree(cudaPtr), "cudaFree external buffer mapping");
-            if (cudaMemory)
-                cudaCheck(cudaDestroyExternalMemory(cudaMemory), "cudaDestroyExternalMemory");
-        }
-
-        vk::UniqueBuffer buffer;
-        vk::UniqueDeviceMemory memory;
-        VkDeviceSize size = 0;
-        VkDeviceSize memorySize = 0;
-        cudaExternalMemory_t cudaMemory = nullptr;
-        void* cudaPtr = nullptr;
-    };
 
     struct Image {
         vk::UniqueImage image;
@@ -153,7 +109,7 @@ namespace {
         Image depth;
         vk::UniqueFramebuffer framebuffer;
         vk::CommandBuffer commandBuffer;
-        Buffer observationBuffer;
+        VulkanCudaInteropBuffer observationBuffer;
         float* observationTensor = nullptr;
         CudaSharedFuture<void> conversionTaskFuture;
 
@@ -189,6 +145,13 @@ namespace {
 } // namespace
 
 struct Renderer::VulkanState {
+    VulkanState() = default;
+
+    VulkanState(const VulkanState&) = delete;
+    VulkanState& operator=(const VulkanState&) = delete;
+    VulkanState(VulkanState&&) = delete;
+    VulkanState& operator=(VulkanState&&) = delete;
+
     vk::Extent2D renderExtent;
 
     vk::Format colorFormat = ColorFormat;
@@ -216,96 +179,18 @@ struct Renderer::VulkanState {
     vk::DescriptorSet terrainDescriptorSet;
     vk::DescriptorSet pigDescriptorSet;
 
-    Buffer terrainHeaderBuffer;
-    Buffer terrainVoxelBuffer;
-    Buffer pigVertexBuffer;
-    Buffer instanceBuffer;
-    Buffer paramsBuffer;
+    VulkanCudaInteropBuffer terrainHeaderBuffer;
+    VulkanCudaInteropBuffer terrainVoxelBuffer;
+    VulkanDeviceBuffer pigVertexBuffer;
+    VulkanHostBuffer instanceBuffer;
+    VulkanHostBuffer paramsBuffer;
 
-    VkDeviceSize terrainVoxelBufferCapacityBytes = 0;
+    vk::DeviceSize terrainVoxelBufferCapacityBytes = 0;
     cudaStream_t observationConversionStream = nullptr;
     std::uint32_t batchSize = 1;
 };
 
 namespace {
-
-    Buffer createBuffer(Vulkan& vk, VkDeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties,
-        bool exportMemory = false)
-    {
-        Buffer res;
-        res.size = size;
-
-        const vk::ExternalMemoryBufferCreateInfo externalBufferInfo {
-            .handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd,
-        };
-
-        const vk::BufferCreateInfo bufferInfo {
-            .pNext = exportMemory ? &externalBufferInfo : nullptr,
-            .size = size,
-            .usage = usage,
-            .sharingMode = vk::SharingMode::eExclusive,
-        };
-
-        res.buffer = vkCheck(vk.device().createBufferUnique(bufferInfo), "VkDevice::createBuffer");
-
-        vk::MemoryRequirements requirements = vk.device().getBufferMemoryRequirements(*res.buffer);
-        res.memorySize = requirements.size;
-
-        const vk::ExportMemoryAllocateInfo exportAllocInfo { .handleTypes
-            = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd };
-        const vk::MemoryAllocateInfo allocInfo {
-            .pNext = exportMemory ? &exportAllocInfo : nullptr,
-            .allocationSize = requirements.size,
-            .memoryTypeIndex = findMemoryType(vk.physicalDevice(), requirements.memoryTypeBits, properties),
-        };
-        res.memory = vkCheck(vk.device().allocateMemoryUnique(allocInfo), "VkDevice::allocateMemory");
-        vkCheck(vk.device().bindBufferMemory(*res.buffer, *res.memory, 0), "VkDevice::bindBufferMemory");
-        return res;
-    }
-
-    Buffer createHostBuffer(Vulkan& vk, VkDeviceSize size, vk::BufferUsageFlags usage)
-    {
-        return createBuffer(
-            vk, size, usage, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-    }
-
-    Buffer createDeviceBuffer(Vulkan& vk, VkDeviceSize size, vk::BufferUsageFlags usage)
-    {
-        return createBuffer(vk, size, usage, vk::MemoryPropertyFlagBits::eDeviceLocal);
-    }
-
-    Buffer createExportedDeviceBuffer(Vulkan& vk, VkDeviceSize size, vk::BufferUsageFlags usage)
-    {
-        Buffer buffer = createBuffer(vk, size, usage, vk::MemoryPropertyFlagBits::eDeviceLocal, true);
-
-        auto vkGetMemoryFdKHRFn
-            = reinterpret_cast<PFN_vkGetMemoryFdKHR>(vkGetDeviceProcAddr(vk.device(), "vkGetMemoryFdKHR"));
-        if (!vkGetMemoryFdKHRFn) [[unlikely]]
-            fatalError("vkGetMemoryFdKHR is unavailable");
-
-        const VkMemoryGetFdInfoKHR fdInfo {
-            .sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
-            .memory = *buffer.memory,
-            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
-        };
-        int fd = -1;
-        vkCheck(vkGetMemoryFdKHRFn(vk.device(), &fdInfo, &fd), "vkGetMemoryFdKHR");
-
-        cudaExternalMemoryHandleDesc externalMemoryDesc {
-            .type = cudaExternalMemoryHandleTypeOpaqueFd,
-            .handle = { .fd = fd },
-            .size = static_cast<unsigned long long>(buffer.memorySize),
-        };
-        cudaCheck(cudaImportExternalMemory(&buffer.cudaMemory, &externalMemoryDesc),
-            "cudaImportExternalMemory vertex buffer");
-
-        cudaExternalMemoryBufferDesc bufferDesc {};
-        bufferDesc.offset = 0;
-        bufferDesc.size = static_cast<unsigned long long>(buffer.size);
-        cudaCheck(cudaExternalMemoryGetMappedBuffer(&buffer.cudaPtr, buffer.cudaMemory, &bufferDesc),
-            "cudaExternalMemoryGetMappedBuffer vertex buffer");
-        return buffer;
-    }
 
     ExternalSemaphore::ExternalSemaphore(VkDevice device, std::uint64_t initialValue)
         : m_device(device)
@@ -368,42 +253,6 @@ namespace {
         m_device = VK_NULL_HANDLE;
         m_semaphore = VK_NULL_HANDLE;
         m_cudaSemaphore = nullptr;
-    }
-
-    void copyBuffer(Vulkan& vk, Renderer::VulkanState& state, VkBuffer source, VkBuffer destination, VkDeviceSize size)
-    {
-        const vk::CommandBufferAllocateInfo allocInfo {
-            .commandPool = *state.commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
-        };
-        vk::CommandBuffer commandBufferRaw;
-        vkCheck(vk.device().allocateCommandBuffers(&allocInfo, &commandBufferRaw), "VkDevice::allocateCommandBuffers");
-        vk::UniqueCommandBuffer commandBuffer = wrapPoolUnique(commandBufferRaw, vk.device(), *state.commandPool);
-
-        const vk::CommandBufferBeginInfo beginInfo { .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit };
-        vkCheck(commandBuffer->begin(beginInfo), "VkCommandBuffer::begin");
-        const vk::BufferCopy copyRegion {
-            .size = size,
-        };
-        commandBuffer->copyBuffer(source, destination, 1, &copyRegion);
-        vkCheck(commandBuffer->end(), "VkCommandBuffer::end");
-
-        vk::SubmitInfo submitInfo {
-            .commandBufferCount = 1,
-            .pCommandBuffers = &*commandBuffer,
-        };
-        vkCheck(vk.graphicsQueue().submit(1, &submitInfo, {}), "VkQueue::submit");
-        vkCheck(vk.graphicsQueue().waitIdle(), "VkQueue::waitIdle");
-    }
-
-    void uploadDeviceBuffer(
-        Vulkan& vk, Renderer::VulkanState& state, Buffer& destination, const void* data, VkDeviceSize size)
-    {
-        Buffer staging = createHostBuffer(vk, size, vk::BufferUsageFlagBits::eTransferSrc);
-        void* mapped = vkCheck(vk.device().mapMemory(*staging.memory, 0, size), "VkDevice::mapMemory staging upload");
-        std::memcpy(mapped, data, static_cast<std::size_t>(size));
-        vk.device().unmapMemory(*staging.memory);
-
-        copyBuffer(vk, state, *staging.buffer, *destination.buffer, size);
     }
 
     Image createDepthImage(Vulkan& vk, Renderer::VulkanState& state)
@@ -783,28 +632,28 @@ namespace {
 
     void createDescriptors(Vulkan& vk, Renderer::VulkanState& state)
     {
-        const VkDeviceSize terrainHeadersSizeBytes = sizeof(TerrainHeader) * state.batchSize;
+        const vk::DeviceSize terrainHeadersSizeBytes = sizeof(TerrainHeader) * state.batchSize;
         state.terrainHeaderBuffer
-            = createExportedDeviceBuffer(vk, terrainHeadersSizeBytes, vk::BufferUsageFlagBits::eStorageBuffer);
+            = VulkanCudaInteropBuffer(vk, terrainHeadersSizeBytes, vk::BufferUsageFlagBits::eStorageBuffer);
 
         state.terrainVoxelBufferCapacityBytes
-            = static_cast<VkDeviceSize>(MaxTerrainVoxels) * state.batchSize * VoxelSize;
-        state.terrainVoxelBuffer = createExportedDeviceBuffer(
+            = static_cast<vk::DeviceSize>(MaxTerrainVoxels) * state.batchSize * VoxelSize;
+        state.terrainVoxelBuffer = VulkanCudaInteropBuffer(
             vk, state.terrainVoxelBufferCapacityBytes, vk::BufferUsageFlagBits::eStorageBuffer);
         state.pigVertexBuffer
-            = createDeviceBuffer(vk, static_cast<VkDeviceSize>(PigMesh::verticesCount()) * sizeof(MeshVertex),
+            = VulkanDeviceBuffer(vk, static_cast<vk::DeviceSize>(PigMesh::verticesCount()) * sizeof(MeshVertex),
                 vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst);
         state.instanceBuffer
-            = createHostBuffer(vk, sizeof(Renderer::EntityInstance) * MaxEntityInstances * state.batchSize,
+            = VulkanHostBuffer(vk, sizeof(Renderer::EntityInstance) * MaxEntityInstances * state.batchSize,
                 vk::BufferUsageFlagBits::eStorageBuffer);
-        state.paramsBuffer = createHostBuffer(
+        state.paramsBuffer = VulkanHostBuffer(
             vk, sizeof(Renderer::RenderParams) * state.batchSize, vk::BufferUsageFlagBits::eStorageBuffer);
 
-        const VkDeviceSize observationBytes
-            = static_cast<VkDeviceSize>(state.renderExtent.width) * state.renderExtent.height * 4U * state.batchSize;
+        const vk::DeviceSize observationBytes
+            = static_cast<vk::DeviceSize>(state.renderExtent.width) * state.renderExtent.height * 4U * state.batchSize;
         for (OffscreenFrame& frame : state.frames) {
             frame.observationBuffer
-                = createExportedDeviceBuffer(vk, observationBytes, vk::BufferUsageFlagBits::eTransferDst);
+                = VulkanCudaInteropBuffer(vk, observationBytes, vk::BufferUsageFlagBits::eTransferDst);
             const std::size_t tensorBytes = static_cast<std::size_t>(state.renderExtent.width)
                 * static_cast<std::size_t>(state.renderExtent.height) * 3U * state.batchSize * sizeof(float);
             cudaCheck(cudaMalloc(&frame.observationTensor, tensorBytes), "cudaMalloc observation tensor");
@@ -833,26 +682,11 @@ namespace {
         state.terrainDescriptorSet = descriptorSets[0];
         state.pigDescriptorSet = descriptorSets[1];
 
-        const vk::DescriptorBufferInfo terrainHeaderInfo {
-            .buffer = *state.terrainHeaderBuffer.buffer,
-            .range = state.terrainHeaderBuffer.size,
-        };
-        const vk::DescriptorBufferInfo voxelInfo {
-            .buffer = *state.terrainVoxelBuffer.buffer,
-            .range = state.terrainVoxelBuffer.size,
-        };
-        const vk::DescriptorBufferInfo pigVertexInfo {
-            .buffer = *state.pigVertexBuffer.buffer,
-            .range = state.pigVertexBuffer.size,
-        };
-        const vk::DescriptorBufferInfo instanceInfo {
-            .buffer = *state.instanceBuffer.buffer,
-            .range = state.instanceBuffer.size,
-        };
-        const vk::DescriptorBufferInfo paramsInfo {
-            .buffer = *state.paramsBuffer.buffer,
-            .range = state.paramsBuffer.size,
-        };
+        const vk::DescriptorBufferInfo terrainHeaderInfo = state.terrainHeaderBuffer.info();
+        const vk::DescriptorBufferInfo voxelInfo = state.terrainVoxelBuffer.info();
+        const vk::DescriptorBufferInfo pigVertexInfo = state.pigVertexBuffer.info();
+        const vk::DescriptorBufferInfo instanceInfo = state.instanceBuffer.info();
+        const vk::DescriptorBufferInfo paramsInfo = state.paramsBuffer.info();
 
         const std::array<vk::WriteDescriptorSet, 3> terrainWrites = {
             vk::WriteDescriptorSet {
@@ -926,14 +760,12 @@ namespace {
     void destroyVulkan(Vulkan& vk, Renderer::VulkanState& state)
     {
         vkCheck(vk.device().waitIdle(), "VkDevice::waitIdle");
-        if (state.observationConversionStream)
-            cudaCheck(cudaStreamSynchronize(state.observationConversionStream), "cudaStreamSynchronize observation");
+        cudaCheck(cudaStreamSynchronize(state.observationConversionStream), "cudaStreamSynchronize observation");
         for (OffscreenFrame& frame : state.frames) {
             if (frame.observationTensor)
                 cudaCheck(cudaFree(frame.observationTensor), "cudaFree observation tensor");
         }
-        if (state.observationConversionStream)
-            cudaCheck(cudaStreamDestroy(state.observationConversionStream), "cudaStreamDestroy observation");
+        cudaCheck(cudaStreamDestroy(state.observationConversionStream), "cudaStreamDestroy observation");
     }
 
 } // namespace
@@ -967,8 +799,8 @@ void Renderer::initializeBatchData()
         PigMesh pigMeshGenerator;
         const std::span<MeshVertex> pigMesh = pigMeshGenerator.generate();
         m_pigMeshVertexCount = static_cast<uint32_t>(pigMesh.size());
-        uploadDeviceBuffer(
-            m_vk, *m_state, m_state->pigVertexBuffer, pigMesh.data(), sizeof(MeshVertex) * pigMesh.size());
+        m_state->pigVertexBuffer.uploadSync(
+            m_vk, *m_state->commandPool, pigMesh.data(), sizeof(MeshVertex) * pigMesh.size());
         m_pigMeshUploaded = true;
     }
     for (uint32_t i = 0; i < m_batchSize; ++i) {
@@ -1023,12 +855,12 @@ void Renderer::uploadInstances(std::size_t slotIndex, const World& world)
     }
     slot.instanceCount = static_cast<uint32_t>(m_instances.size() - 1U);
 
-    const VkDeviceSize uploadBytes = sizeof(EntityInstance) * m_instances.size();
-    const VkDeviceSize uploadOffset = sizeof(EntityInstance) * slot.instanceOffset;
-    void* mapped = vkCheck(
-        m_vk.device().mapMemory(*m_state->instanceBuffer.memory, uploadOffset, uploadBytes), "vkMapMemory instances");
+    const vk::DeviceSize uploadBytes = sizeof(EntityInstance) * m_instances.size();
+    const vk::DeviceSize uploadOffset = sizeof(EntityInstance) * slot.instanceOffset;
+    void* mapped = vkCheck(m_vk.device().mapMemory(m_state->instanceBuffer.vkMemory(), uploadOffset, uploadBytes),
+        "vkMapMemory instances");
     std::memcpy(mapped, m_instances.data(), static_cast<std::size_t>(uploadBytes));
-    m_vk.device().unmapMemory(*m_state->instanceBuffer.memory);
+    m_vk.device().unmapMemory(m_state->instanceBuffer.vkMemory());
 }
 
 void Renderer::drawFrame()
@@ -1045,11 +877,7 @@ void Renderer::drawFrame()
     m_state->lastSubmittedFrame = m_state->nextFrame;
     m_state->nextFrame = (m_state->nextFrame + 1U) % m_state->frames.size();
 
-    const VkDeviceSize paramsBytes = sizeof(RenderParams) * m_batchSize;
-    void* mapped
-        = vkCheck(m_vk.device().mapMemory(*m_state->paramsBuffer.memory, 0, paramsBytes), "VkDevice::mapMemory params");
-    std::memcpy(mapped, m_renderParams.get(), static_cast<std::size_t>(paramsBytes));
-    m_vk.device().unmapMemory(*m_state->paramsBuffer.memory);
+    m_state->paramsBuffer.upload(m_vk, 0, m_renderParams.get(), sizeof(RenderParams) * m_batchSize);
 
     vk::CommandBuffer commandBuffer = offscreenFrame.commandBuffer;
     commandBuffer.reset();
@@ -1134,7 +962,7 @@ void Renderer::drawFrame()
         .imageExtent = { m_state->renderExtent.width, m_state->renderExtent.height, 1 },
     };
     commandBuffer.copyImageToBuffer(*offscreenFrame.color.image, vk::ImageLayout::eTransferSrcOptimal,
-        *offscreenFrame.observationBuffer.buffer, 1, &copyRegion);
+        offscreenFrame.observationBuffer.vkBuffer(), 1, &copyRegion);
     offscreenFrame.observationVersion = m_observationVersion;
 
     vkCheck(commandBuffer.end(), "VkCommandBuffer::end");
@@ -1157,7 +985,7 @@ void Renderer::drawFrame()
 
     cudaStream_t stream = m_state->observationConversionStream;
     offscreenFrame.frameCompletionSemaphore.wait(stream, offscreenFrame.observationVersion);
-    convertRgba8ToFloatNchw(offscreenFrame.observationBuffer.cudaPtr, offscreenFrame.observationTensor,
+    convertRgba8ToFloatNchw(offscreenFrame.observationBuffer.cudaPtr(), offscreenFrame.observationTensor,
         m_state->batchSize, m_state->renderExtent.width, m_state->renderExtent.height,
         reinterpret_cast<std::uintptr_t>(stream));
     CudaFuture<void> conversionTask(stream);
@@ -1199,10 +1027,10 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
         }
 
         WorldGenerationBuffers buffers;
-        buffers.header = &reinterpret_cast<TerrainHeader*>(m_state->terrainHeaderBuffer.cudaPtr)[slotIndex];
+        buffers.header = &m_state->terrainHeaderBuffer.cudaPtr<TerrainHeader>()[slotIndex];
         buffers.maxVoxelCount = MaxTerrainVoxels;
         buffers.voxels = reinterpret_cast<Voxel*>(
-            static_cast<std::byte*>(m_state->terrainVoxelBuffer.cudaPtr) + slot.terrainVoxelOffset * VoxelSize);
+            m_state->terrainVoxelBuffer.cudaPtr<std::byte>() + slot.terrainVoxelOffset * VoxelSize);
         buffers.blocks = world.borrowGenerationBuffers();
 
         CudaSharedFuture<WorldGenerationOutput> generation

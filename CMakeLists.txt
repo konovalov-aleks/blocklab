@@ -107,9 +107,12 @@ add_library(blocklab_render
     src/CudaObservation.cu
     src/CudaWorldGenerator.cu
     src/graphics/Display.cpp
+    src/graphics/Display.cu
     src/graphics/GLFWInit.cpp
     src/graphics/Renderer.cpp
     src/graphics/Vulkan.cpp
+    src/graphics/VulkanBuffer.cpp
+    src/graphics/VulkanCudaInteropBuffer.cpp
     src/meshes/PigMesh.cpp
     src/WorldGenerator.cpp
 )

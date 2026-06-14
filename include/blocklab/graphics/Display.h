@@ -4,6 +4,7 @@
 #include <blocklab/Observation.h>
 
 #include <GLFW/glfw3.h>
+#include <cuda_runtime.h>
 #include <vulkan/vulkan.hpp>
 
 namespace blocklab {
@@ -38,6 +39,8 @@ private:
     std::vector<vk::Image> m_images; // the owner is the swapchain
 
     vk::UniqueSemaphore m_imageAvailableSemaphore;
+
+    cudaStream_t m_conversionStream = nullptr;
 
     Vulkan* m_vk = nullptr;
 };
