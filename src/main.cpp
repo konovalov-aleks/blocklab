@@ -1,5 +1,7 @@
 #include <blocklab/CliParsing.h>
 #include <blocklab/Environment.h>
+#include <blocklab/graphics/Display.h>
+#include <blocklab/graphics/GLFWInit.h>
 #include <blocklab/graphics/Renderer.h>
 #include <blocklab/graphics/Vulkan.h>
 
@@ -106,12 +108,16 @@ void keyCallback(GLFWwindow* window, int key, int, int action, int)
 int main(int argc, char** argv)
 {
     const AppConfig appConfig = parseAppConfig(argc, argv);
-    blocklab::Vulkan vk(blocklab::VulkanInstance { false });
+
+    blocklab::GLFWInit glfwInit;
+    blocklab::VulkanInstance vkInstance(true);
+    blocklab::Display display(appConfig.renderConfig.width, appConfig.renderConfig.height, vkInstance);
+    blocklab::Vulkan vk(vkInstance, display.surface());
     blocklab::Renderer renderer(vk, appConfig.renderConfig);
     blocklab::Environment env(renderer, 1);
     env.reset();
     InputState input;
-    GLFWwindow* window = nullptr; // renderer.window();
+    GLFWwindow* window = display.window();
     glfwSetWindowUserPointer(window, &input);
     glfwSetCursorPosCallback(window, cursorPositionCallback);
     glfwSetKeyCallback(window, keyCallback);
@@ -131,8 +137,8 @@ int main(int argc, char** argv)
     const auto visualInterval
         = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / appConfig.visualFps));
 
-    while (true) { // !renderer.shouldClose()) {
-        // renderer.pollEvents();
+    while (!display.shouldClose()) {
+        display.pollEvents();
         if (keyDown(window, GLFW_KEY_ESCAPE))
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         if (keyDown(window, GLFW_KEY_R))
@@ -178,6 +184,7 @@ int main(int argc, char** argv)
         if (env.observe().version() > 0 && now - lastVisualAt >= visualInterval) {
             lastVisualAt = now;
             ++statsFrames;
+            display.show(env.observe());
         }
 
         const double statsElapsed = std::chrono::duration<double>(now - lastStatsAt).count();

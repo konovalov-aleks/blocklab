@@ -37,15 +37,15 @@ VulkanInstance::VulkanInstance(bool useGLFW)
     m_instance = vkCheck(vk::createInstanceUnique(info), "vk::createInstance");
 }
 
-Vulkan::Vulkan(VulkanInstance&& instance, Display* display)
-    : m_instance(std::move(instance))
+Vulkan::Vulkan(VulkanInstance& instance, vk::SurfaceKHR presentSurface)
+    : m_instance(instance)
 {
-    const RequiredExtensions extensions = requiredExtensions(display);
-    choosePhysicalDevice(extensions, display);
+    const RequiredExtensions extensions = requiredExtensions(presentSurface != nullptr);
+    choosePhysicalDevice(extensions, presentSurface);
     createDevice(extensions);
 }
 
-Vulkan::RequiredExtensions Vulkan::requiredExtensions(bool useWindow)
+Vulkan::RequiredExtensions Vulkan::requiredExtensions(bool presentationSupport)
 {
     RequiredExtensions result = {
         VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
@@ -54,12 +54,12 @@ Vulkan::RequiredExtensions Vulkan::requiredExtensions(bool useWindow)
         VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
         VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME,
     };
-    if (useWindow)
+    if (presentationSupport)
         result.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     return result;
 }
 
-void Vulkan::choosePhysicalDevice(const RequiredExtensions& requiredExtensions, Display* display)
+void Vulkan::choosePhysicalDevice(const RequiredExtensions& requiredExtensions, vk::SurfaceKHR presentSurface)
 {
     std::vector<vk::PhysicalDevice> devices
         = vkCheck(instance().enumeratePhysicalDevices(), "VkInstance::enumeratePhysicalDevices");
@@ -73,13 +73,12 @@ void Vulkan::choosePhysicalDevice(const RequiredExtensions& requiredExtensions, 
         for (std::uint32_t i = 0; i < queueFamilies.size(); ++i) {
             if (queueFamilies[i].queueFlags & vk::QueueFlagBits::eGraphics)
                 graphicsQueueIndex = i;
-            if (display) {
-                if (vkCheck(
-                        device.getSurfaceSupportKHR(i, display->surface()), "VkPhysicalDevice::getSurfaceSupportKHR"))
+            if (presentSurface) {
+                if (vkCheck(device.getSurfaceSupportKHR(i, presentSurface), "VkPhysicalDevice::getSurfaceSupportKHR"))
                     presentQueueIndex = i;
             }
         }
-        if (!graphicsQueueIndex || (display && !presentQueueIndex))
+        if (!graphicsQueueIndex || (presentSurface && !presentQueueIndex))
             continue;
 
         std::vector<vk::ExtensionProperties> extensionProperties = vkCheck(
@@ -104,7 +103,7 @@ void Vulkan::choosePhysicalDevice(const RequiredExtensions& requiredExtensions, 
             .pNext = &features12,
         };
         device.getFeatures2(&features2);
-        if (features12.shaderOutputLayer != VK_TRUE || features12.shaderOutputViewportIndex != VK_TRUE)
+        if (features12.shaderOutputLayer != vk::True || features12.shaderOutputViewportIndex != vk::True)
             continue;
 
         m_physicalDevice = device;
@@ -118,9 +117,9 @@ void Vulkan::choosePhysicalDevice(const RequiredExtensions& requiredExtensions, 
 void Vulkan::createDevice(const RequiredExtensions& extensions)
 {
     vk::PhysicalDeviceVulkan12Features features12 {
-        .timelineSemaphore = VK_TRUE,
-        .shaderOutputViewportIndex = VK_TRUE,
-        .shaderOutputLayer = VK_TRUE,
+        .timelineSemaphore = vk::True,
+        .shaderOutputViewportIndex = vk::True,
+        .shaderOutputLayer = vk::True,
     };
 
     const float priority[] = { 1.0f };

@@ -1,6 +1,8 @@
 #include <blocklab/Agent.h>
 #include <blocklab/CliParsing.h>
 #include <blocklab/Environment.h>
+#include <blocklab/graphics/Display.h>
+#include <blocklab/graphics/GLFWInit.h>
 #include <blocklab/graphics/Renderer.h>
 #include <blocklab/graphics/Vulkan.h>
 
@@ -10,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <random>
 #include <string_view>
 #include <vector>
@@ -225,17 +228,39 @@ int main(int argc, char** argv)
     randomAgents.reserve(config.batchSize);
     for (uint32_t i = 0; i < config.batchSize; ++i)
         randomAgents.emplace_back(config);
-    std::vector<blocklab::AgentAction> actions(config.batchSize);
-    blocklab::Vulkan vk(blocklab::VulkanInstance { false });
+
+    blocklab::VulkanInstance vkInstance(config.visualize);
+    std::optional<blocklab::GLFWInit> glfwInit;
+    std::optional<blocklab::Display> display;
+    vk::SurfaceKHR presentSurface;
+    if (config.visualize) {
+        glfwInit.emplace();
+        display.emplace(config.renderConfig.width, config.renderConfig.height, vkInstance);
+        presentSurface = display->surface();
+    }
+    blocklab::Vulkan vk(vkInstance, presentSurface);
     blocklab::Renderer renderer(vk, config.renderConfig);
     blocklab::Environment env(renderer, config.batchSize);
-    std::unique_ptr<blocklab::Renderer> visualRenderer;
-    if (config.visualize)
-        visualRenderer = std::make_unique<blocklab::Renderer>(vk, config.visualConfig);
-    uint64_t lastInitialOverridesApplied = resetEnvironment(env, config, config.seed);
 
+    using Clock = std::chrono::steady_clock;
+
+    static constexpr int minPollPeriodMs = 100;
+    Clock::time_point lastPollTime = Clock::now();
+    const auto pollEvents = [&display, &lastPollTime]() {
+        if (!display)
+            return;
+        const Clock::time_point now = Clock::now();
+        const auto timeSinceLastPoll = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastPollTime);
+        if (timeSinceLastPoll.count() < minPollPeriodMs)
+            return;
+        display->pollEvents();
+        lastPollTime = now;
+    };
+
+    uint64_t lastInitialOverridesApplied = resetEnvironment(env, config, config.seed);
+    std::vector<blocklab::AgentAction> actions(config.batchSize);
     for (uint64_t step = 0; step < config.warmupSteps; ++step) {
-        // renderer.pollEvents();
+        pollEvents();
         for (uint32_t i = 0; i < config.batchSize; ++i)
             actions[i] = randomAgents[i].nextAction(rng);
         const std::span<const blocklab::StepResult> results = env.step(actions);
@@ -245,7 +270,6 @@ int main(int argc, char** argv)
             lastInitialOverridesApplied = resetEnvironment(env, config, config.seed + static_cast<uint32_t>(step + 1));
     }
 
-    using Clock = std::chrono::steady_clock;
     const auto startedAt = Clock::now();
     auto lastReportAt = startedAt;
     const auto visualInterval
@@ -260,14 +284,8 @@ int main(int argc, char** argv)
         lastBlocksPlaced[i] = env.agent(i).state().blocksPlaced;
     }
 
-    while (true) {
-        // renderer.pollEvents();
-
-        /*        if (visualRenderer) {
-                    visualRenderer->pollEvents();
-                    if (visualRenderer->shouldClose())
-                        break;
-                }*/
+    while (!display || !display->shouldClose()) {
+        pollEvents();
         for (uint32_t i = 0; i < config.batchSize; ++i)
             actions[i] = randomAgents[i].nextAction(rng);
         const std::span<const blocklab::StepResult> results = env.step(actions);
@@ -297,9 +315,8 @@ int main(int argc, char** argv)
         }
 
         const auto now = Clock::now();
-        if (visualRenderer && now - lastVisualAt >= visualInterval) {
-            const blocklab::AgentState agents[] = { env.agent(0).state() };
-            visualRenderer->renderObservations({ &env.world(0), 1 }, agents);
+        if (display && now - lastVisualAt >= visualInterval) {
+            display->show(env.observe());
             lastVisualAt = now;
         }
         const double elapsed = std::chrono::duration<double>(now - startedAt).count();

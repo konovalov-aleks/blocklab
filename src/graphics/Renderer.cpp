@@ -1065,7 +1065,8 @@ void Renderer::drawFrame()
     // So, it's not mandatory to wait until previous observation conversion is completed
     // TODO But for better stability and API simplification it's better to implement a GPU-side fence for that.
 
-    vkCheck(m_vk.device().waitForFences(1, &*offscreenFrame.fence, VK_TRUE, UINT64_MAX), "VkDevice::waitForFences");
+    vkCheck(m_vk.device().waitForFences(1, &*offscreenFrame.fence, vk::True, std::numeric_limits<std::uint64_t>::max()),
+        "VkDevice::waitForFences");
     vkCheck(m_vk.device().resetFences(1, &*offscreenFrame.fence), "VkDevice::resetFences");
 
     m_state->lastSubmittedFrame = m_state->nextFrame;
@@ -1159,8 +1160,7 @@ void Renderer::drawFrame()
     const vk::BufferImageCopy copyRegion {
         .bufferRowLength = 0,
         .bufferImageHeight = 0,
-        .imageSubresource = { .aspectMask = vk::ImageAspectFlagBits::eColor,
-            .layerCount = m_batchSize },
+        .imageSubresource = { .aspectMask = vk::ImageAspectFlagBits::eColor, .layerCount = m_batchSize },
         .imageExtent = { m_state->renderExtent.width, m_state->renderExtent.height, 1 },
     };
     commandBuffer.copyImageToBuffer(*offscreenFrame.color.image, vk::ImageLayout::eTransferSrcOptimal,

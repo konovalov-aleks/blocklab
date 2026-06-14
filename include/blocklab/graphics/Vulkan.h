@@ -52,7 +52,7 @@ class Display;
 
 class Vulkan {
 public:
-    Vulkan(VulkanInstance&&, Display* = nullptr);
+    Vulkan(VulkanInstance&, vk::SurfaceKHR = nullptr);
 
     vk::Instance instance() const { return m_instance.get(); }
     vk::PhysicalDevice physicalDevice() const { return m_physicalDevice; }
@@ -62,22 +62,22 @@ public:
     std::uint32_t graphicsQueueFamilyIndex() const { return m_graphicsQueueIndex; }
 
     vk::Queue presentQueue() const { return m_presentQueue; }
+    std::uint32_t presentQueueFamilyIndex() const { return m_presentQueueIndex.value_or(m_graphicsQueueIndex); }
 
 private:
     using RequiredExtensions = std::vector<const char*>;
 
-    RequiredExtensions requiredExtensions(bool useWindow);
-    void choosePhysicalDevice(const RequiredExtensions&, Display*);
+    RequiredExtensions requiredExtensions(bool presentationSupport);
+    void choosePhysicalDevice(const RequiredExtensions&, vk::SurfaceKHR presentSurface);
     void createDevice(const RequiredExtensions&);
 
-    VulkanInstance m_instance;
+    VulkanInstance& m_instance;
     vk::PhysicalDevice m_physicalDevice;
     vk::UniqueDevice m_device;
 
     vk::Queue m_graphicsQueue;
     vk::Queue m_presentQueue;
 
-    // TODO remove these fields
     std::uint32_t m_graphicsQueueIndex = static_cast<std::uint32_t>(-1);
     std::optional<std::uint32_t> m_presentQueueIndex;
 };

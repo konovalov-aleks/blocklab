@@ -74,7 +74,8 @@ namespace {
             , m_rewards(std::make_unique<float[]>(numEnvs))
             , m_terminated(std::make_unique<bool[]>(numEnvs))
             , m_truncated(std::make_unique<bool[]>(numEnvs))
-            , m_vulkan(VulkanInstance(false))
+            , m_vulkanInstance(false)
+            , m_vulkan(m_vulkanInstance)
             , m_renderer(m_vulkan,
                   RenderConfig {
                       .width = static_cast<int32_t>(width),
@@ -236,6 +237,7 @@ namespace {
         std::unique_ptr<float[]> m_rewards;
         std::unique_ptr<bool[]> m_terminated;
         std::unique_ptr<bool[]> m_truncated;
+        VulkanInstance m_vulkanInstance;
         Vulkan m_vulkan;
         Renderer m_renderer;
         Environment m_environment;
