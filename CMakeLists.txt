@@ -9,6 +9,9 @@ project(blocklab LANGUAGES CXX CUDA)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CUDA_STANDARD 20)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_EXTENSIONS OFF)
 
 include(FetchContent)
 
@@ -112,7 +115,9 @@ add_library(blocklab_render
     src/graphics/Renderer.cpp
     src/graphics/Vulkan.cpp
     src/graphics/VulkanBuffer.cpp
+    src/graphics/VulkanSemaphore.cpp
     src/graphics/VulkanCudaInteropBuffer.cpp
+    src/graphics/VulkanCudaInteropSemaphore.cpp
     src/meshes/PigMesh.cpp
     src/WorldGenerator.cpp
 )
@@ -138,7 +143,6 @@ target_compile_definitions(blocklab_render PRIVATE BLOCKLAB_SHADER_DIR="${BLOCKL
 target_compile_definitions(blocklab_render PUBLIC VULKAN_HPP_NO_EXCEPTIONS VULKAN_HPP_NO_STRUCT_CONSTRUCTORS)
 
 blocklab_enable_strict_warnings(blocklab_render)
-set_source_files_properties(src/CudaObservation.cu src/CudaWorldGenerator.cu PROPERTIES CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED ON)
 
 add_executable(blocklab
     src/main.cpp

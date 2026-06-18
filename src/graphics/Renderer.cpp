@@ -7,6 +7,7 @@
 #include <blocklab/graphics/Vulkan.h>
 #include <blocklab/graphics/VulkanBuffer.h>
 #include <blocklab/graphics/VulkanCudaInteropBuffer.h>
+#include <blocklab/graphics/VulkanCudaInteropSemaphore.h>
 #include <blocklab/meshes/PigMesh.h>
 
 #include <cuda_runtime.h>
@@ -29,7 +30,7 @@ namespace blocklab {
 namespace {
 
     constexpr float EyeHeight = 1.62f;
-    constexpr vk::Format ColorFormat = vk::Format::eR8G8B8A8Unorm;
+    constexpr vk::Format ColorFormat = vk::Format::eR8G8B8A8Srgb;
     constexpr uint32_t OffscreenFrameCount = 2;
     constexpr uint32_t MaxEntityInstances = 256;
     constexpr int32_t TerrainMeshHalfExtent = 32;
@@ -60,48 +61,6 @@ namespace {
         vk::UniqueImageView view;
     };
 
-    class ExternalSemaphore {
-    public:
-        ExternalSemaphore() = default;
-        ExternalSemaphore(VkDevice, std::uint64_t initialValue = 0);
-
-        ~ExternalSemaphore();
-
-        ExternalSemaphore(const ExternalSemaphore&) = delete;
-        ExternalSemaphore& operator=(const ExternalSemaphore&) = delete;
-
-        ExternalSemaphore(ExternalSemaphore&& other) noexcept
-            : m_device(std::exchange(other.m_device, VK_NULL_HANDLE))
-            , m_semaphore(std::exchange(other.m_semaphore, VK_NULL_HANDLE))
-            , m_cudaSemaphore(std::exchange(other.m_cudaSemaphore, nullptr))
-        {
-        }
-
-        ExternalSemaphore& operator=(ExternalSemaphore&& other) noexcept
-        {
-            if (this == &other)
-                return *this;
-
-            reset();
-            m_device = std::exchange(other.m_device, VK_NULL_HANDLE);
-            m_semaphore = std::exchange(other.m_semaphore, VK_NULL_HANDLE);
-            m_cudaSemaphore = std::exchange(other.m_cudaSemaphore, nullptr);
-            return *this;
-        }
-
-        void wait(cudaStream_t, uint64_t value);
-
-        VkSemaphore vulkanSemaphore() const { return m_semaphore; }
-        cudaExternalSemaphore_t cudaSemaphore() const { return m_cudaSemaphore; }
-
-    private:
-        void reset();
-
-        VkDevice m_device = VK_NULL_HANDLE;
-        VkSemaphore m_semaphore = VK_NULL_HANDLE;
-        cudaExternalSemaphore_t m_cudaSemaphore = nullptr;
-    };
-
     struct OffscreenFrame {
         static constexpr std::uint64_t NO_OBSERVATION_VERSION = 0;
 
@@ -113,8 +72,9 @@ namespace {
         float* observationTensor = nullptr;
         CudaSharedFuture<void> conversionTaskFuture;
 
-        ExternalSemaphore frameCompletionSemaphore;
+        VulkanCudaInteropTimelineSemaphore frameCompletionSemaphore;
         std::uint64_t observationVersion = NO_OBSERVATION_VERSION;
+        std::uint64_t worldGenerationLastWaitVersion = NO_OBSERVATION_VERSION;
         vk::UniqueFence fence;
     };
 
@@ -191,69 +151,6 @@ struct Renderer::VulkanState {
 };
 
 namespace {
-
-    ExternalSemaphore::ExternalSemaphore(VkDevice device, std::uint64_t initialValue)
-        : m_device(device)
-    {
-        const VkExportSemaphoreCreateInfo exportInfo {
-            .sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
-            .handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
-        };
-        VkSemaphoreTypeCreateInfo typeCreateInfo = {
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
-            .pNext = &exportInfo,
-            .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
-            .initialValue = initialValue,
-        };
-        const VkSemaphoreCreateInfo semaphoreInfo {
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-            .pNext = &typeCreateInfo,
-        };
-        vkCheck(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_semaphore), "vkCreateSemaphore external");
-
-        auto vkGetSemaphoreFdKHRFn
-            = reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(vkGetDeviceProcAddr(m_device, "vkGetSemaphoreFdKHR"));
-        if (!vkGetSemaphoreFdKHRFn) [[unlikely]]
-            fatalError("vkGetSemaphoreFdKHR is unavailable");
-
-        const VkSemaphoreGetFdInfoKHR fdInfo {
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR,
-            .semaphore = m_semaphore,
-            .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
-        };
-        int fd = -1;
-        vkCheck(vkGetSemaphoreFdKHRFn(m_device, &fdInfo, &fd), "vkGetSemaphoreFdKHR");
-
-        cudaExternalSemaphoreHandleDesc externalSemaphoreDesc {};
-        externalSemaphoreDesc.type = cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd;
-        externalSemaphoreDesc.handle.fd = fd;
-        cudaCheck(cudaImportExternalSemaphore(&m_cudaSemaphore, &externalSemaphoreDesc),
-            "cudaImportExternalSemaphore render");
-    }
-
-    ExternalSemaphore::~ExternalSemaphore() { reset(); }
-
-    void ExternalSemaphore::wait(cudaStream_t stream, uint64_t value)
-    {
-        if (!m_cudaSemaphore) [[unlikely]]
-            fatalError("External semaphore is not initialized");
-
-        cudaExternalSemaphoreWaitParams waitParams {};
-        waitParams.params.fence.value = value;
-        cudaCheck(cudaWaitExternalSemaphoresAsync(&m_cudaSemaphore, &waitParams, 1, stream),
-            "cudaWaitExternalSemaphoresAsync render complete");
-    }
-
-    void ExternalSemaphore::reset()
-    {
-        if (m_cudaSemaphore)
-            cudaCheck(cudaDestroyExternalSemaphore(m_cudaSemaphore), "cudaDestroyExternalSemaphore");
-        if (m_semaphore)
-            vkDestroySemaphore(m_device, m_semaphore, nullptr);
-        m_device = VK_NULL_HANDLE;
-        m_semaphore = VK_NULL_HANDLE;
-        m_cudaSemaphore = nullptr;
-    }
 
     Image createDepthImage(Vulkan& vk, Renderer::VulkanState& state)
     {
@@ -972,7 +869,7 @@ void Renderer::drawFrame()
         .signalSemaphoreValueCount = std::size(signalValues),
         .pSignalSemaphoreValues = signalValues,
     };
-    const vk::Semaphore signalSemaphore = offscreenFrame.frameCompletionSemaphore.vulkanSemaphore();
+    const vk::Semaphore signalSemaphore = offscreenFrame.frameCompletionSemaphore.vkSemaphore();
     const vk::SubmitInfo submitInfo[] = { {
         .pNext = &timelineSubmitInfo,
         .commandBufferCount = 1,
@@ -980,11 +877,10 @@ void Renderer::drawFrame()
         .signalSemaphoreCount = 1,
         .pSignalSemaphores = &signalSemaphore,
     } };
-    // TODO migrate to submit2
     vkCheck(m_vk.graphicsQueue().submit(submitInfo, *offscreenFrame.fence), "VkQueue::submit");
 
     cudaStream_t stream = m_state->observationConversionStream;
-    offscreenFrame.frameCompletionSemaphore.wait(stream, offscreenFrame.observationVersion);
+    offscreenFrame.frameCompletionSemaphore.enqueueWait(stream, offscreenFrame.observationVersion);
     convertRgba8ToFloatNchw(offscreenFrame.observationBuffer.cudaPtr(), offscreenFrame.observationTensor,
         m_state->batchSize, m_state->renderExtent.width, m_state->renderExtent.height,
         reinterpret_cast<std::uintptr_t>(stream));
@@ -1020,10 +916,11 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
     const bool agentLeftMeshCache
         = meshDelta.x > MeshCacheStride || meshDelta.y > MeshCacheStride || meshDelta.z > MeshCacheStride;
     if (slot.lastWorldVersion != world.version() || agentLeftMeshCache) {
-        // TODO get rid of CPU synchronization. It's better to use one more semaphore instead
         for (OffscreenFrame& frame : m_state->frames) {
-            if (frame.observationVersion != OffscreenFrame::NO_OBSERVATION_VERSION) [[likely]]
-                frame.frameCompletionSemaphore.wait(m_worldGenerator.stream(), frame.observationVersion);
+            if (frame.worldGenerationLastWaitVersion >= frame.observationVersion)
+                continue;
+            frame.frameCompletionSemaphore.enqueueWait(m_worldGenerator.stream(), frame.observationVersion);
+            frame.worldGenerationLastWaitVersion = frame.observationVersion;
         }
 
         WorldGenerationBuffers buffers;

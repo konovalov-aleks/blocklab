@@ -55,6 +55,9 @@ VulkanBuffer::VulkanBuffer(
 void VulkanBuffer::copySync(
     Vulkan& vk, vk::CommandPool commandPool, const VulkanBuffer& source, VulkanBuffer& destination, vk::DeviceSize size)
 {
+    assert(size > 0);
+    assert(size <= source.size());
+    assert(size <= destination.size());
     assert(source.usage() & vk::BufferUsageFlagBits::eTransferSrc);
     assert(destination.usage() & vk::BufferUsageFlagBits::eTransferDst);
 

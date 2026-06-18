@@ -25,9 +25,8 @@ struct BenchmarkConfig {
     double seconds = 10.0;
     double reportInterval = 1.0;
     uint32_t seed = 1;
-    uint32_t batchSize = 1;
+    uint32_t batchSize = 16;
     bool visualize = false;
-    double visualFps = 30.0;
     int32_t minActionSteps = 20;
     int32_t maxActionSteps = 160;
     uint64_t initialOverrides = 1000;
@@ -92,12 +91,11 @@ private:
                 "  --seconds N              Run for N seconds, default 10. Ignored when --steps is non-zero.\n"
                 "  --steps N                Run fixed number of benchmark iterations, default 0.\n"
                 "  --warmup-steps N         Run N untimed warmup iterations before measurement, default 128.\n"
-                "  --batch-size N           Number of environments stepped and rendered per iteration, default 1.\n"
+                "  --batch-size N           Number of environments stepped and rendered per iteration, default 16.\n"
                 "  --num-envs N             Alias for --batch-size.\n"
                 "  --seed N                 RNG seed, default 1.\n"
                 "  --report-interval N      Progress report interval in seconds, default 1.\n"
                 "  --visualize              Open a Vulkan window and render the environment visibly.\n"
-                "  --visual-fps N           Max visible presentation rate, default 30.\n"
                 "  --action-steps A:B       Hold sampled movement/look for A..B steps, default 20:160.\n"
                 "  --initial-overrides N    Apply N clustered block overrides after each reset, default 1000.\n"
                 "  --resolution WxH         Render/window resolution, default 320x180.\n"
@@ -147,14 +145,6 @@ BenchmarkConfig parseArgs(int argc, char** argv)
                 std::exit(EXIT_FAILURE);
             }
             config.reportInterval = *reportInterval;
-        } else if (arg == "--visual-fps" || arg.starts_with("--visual-fps=")) {
-            const auto visualFps
-                = blocklab::cli::parseDouble(blocklab::cli::optionValue(i, argc, argv, arg, "--visual-fps"));
-            if (!visualFps || *visualFps <= 0.0) [[unlikely]] {
-                std::fprintf(stderr, "Invalid --visual-fps value.\n");
-                std::exit(EXIT_FAILURE);
-            }
-            config.visualFps = *visualFps;
         } else if (arg == "--action-steps" || arg.starts_with("--action-steps=")) {
             const auto actionSteps
                 = blocklab::cli::parseActionSteps(blocklab::cli::optionValue(i, argc, argv, arg, "--action-steps"));
@@ -223,17 +213,20 @@ int main(int argc, char** argv)
     for (uint32_t i = 0; i < config.batchSize; ++i)
         randomAgents.emplace_back(config);
 
-    blocklab::VulkanInstance vkInstance(config.visualize);
     std::optional<blocklab::GLFWInit> glfwInit;
+    if (config.visualize)
+        glfwInit.emplace();
+    blocklab::VulkanInstance vkInstance(config.visualize);
     std::optional<blocklab::Display> display;
     vk::SurfaceKHR presentSurface;
     if (config.visualize) {
-        glfwInit.emplace();
-        display.emplace(config.renderConfig.width, config.renderConfig.height, vkInstance);
+        display.emplace(config.batchSize, config.renderConfig.width, config.renderConfig.height, vkInstance);
         presentSurface = display->surface();
     }
-    blocklab::Vulkan vk(vkInstance, presentSurface);
-    blocklab::Renderer renderer(vk, config.renderConfig);
+    auto vk = std::make_shared<blocklab::Vulkan>(vkInstance, presentSurface);
+    if (display)
+        display->initialize(vk);
+    blocklab::Renderer renderer(*vk, config.renderConfig);
     blocklab::Environment env(renderer, config.batchSize);
 
     using Clock = std::chrono::steady_clock;
@@ -266,9 +259,6 @@ int main(int argc, char** argv)
 
     const auto startedAt = Clock::now();
     auto lastReportAt = startedAt;
-    const auto visualInterval
-        = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / config.visualFps));
-    auto lastVisualAt = startedAt - visualInterval;
     uint64_t lastReportIterations = 0;
     BenchmarkStats stats;
     std::vector<int32_t> lastBlocksCollected(config.batchSize);
@@ -308,11 +298,10 @@ int main(int argc, char** argv)
             }
         }
 
-        const auto now = Clock::now();
-        if (display && now - lastVisualAt >= visualInterval) {
+        if (display)
             display->show(env.observe());
-            lastVisualAt = now;
-        }
+
+        const auto now = Clock::now();
         const double elapsed = std::chrono::duration<double>(now - startedAt).count();
         if (std::chrono::duration<double>(now - lastReportAt).count() >= config.reportInterval) {
             const double interval = std::chrono::duration<double>(now - lastReportAt).count();

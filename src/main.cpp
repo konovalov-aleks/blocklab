@@ -10,13 +10,13 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <string_view>
 
 namespace {
 
 struct AppConfig {
     blocklab::RenderConfig renderConfig;
-    double visualFps = 60.0;
     bool unlocked = false;
 };
 
@@ -47,18 +47,10 @@ AppConfig parseAppConfig(int argc, char** argv)
                 std::exit(EXIT_FAILURE);
             }
             config.renderConfig = *parsed;
-        } else if (arg == "--visual-fps" || arg.starts_with("--visual-fps=")) {
-            const auto visualFps
-                = blocklab::cli::parseDouble(blocklab::cli::optionValue(i, argc, argv, arg, "--visual-fps"));
-            if (!visualFps || *visualFps <= 0.0) [[unlikely]] {
-                std::fprintf(stderr, "Invalid --visual-fps value.\n");
-                std::exit(EXIT_FAILURE);
-            }
-            config.visualFps = *visualFps;
         } else if (arg == "--unlocked")
             config.unlocked = true;
         else if (arg == "--help" || arg == "-h") {
-            std::printf("Usage: blocklab [--resolution WIDTHxHEIGHT] [--visual-fps N] [--unlocked]\n");
+            std::printf("Usage: blocklab [--resolution WIDTHxHEIGHT] [--unlocked]\n");
             std::exit(EXIT_SUCCESS);
         } else [[unlikely]] {
             std::fprintf(stderr, "Unknown argument: %.*s\n", static_cast<int>(arg.size()), arg.data());
@@ -111,9 +103,10 @@ int main(int argc, char** argv)
 
     blocklab::GLFWInit glfwInit;
     blocklab::VulkanInstance vkInstance(true);
-    blocklab::Display display(appConfig.renderConfig.width, appConfig.renderConfig.height, vkInstance);
-    blocklab::Vulkan vk(vkInstance, display.surface());
-    blocklab::Renderer renderer(vk, appConfig.renderConfig);
+    blocklab::Display display(1, appConfig.renderConfig.width, appConfig.renderConfig.height, vkInstance);
+    auto vk = std::make_shared<blocklab::Vulkan>(vkInstance, display.surface());
+    display.initialize(vk);
+    blocklab::Renderer renderer(*vk, appConfig.renderConfig);
     blocklab::Environment env(renderer, 1);
     env.reset();
     InputState input;
@@ -130,12 +123,9 @@ int main(int argc, char** argv)
     uint64_t totalSteps = 0;
     uint64_t statsFrames = 0;
     auto previous = Clock::now();
-    auto lastVisualAt = previous;
     auto lastStatsAt = previous;
     float accumulator = 0.0f;
     uint64_t statsSteps = 0;
-    const auto visualInterval
-        = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / appConfig.visualFps));
 
     while (!display.shouldClose()) {
         display.pollEvents();
@@ -181,11 +171,8 @@ int main(int argc, char** argv)
             }
         }
 
-        if (env.observe().version() > 0 && now - lastVisualAt >= visualInterval) {
-            lastVisualAt = now;
+        if (display.show(env.observe()))
             ++statsFrames;
-            display.show(env.observe());
-        }
 
         const double statsElapsed = std::chrono::duration<double>(now - lastStatsAt).count();
         if (statsElapsed >= 1.0) {
