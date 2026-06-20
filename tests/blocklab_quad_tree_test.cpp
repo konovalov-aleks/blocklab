@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <random>
 #include <unordered_map>
@@ -10,14 +11,14 @@
 
 namespace {
 
-uint64_t pointKey(int32_t x, int32_t z)
+std::uint64_t pointKey(std::int32_t x, std::int32_t z)
 {
-    return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) | static_cast<uint32_t>(z);
+    return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x)) << 32) | static_cast<std::uint32_t>(z);
 }
 
-int32_t keyX(uint64_t key) { return static_cast<int32_t>(static_cast<uint32_t>(key >> 32)); }
+std::int32_t keyX(std::uint64_t key) { return static_cast<std::int32_t>(static_cast<std::uint32_t>(key >> 32)); }
 
-int32_t keyZ(uint64_t key) { return static_cast<int32_t>(static_cast<uint32_t>(key)); }
+std::int32_t keyZ(std::uint64_t key) { return static_cast<std::int32_t>(static_cast<std::uint32_t>(key)); }
 
 } // namespace
 
@@ -92,8 +93,8 @@ TEST_CASE("QuadTree erases matching values inside a rectangle", "[quad-tree]")
     tree.insert(-4, 3, 3);
     tree.insert(16, -8, 4);
 
-    const std::size_t erased = tree.eraseIf(
-        { .x = -10, .z = -10, .width = 20, .height = 20 }, [](int32_t, int32_t, int value) { return value % 2 == 1; });
+    const std::size_t erased = tree.eraseIf({ .x = -10, .z = -10, .width = 20, .height = 20 },
+        [](std::int32_t, std::int32_t, int value) { return value % 2 == 1; });
     CHECK(erased == 2);
     CHECK(tree.size() == 2);
     CHECK(tree.find(0, 0) == tree.end());
@@ -125,8 +126,8 @@ TEST_CASE("QuadTree erases all values inside a rectangle", "[quad-tree]")
 {
     blocklab::QuadTree<int> tree;
     int value = 0;
-    for (int32_t z = -3; z <= 3; ++z) {
-        for (int32_t x = -3; x <= 3; ++x)
+    for (std::int32_t z = -3; z <= 3; ++z) {
+        for (std::int32_t x = -3; x <= 3; ++x)
             tree.insert(x, z, ++value);
     }
 
@@ -134,8 +135,8 @@ TEST_CASE("QuadTree erases all values inside a rectangle", "[quad-tree]")
     CHECK(erased == 9);
     CHECK(tree.size() == 40);
 
-    for (int32_t z = -3; z <= 3; ++z) {
-        for (int32_t x = -3; x <= 3; ++x) {
+    for (std::int32_t z = -3; z <= 3; ++z) {
+        for (std::int32_t x = -3; x <= 3; ++x) {
             const bool inside = x >= -1 && x <= 1 && z >= -1 && z <= 1;
             if (inside) {
                 CHECK(tree.find(x, z) == tree.end());
@@ -155,17 +156,17 @@ TEST_CASE("QuadTree iterator returned by find advances to following values", "[q
     tree.insert(16, 16, 4);
     tree.insert(64, 64, 5);
 
-    std::vector<uint64_t> orderedKeys;
+    std::vector<std::uint64_t> orderedKeys;
     for (auto it = tree.begin(); it != tree.end(); ++it)
         orderedKeys.push_back(pointKey(it.x(), it.z()));
     REQUIRE(orderedKeys.size() >= 4);
 
-    const uint64_t startKey = orderedKeys[1];
-    const uint64_t stopKey = orderedKeys[orderedKeys.size() - 1];
+    const std::uint64_t startKey = orderedKeys[1];
+    const std::uint64_t stopKey = orderedKeys[orderedKeys.size() - 1];
     auto it = tree.find(keyX(startKey), keyZ(startKey));
     const auto stop = tree.find(keyX(stopKey), keyZ(stopKey));
 
-    std::vector<uint64_t> suffixKeys;
+    std::vector<std::uint64_t> suffixKeys;
     for (; it != stop; ++it)
         suffixKeys.push_back(pointKey(it.x(), it.z()));
 
@@ -182,7 +183,7 @@ TEST_CASE("QuadTree iterator returned by find can advance to end", "[quad-tree]"
     tree.insert(-16, 16, 3);
     tree.insert(16, 16, 4);
 
-    std::vector<uint64_t> orderedKeys;
+    std::vector<std::uint64_t> orderedKeys;
     for (auto it = tree.cbegin(); it != tree.cend(); ++it)
         orderedKeys.push_back(pointKey(it.x(), it.z()));
     REQUIRE(!orderedKeys.empty());
@@ -224,16 +225,16 @@ TEST_CASE("QuadTree stores and removes a large random point set", "[quad-tree]")
 {
     constexpr std::size_t pointCount = 4096;
     std::mt19937 rng(0xB10C1AB);
-    std::uniform_int_distribution<int32_t> coordinateDistribution(-50000, 50000);
+    std::uniform_int_distribution<std::int32_t> coordinateDistribution(-50000, 50000);
     std::uniform_int_distribution<int> valueDistribution(-1000000, 1000000);
 
-    std::unordered_map<uint64_t, int> expected;
+    std::unordered_map<std::uint64_t, int> expected;
     expected.reserve(pointCount);
 
     while (expected.size() < pointCount) {
-        const int32_t x = coordinateDistribution(rng);
-        const int32_t z = coordinateDistribution(rng);
-        const uint64_t key = pointKey(x, z);
+        const std::int32_t x = coordinateDistribution(rng);
+        const std::int32_t z = coordinateDistribution(rng);
+        const std::uint64_t key = pointKey(x, z);
         if (expected.find(key) != expected.end())
             continue;
 
@@ -251,14 +252,14 @@ TEST_CASE("QuadTree stores and removes a large random point set", "[quad-tree]")
         CHECK(*it == value);
     }
 
-    std::unordered_map<uint64_t, int> actual;
+    std::unordered_map<std::uint64_t, int> actual;
     actual.reserve(expected.size());
     for (auto it = tree.cbegin(); it != tree.cend(); ++it)
         actual.emplace(pointKey(it.x(), it.z()), *it);
     CHECK(actual == expected);
 
     for (const auto& entry : expected) {
-        const uint64_t key = entry.first;
+        const std::uint64_t key = entry.first;
         const std::size_t erased = tree.erase({ .x = keyX(key), .z = keyZ(key), .width = 1, .height = 1 });
         CHECK(erased == 1);
     }
@@ -268,7 +269,7 @@ TEST_CASE("QuadTree stores and removes a large random point set", "[quad-tree]")
     CHECK(tree.begin() == tree.end());
     CHECK(tree.cbegin() == tree.cend());
     for (const auto& entry : expected) {
-        const uint64_t key = entry.first;
+        const std::uint64_t key = entry.first;
         CHECK(tree.find(keyX(key), keyZ(key)) == tree.end());
     }
 }

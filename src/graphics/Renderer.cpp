@@ -31,11 +31,12 @@ namespace {
 
     constexpr float EyeHeight = 1.62f;
     constexpr vk::Format ColorFormat = vk::Format::eR8G8B8A8Srgb;
-    constexpr uint32_t OffscreenFrameCount = 2;
-    constexpr uint32_t MaxEntityInstances = 256;
-    constexpr int32_t TerrainMeshHalfExtent = 32;
-    constexpr uint32_t TerrainMeshExtent = TerrainMeshHalfExtent * 2;
-    constexpr size_t MaxTerrainVoxels = static_cast<size_t>(TerrainMeshExtent * Chunk::SizeY * TerrainMeshExtent);
+    constexpr std::uint32_t OffscreenFrameCount = 2;
+    constexpr std::uint32_t MaxEntityInstances = 256;
+    constexpr std::int32_t TerrainMeshHalfExtent = 32;
+    constexpr std::uint32_t TerrainMeshExtent = TerrainMeshHalfExtent * 2;
+    constexpr std::size_t MaxTerrainVoxels
+        = static_cast<std::size_t>(TerrainMeshExtent * Chunk::SizeY * TerrainMeshExtent);
 
     Vec3 cameraForward(float yaw, float pitch)
     {
@@ -240,7 +241,7 @@ namespace {
     {
         const vk::ShaderModuleCreateInfo info {
             .codeSize = bytes.size(),
-            .pCode = reinterpret_cast<const uint32_t*>(bytes.data()),
+            .pCode = reinterpret_cast<const std::uint32_t*>(bytes.data()),
         };
         return vkCheck(vk.device().createShaderModuleUnique(info), "VkDevice::createShaderModule");
     }
@@ -511,7 +512,7 @@ namespace {
         const vk::CommandBufferAllocateInfo allocInfo {
             .commandPool = *state.commandPool,
             .level = vk::CommandBufferLevel::ePrimary,
-            .commandBufferCount = static_cast<uint32_t>(state.frames.size()),
+            .commandBufferCount = static_cast<std::uint32_t>(state.frames.size()),
         };
         state.commandBuffers
             = vkCheck(vk.device().allocateCommandBuffersUnique(allocInfo), "VkDevice::allocateCommandBuffers");
@@ -640,8 +641,8 @@ namespace {
     {
         state.batchSize = std::max(1U, config.batchSize);
         state.renderExtent = vk::Extent2D {
-            .width = static_cast<uint32_t>(config.width),
-            .height = static_cast<uint32_t>(config.height),
+            .width = static_cast<std::uint32_t>(config.width),
+            .height = static_cast<std::uint32_t>(config.height),
         };
         state.colorFormat = ColorFormat;
         state.depthFormat = findSupportedDepthFormat(vk.physicalDevice());
@@ -695,12 +696,12 @@ void Renderer::initializeBatchData()
     if (!m_pigMeshUploaded) {
         PigMesh pigMeshGenerator;
         const std::span<MeshVertex> pigMesh = pigMeshGenerator.generate();
-        m_pigMeshVertexCount = static_cast<uint32_t>(pigMesh.size());
+        m_pigMeshVertexCount = static_cast<std::uint32_t>(pigMesh.size());
         m_state->pigVertexBuffer.uploadSync(
             m_vk, *m_state->commandPool, pigMesh.data(), sizeof(MeshVertex) * pigMesh.size());
         m_pigMeshUploaded = true;
     }
-    for (uint32_t i = 0; i < m_batchSize; ++i) {
+    for (std::uint32_t i = 0; i < m_batchSize; ++i) {
         RenderSlot& slot = m_slots[i];
         slot.terrainVoxelOffset = i * MaxTerrainVoxels;
         slot.pigVertexCount = m_pigMeshVertexCount;
@@ -714,17 +715,17 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, cons
     const Vec3 forward = cameraForward(agent.yaw, agent.pitch);
     const Vec3 right = glm::normalize(Vec3 { std::cos(agent.yaw), 0.0f, -std::sin(agent.yaw) });
     const Vec3 up = glm::normalize(glm::cross(forward, right));
-    // TODO is it practically possible for logicalTimeMs to exceed int32_t max? If so, we should probably wrap it
+    // TODO is it practically possible for logicalTimeMs to exceed std::int32_t max? If so, we should probably wrap it
     // instead of clamping to max.
-    assert(world.logicalTimeMs() <= static_cast<uint64_t>(std::numeric_limits<int32_t>::max()));
+    assert(world.logicalTimeMs() <= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()));
     return {
         .origin = { origin.x, origin.y, origin.z, 0.0f },
         .forward = { forward.x, forward.y, forward.z, 0.0f },
         .right = { right.x, right.y, right.z, 0.0f },
         .up = { up.x, up.y, up.z, 0.0f },
-        .worldOriginAndWidth = { 0, 0, 0, static_cast<int32_t>(m_state->renderExtent.width) },
-        .regionAndHeight = { 0, 0, 0, static_cast<int32_t>(m_state->renderExtent.height) },
-        .frameInfo = { .animationTimeMs = static_cast<int32_t>(world.logicalTimeMs()) },
+        .worldOriginAndWidth = { 0, 0, 0, static_cast<std::int32_t>(m_state->renderExtent.width) },
+        .regionAndHeight = { 0, 0, 0, static_cast<std::int32_t>(m_state->renderExtent.height) },
+        .frameInfo = { .animationTimeMs = static_cast<std::int32_t>(world.logicalTimeMs()) },
         .tuning = { 48.0f, Pi / 2.25f, 10.0f, 28.0f },
     };
 }
@@ -750,7 +751,7 @@ void Renderer::uploadInstances(std::size_t slotIndex, const World& world)
         if (m_instances.size() >= MaxEntityInstances)
             break;
     }
-    slot.instanceCount = static_cast<uint32_t>(m_instances.size() - 1U);
+    slot.instanceCount = static_cast<std::uint32_t>(m_instances.size() - 1U);
 
     const vk::DeviceSize uploadBytes = sizeof(EntityInstance) * m_instances.size();
     const vk::DeviceSize uploadOffset = sizeof(EntityInstance) * slot.instanceOffset;
@@ -791,12 +792,12 @@ void Renderer::drawFrame()
         .renderPass = *m_state->renderPass,
         .framebuffer = *offscreenFrame.framebuffer,
         .renderArea = renderArea,
-        .clearValueCount = static_cast<uint32_t>(std::size(clearValues)),
+        .clearValueCount = static_cast<std::uint32_t>(std::size(clearValues)),
         .pClearValues = clearValues,
     };
     commandBuffer.beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
 
-    const auto pushConstants = [this, commandBuffer](uint32_t envIndex) {
+    const auto pushConstants = [this, commandBuffer](std::uint32_t envIndex) {
         DrawPushConstants pushConstants {
             .envIndex = envIndex,
             .layerIndex = envIndex,
@@ -806,7 +807,7 @@ void Renderer::drawFrame()
     };
 
     bool pipelineBound = false;
-    for (uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex) {
+    for (std::uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex) {
         RenderSlot& slot = m_slots[envIndex];
         pushConstants(envIndex);
         if (slot.pigVertexCount > 0 && slot.instanceCount > 0) {
@@ -823,10 +824,10 @@ void Renderer::drawFrame()
     // TODO implement
     // some slots may still be pending generation at this point, but we have to draw the ones that are ready, to avoid
     // stalling the GPU for too long. We will draw the pending ones in the next frame.
-    // std::vector<uint32_t> postponedSlots;
+    // std::vector<std::uint32_t> postponedSlots;
 
     pipelineBound = false;
-    for (uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex) {
+    for (std::uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex) {
         RenderSlot& slot = m_slots[envIndex];
         if (slot.pendingGeneration.valid()) {
             // TODO theoretically we could postpone this slot and switch to another slot, to reduce stalling.
@@ -845,7 +846,7 @@ void Renderer::drawFrame()
             commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *m_state->pipelineLayout, 0, 1,
                 &m_state->terrainDescriptorSet, 0, nullptr);
             // 6 faces, every face has 2 triangles, every triangle has 3 vertices = 36.
-            constexpr uint32_t verticesPerVoxel = 36;
+            constexpr std::uint32_t verticesPerVoxel = 36;
             commandBuffer.draw(
                 verticesPerVoxel * slot.terrainVoxelCount, 1, verticesPerVoxel * slot.terrainVoxelOffset, 0);
         }
@@ -864,7 +865,7 @@ void Renderer::drawFrame()
 
     vkCheck(commandBuffer.end(), "VkCommandBuffer::end");
 
-    const uint64_t signalValues[] = { m_observationVersion };
+    const std::uint64_t signalValues[] = { m_observationVersion };
     const vk::TimelineSemaphoreSubmitInfo timelineSubmitInfo {
         .signalSemaphoreValueCount = std::size(signalValues),
         .pSignalSemaphoreValues = signalValues,
@@ -910,7 +911,7 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
 {
     const IVec3 agentBlock { floorToInt32(agent.position.x), floorToInt32(agent.position.y),
         floorToInt32(agent.position.z) };
-    constexpr int32_t MeshCacheStride = 12;
+    constexpr std::int32_t MeshCacheStride = 12;
     RenderSlot& slot = m_slots[slotIndex];
     const IVec3 meshDelta = glm::abs(agentBlock - slot.lastMeshCenter);
     const bool agentLeftMeshCache

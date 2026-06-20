@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -20,24 +22,24 @@
 namespace {
 
 struct BenchmarkConfig {
-    uint64_t steps = 0;
-    uint64_t warmupSteps = 128;
+    std::uint64_t steps = 0;
+    std::uint64_t warmupSteps = 128;
     double seconds = 10.0;
     double reportInterval = 1.0;
-    uint32_t seed = 1;
-    uint32_t batchSize = 16;
+    std::uint32_t seed = 1;
+    std::uint32_t batchSize = 16;
     bool visualize = false;
-    int32_t minActionSteps = 20;
-    int32_t maxActionSteps = 160;
-    uint64_t initialOverrides = 1000;
+    std::int32_t minActionSteps = 20;
+    std::int32_t maxActionSteps = 160;
+    std::uint64_t initialOverrides = 1000;
     blocklab::RenderConfig renderConfig { .width = 320, .height = 180 };
 };
 
 struct BenchmarkStats {
-    uint64_t iterations = 0;
-    uint64_t episodes = 0;
-    uint64_t blocksCollected = 0;
-    uint64_t blocksPlaced = 0;
+    std::uint64_t iterations = 0;
+    std::uint64_t episodes = 0;
+    std::uint64_t blocksCollected = 0;
+    std::uint64_t blocksPlaced = 0;
     double reward = 0.0;
 };
 
@@ -52,7 +54,7 @@ public:
     blocklab::AgentAction nextAction(std::mt19937& rng)
     {
         if (m_remainingSteps == 0) {
-            std::uniform_int_distribution<int32_t> duration(m_minActionSteps, m_maxActionSteps);
+            std::uniform_int_distribution<std::int32_t> duration(m_minActionSteps, m_maxActionSteps);
             std::uniform_real_distribution<float> walk(0.45f, 1.0f);
             std::uniform_real_distribution<float> strafe(-0.35f, 0.35f);
             std::normal_distribution<float> turn(0.0f, 0.012f);
@@ -77,9 +79,9 @@ public:
     }
 
 private:
-    int32_t m_minActionSteps = 20;
-    int32_t m_maxActionSteps = 160;
-    int32_t m_remainingSteps = 0;
+    std::int32_t m_minActionSteps = 20;
+    std::int32_t m_maxActionSteps = 160;
+    std::int32_t m_remainingSteps = 0;
     blocklab::AgentAction m_action;
 };
 
@@ -116,26 +118,27 @@ BenchmarkConfig parseArgs(int argc, char** argv)
             config.seconds = blocklab::cli::parseDouble(blocklab::cli::optionValue(i, argc, argv, arg, "--seconds"))
                                  .value_or(config.seconds);
         else if (arg == "--steps" || arg.starts_with("--steps="))
-            config.steps = blocklab::cli::parseInt<uint64_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--steps"))
-                               .value_or(config.steps);
+            config.steps
+                = blocklab::cli::parseInt<std::uint64_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--steps"))
+                      .value_or(config.steps);
         else if (arg == "--warmup-steps" || arg.starts_with("--warmup-steps="))
-            config.warmupSteps
-                = blocklab::cli::parseInt<uint64_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--warmup-steps"))
-                      .value_or(config.warmupSteps);
+            config.warmupSteps = blocklab::cli::parseInt<std::uint64_t>(
+                blocklab::cli::optionValue(i, argc, argv, arg, "--warmup-steps"))
+                                     .value_or(config.warmupSteps);
         else if (arg == "--batch-size" || arg.starts_with("--batch-size=") || arg == "--num-envs"
             || arg.starts_with("--num-envs=")) {
             const char* const optionName
                 = (arg == "--num-envs" || arg.starts_with("--num-envs=")) ? "--num-envs" : "--batch-size";
             const auto batchSize
-                = blocklab::cli::parseInt<uint64_t>(blocklab::cli::optionValue(i, argc, argv, arg, optionName));
-            if (!batchSize || *batchSize == 0 || *batchSize > static_cast<uint64_t>(UINT32_MAX)) [[unlikely]] {
+                = blocklab::cli::parseInt<std::uint64_t>(blocklab::cli::optionValue(i, argc, argv, arg, optionName));
+            if (!batchSize || *batchSize == 0 || *batchSize > static_cast<std::uint64_t>(UINT32_MAX)) [[unlikely]] {
                 std::fprintf(stderr, "Invalid %s value.\n", optionName);
                 std::exit(EXIT_FAILURE);
             }
-            config.batchSize = static_cast<uint32_t>(*batchSize);
+            config.batchSize = static_cast<std::uint32_t>(*batchSize);
         } else if (arg == "--seed" || arg.starts_with("--seed="))
-            config.seed = static_cast<uint32_t>(
-                blocklab::cli::parseInt<uint64_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--seed"))
+            config.seed = static_cast<std::uint32_t>(
+                blocklab::cli::parseInt<std::uint64_t>(blocklab::cli::optionValue(i, argc, argv, arg, "--seed"))
                     .value_or(config.seed));
         else if (arg == "--report-interval" || arg.starts_with("--report-interval=")) {
             const auto reportInterval
@@ -163,7 +166,7 @@ BenchmarkConfig parseArgs(int argc, char** argv)
             }
             config.renderConfig = *renderConfig;
         } else if (arg == "--initial-overrides" || arg.starts_with("--initial-overrides="))
-            config.initialOverrides = blocklab::cli::parseInt<uint64_t>(
+            config.initialOverrides = blocklab::cli::parseInt<std::uint64_t>(
                 blocklab::cli::optionValue(i, argc, argv, arg, "--initial-overrides"))
                                           .value_or(config.initialOverrides);
         else
@@ -173,31 +176,31 @@ BenchmarkConfig parseArgs(int argc, char** argv)
     return config;
 }
 
-uint64_t applyInitialOverrides(blocklab::World& world, const BenchmarkConfig& config, uint32_t seed)
+std::uint64_t applyInitialOverrides(blocklab::World& world, const BenchmarkConfig& config, std::uint32_t seed)
 {
     const std::size_t before = world.overrideCount();
     std::mt19937 rng(seed ^ 0x8f3d5b79U);
     std::normal_distribution<float> horizontal(0.0f, 8.0f);
-    std::uniform_int_distribution<int32_t> verticalOffset(-8, 4);
-    for (uint64_t attempts = 0;
+    std::uniform_int_distribution<std::int32_t> verticalOffset(-8, 4);
+    for (std::uint64_t attempts = 0;
          world.overrideCount() - before < config.initialOverrides && attempts < config.initialOverrides * 64 + 1024;
          ++attempts) {
-        const int32_t x = std::clamp(static_cast<int32_t>(std::lround(horizontal(rng))), -28, 28);
-        const int32_t z = std::clamp(static_cast<int32_t>(std::lround(horizontal(rng))), -28, 28);
-        const int32_t surfaceY
+        const std::int32_t x = std::clamp(static_cast<std::int32_t>(std::lround(horizontal(rng))), -28, 28);
+        const std::int32_t z = std::clamp(static_cast<std::int32_t>(std::lround(horizontal(rng))), -28, 28);
+        const std::int32_t surfaceY
             = std::max(0, blocklab::floorToInt32(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1);
-        const int32_t y = std::clamp(surfaceY + verticalOffset(rng), 0, blocklab::Chunk::SizeY - 1);
+        const std::int32_t y = std::clamp(surfaceY + verticalOffset(rng), 0, blocklab::Chunk::SizeY - 1);
         const blocklab::Block current = world.getBlock({ x, y, z });
         world.setBlock({ x, y, z }, current == blocklab::Block::Air ? blocklab::Block::Stone : blocklab::Block::Air);
     }
-    return static_cast<uint64_t>(world.overrideCount() - before);
+    return static_cast<std::uint64_t>(world.overrideCount() - before);
 }
 
-uint64_t resetEnvironment(blocklab::Environment& env, const BenchmarkConfig& config, uint32_t seed)
+std::uint64_t resetEnvironment(blocklab::Environment& env, const BenchmarkConfig& config, std::uint32_t seed)
 {
     env.reset(seed);
-    uint64_t applied = 0;
-    for (uint32_t i = 0; i < env.batchSize(); ++i)
+    std::uint64_t applied = 0;
+    for (std::uint32_t i = 0; i < env.batchSize(); ++i)
         applied += applyInitialOverrides(env.mutableWorld(i), config, seed + i * 0x9e3779b9U);
     return applied;
 }
@@ -210,7 +213,7 @@ int main(int argc, char** argv)
     std::mt19937 rng(config.seed);
     std::vector<RandomAgent> randomAgents;
     randomAgents.reserve(config.batchSize);
-    for (uint32_t i = 0; i < config.batchSize; ++i)
+    for (std::uint32_t i = 0; i < config.batchSize; ++i)
         randomAgents.emplace_back(config);
 
     std::optional<blocklab::GLFWInit> glfwInit;
@@ -244,43 +247,45 @@ int main(int argc, char** argv)
         lastPollTime = now;
     };
 
-    uint64_t lastInitialOverridesApplied = resetEnvironment(env, config, config.seed);
+    std::uint64_t lastInitialOverridesApplied = resetEnvironment(env, config, config.seed);
     std::vector<blocklab::AgentAction> actions(config.batchSize);
-    for (uint64_t step = 0; step < config.warmupSteps; ++step) {
+    for (std::uint64_t step = 0; step < config.warmupSteps; ++step) {
         pollEvents();
-        for (uint32_t i = 0; i < config.batchSize; ++i)
+        for (std::uint32_t i = 0; i < config.batchSize; ++i)
             actions[i] = randomAgents[i].nextAction(rng);
         const std::span<const blocklab::StepResult> results = env.step(actions);
         const bool resetNeeded = std::any_of(results.begin(), results.end(),
             [](const blocklab::StepResult& result) { return result.terminated || result.truncated; });
         if (resetNeeded)
-            lastInitialOverridesApplied = resetEnvironment(env, config, config.seed + static_cast<uint32_t>(step + 1));
+            lastInitialOverridesApplied
+                = resetEnvironment(env, config, config.seed + static_cast<std::uint32_t>(step + 1));
     }
 
     const auto startedAt = Clock::now();
     auto lastReportAt = startedAt;
-    uint64_t lastReportIterations = 0;
+    std::uint64_t lastReportIterations = 0;
     BenchmarkStats stats;
-    std::vector<int32_t> lastBlocksCollected(config.batchSize);
-    std::vector<int32_t> lastBlocksPlaced(config.batchSize);
-    for (uint32_t i = 0; i < config.batchSize; ++i) {
+    std::vector<std::int32_t> lastBlocksCollected(config.batchSize);
+    std::vector<std::int32_t> lastBlocksPlaced(config.batchSize);
+    for (std::uint32_t i = 0; i < config.batchSize; ++i) {
         lastBlocksCollected[i] = env.agent(i).state().blocksCollected;
         lastBlocksPlaced[i] = env.agent(i).state().blocksPlaced;
     }
 
     while (!display || !display->shouldClose()) {
         pollEvents();
-        for (uint32_t i = 0; i < config.batchSize; ++i)
+        for (std::uint32_t i = 0; i < config.batchSize; ++i)
             actions[i] = randomAgents[i].nextAction(rng);
         const std::span<const blocklab::StepResult> results = env.step(actions);
         ++stats.iterations;
         bool resetNeeded = false;
-        for (uint32_t i = 0; i < config.batchSize; ++i) {
+        for (std::uint32_t i = 0; i < config.batchSize; ++i) {
             const blocklab::StepResult& result = results[i];
             stats.reward += result.reward;
             const blocklab::AgentState& agent = env.agent(i).state();
-            stats.blocksCollected += static_cast<uint64_t>(std::max(0, agent.blocksCollected - lastBlocksCollected[i]));
-            stats.blocksPlaced += static_cast<uint64_t>(std::max(0, agent.blocksPlaced - lastBlocksPlaced[i]));
+            stats.blocksCollected
+                += static_cast<std::uint64_t>(std::max(0, agent.blocksCollected - lastBlocksCollected[i]));
+            stats.blocksPlaced += static_cast<std::uint64_t>(std::max(0, agent.blocksPlaced - lastBlocksPlaced[i]));
             lastBlocksCollected[i] = agent.blocksCollected;
             lastBlocksPlaced[i] = agent.blocksPlaced;
             if (result.terminated || result.truncated) {
@@ -291,8 +296,8 @@ int main(int argc, char** argv)
 
         if (resetNeeded) {
             lastInitialOverridesApplied
-                = resetEnvironment(env, config, config.seed + static_cast<uint32_t>(stats.episodes));
-            for (uint32_t i = 0; i < config.batchSize; ++i) {
+                = resetEnvironment(env, config, config.seed + static_cast<std::uint32_t>(stats.episodes));
+            for (std::uint32_t i = 0; i < config.batchSize; ++i) {
                 lastBlocksCollected[i] = env.agent(i).state().blocksCollected;
                 lastBlocksPlaced[i] = env.agent(i).state().blocksPlaced;
             }
@@ -305,12 +310,12 @@ int main(int argc, char** argv)
         const double elapsed = std::chrono::duration<double>(now - startedAt).count();
         if (std::chrono::duration<double>(now - lastReportAt).count() >= config.reportInterval) {
             const double interval = std::chrono::duration<double>(now - lastReportAt).count();
-            const uint64_t intervalIterations = stats.iterations - lastReportIterations;
-            const uint64_t totalSteps = stats.iterations * config.batchSize;
+            const std::uint64_t intervalIterations = stats.iterations - lastReportIterations;
+            const std::uint64_t totalSteps = stats.iterations * config.batchSize;
             const double intervalStepsPerSecond = static_cast<double>(intervalIterations * config.batchSize) / interval;
             std::printf("iterations=%llu steps=%llu elapsed=%.2fs steps/s=%.0f avg_reward=%.4f episodes=%llu\n",
                 static_cast<unsigned long long>(stats.iterations), static_cast<unsigned long long>(totalSteps), elapsed,
-                intervalStepsPerSecond, stats.reward / static_cast<double>(std::max<uint64_t>(1, totalSteps)),
+                intervalStepsPerSecond, stats.reward / static_cast<double>(std::max<std::uint64_t>(1, totalSteps)),
                 static_cast<unsigned long long>(stats.episodes));
             lastReportAt = now;
             lastReportIterations = stats.iterations;
@@ -321,10 +326,10 @@ int main(int argc, char** argv)
 
     const double totalSeconds = std::chrono::duration<double>(Clock::now() - startedAt).count();
     const blocklab::Observation& observation = env.observe();
-    uint64_t worldOverrides = 0;
-    for (uint32_t i = 0; i < config.batchSize; ++i)
+    std::uint64_t worldOverrides = 0;
+    for (std::uint32_t i = 0; i < config.batchSize; ++i)
         worldOverrides += env.world(i).overrideCount();
-    const uint64_t totalSteps = stats.iterations * config.batchSize;
+    const std::uint64_t totalSteps = stats.iterations * config.batchSize;
     std::printf("\nBlockLab benchmark result\n"
                 "  batch_size: %u\n"
                 "  iterations: %llu\n"
@@ -343,7 +348,7 @@ int main(int argc, char** argv)
         config.batchSize, static_cast<unsigned long long>(stats.iterations),
         static_cast<unsigned long long>(totalSteps), static_cast<unsigned long long>(config.warmupSteps), totalSeconds,
         static_cast<double>(totalSteps) / totalSeconds,
-        stats.reward / static_cast<double>(std::max<uint64_t>(1, totalSteps)),
+        stats.reward / static_cast<double>(std::max<std::uint64_t>(1, totalSteps)),
         static_cast<unsigned long long>(stats.episodes), static_cast<unsigned long long>(stats.blocksCollected),
         static_cast<unsigned long long>(stats.blocksPlaced), static_cast<unsigned long long>(config.initialOverrides),
         static_cast<unsigned long long>(lastInitialOverridesApplied), static_cast<unsigned long long>(worldOverrides),

@@ -3,6 +3,7 @@
 #include "blocklab/CudaWorldGenerator.h"
 #include "blocklab/World.h"
 
+#include <cstdint>
 #include <memory>
 #include <utility>
 
@@ -26,10 +27,10 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::generate(
         floorToInt32(agent.position.y),
         floorToInt32(agent.position.z),
     };
-    const int32_t extent = m_config.halfExtent * 2;
+    const std::int32_t extent = m_config.halfExtent * 2;
     // The cached/rendered area is half-open: [center - halfExtent, center + halfExtent).
-    const int32_t originX = center.x - m_config.halfExtent;
-    const int32_t originZ = center.z - m_config.halfExtent;
+    const std::int32_t originX = center.x - m_config.halfExtent;
+    const std::int32_t originZ = center.z - m_config.halfExtent;
     const IVec3 size { extent, Chunk::SizeY, extent };
 
     world.collectOverridesInRegion({ originX, 0, originZ }, size, m_overrides);

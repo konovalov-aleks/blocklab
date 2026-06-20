@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace blocklab {
 
@@ -145,12 +146,12 @@ bool Character::collides(const World& world, Vec3 position) const
 
 bool Character::occupiesBlock(IVec3 block) const
 {
-    const int32_t minX = floorToInt32(m_position.x - m_radius);
-    const int32_t maxX = floorToInt32(m_position.x + m_radius);
-    const int32_t minY = floorToInt32(m_position.y);
-    const int32_t maxY = floorToInt32(m_position.y + m_height);
-    const int32_t minZ = floorToInt32(m_position.z - m_radius);
-    const int32_t maxZ = floorToInt32(m_position.z + m_radius);
+    const std::int32_t minX = floorToInt32(m_position.x - m_radius);
+    const std::int32_t maxX = floorToInt32(m_position.x + m_radius);
+    const std::int32_t minY = floorToInt32(m_position.y);
+    const std::int32_t maxY = floorToInt32(m_position.y + m_height);
+    const std::int32_t minZ = floorToInt32(m_position.z - m_radius);
+    const std::int32_t maxZ = floorToInt32(m_position.z + m_radius);
     return block.x >= minX && block.x <= maxX && block.y >= minY && block.y <= maxY && block.z >= minZ
         && block.z <= maxZ;
 }

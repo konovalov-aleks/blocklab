@@ -8,7 +8,7 @@
 
 namespace blocklab {
 
-enum class Block : uint8_t {
+enum class Block : std::uint8_t {
     Air = 0,
     Grass,
     Dirt,
@@ -18,14 +18,14 @@ enum class Block : uint8_t {
 };
 
 struct BlockId {
-    static constexpr uint8_t Air = static_cast<uint8_t>(Block::Air);
-    static constexpr uint8_t Grass = static_cast<uint8_t>(Block::Grass);
-    static constexpr uint8_t Dirt = static_cast<uint8_t>(Block::Dirt);
-    static constexpr uint8_t Stone = static_cast<uint8_t>(Block::Stone);
-    static constexpr uint8_t NoOverride = std::numeric_limits<uint8_t>::max();
+    static constexpr std::uint8_t Air = static_cast<std::uint8_t>(Block::Air);
+    static constexpr std::uint8_t Grass = static_cast<std::uint8_t>(Block::Grass);
+    static constexpr std::uint8_t Dirt = static_cast<std::uint8_t>(Block::Dirt);
+    static constexpr std::uint8_t Stone = static_cast<std::uint8_t>(Block::Stone);
+    static constexpr std::uint8_t NoOverride = std::numeric_limits<std::uint8_t>::max();
 };
 
-constexpr uint8_t blockId(Block block) { return static_cast<uint8_t>(block); }
+constexpr std::uint8_t blockId(Block block) { return static_cast<std::uint8_t>(block); }
 
 struct BlockOverride {
     IVec3 coord {};
@@ -34,13 +34,13 @@ struct BlockOverride {
 
 class Chunk {
 public:
-    static constexpr int32_t SizeX = 16;
-    static constexpr int32_t SizeY = 32;
-    static constexpr int32_t SizeZ = 16;
-    static constexpr int32_t Volume = SizeX * SizeY * SizeZ;
+    static constexpr std::int32_t SizeX = 16;
+    static constexpr std::int32_t SizeY = 32;
+    static constexpr std::int32_t SizeZ = 16;
+    static constexpr std::int32_t Volume = SizeX * SizeY * SizeZ;
 
-    Block get(int32_t x, int32_t y, int32_t z) const;
-    void set(int32_t x, int32_t y, int32_t z, Block block);
+    Block get(std::int32_t x, std::int32_t y, std::int32_t z) const;
+    void set(std::int32_t x, std::int32_t y, std::int32_t z, Block block);
 
 private:
     std::array<Block, Volume> m_blocks {};

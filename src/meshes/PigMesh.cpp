@@ -1,12 +1,16 @@
 #include "blocklab/meshes/PigMesh.h"
 
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 
 namespace blocklab {
 namespace {
 
-    constexpr float meshMaterialId(Material material) { return static_cast<float>(static_cast<uint32_t>(material)); }
+    constexpr float meshMaterialId(Material material)
+    {
+        return static_cast<float>(static_cast<std::uint32_t>(material));
+    }
 
     void appendMeshFace(MeshVertex*& vertices, Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, Vec3 color, float shade,
         Material material, float animationPhase)
@@ -79,7 +83,7 @@ std::span<MeshVertex> PigMesh::generate()
     appendMeshCuboid(vertices, { 0.15f, 0.00f, -0.45f }, { 0.31f, 0.28f, -0.25f }, skin, -2.0f);
     appendMeshCuboid(vertices, { -0.31f, 0.00f, 0.25f }, { -0.15f, 0.28f, 0.45f }, skin, -2.0f);
     appendMeshCuboid(vertices, { 0.15f, 0.00f, 0.25f }, { 0.31f, 0.28f, 0.45f }, skin, 2.0f);
-    assert(static_cast<uint32_t>(vertices - destination) == verticesCount());
+    assert(static_cast<std::uint32_t>(vertices - destination) == verticesCount());
     return { m_vertices.data(), static_cast<std::size_t>(vertices - destination) };
 }
 

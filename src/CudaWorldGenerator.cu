@@ -15,7 +15,7 @@ namespace blocklab {
 
 class Voxel {
 public:
-    __device__ Voxel(uint3 pos, uint8_t blockType, uint8_t visibleFaces)
+    __device__ Voxel(uint3 pos, std::uint8_t blockType, std::uint8_t visibleFaces)
         : m_data(blockType | (visibleFaces << 5) | (pos.z << 11) | (pos.y << 17) | (pos.x << 26))
     {
         assert((blockType & ((1 << 5) - 1)) == blockType);
@@ -31,59 +31,59 @@ private:
     // z : 6
     // visibleFacesMask: 6
     // blockType: 5
-    uint32_t m_data;
+    std::uint32_t m_data;
 };
 static_assert(sizeof(Voxel) == VoxelSize);
-static_assert(static_cast<uint8_t>(Block::COUNT) <= (1 << 5));
+static_assert(static_cast<std::uint8_t>(Block::COUNT) <= (1 << 5));
 
 namespace {
 
-    constexpr int32_t ChunkSizeY = 32;
-    constexpr int32_t CoordBias = 1 << 20;
-    constexpr int64_t CoordMask = (int64_t { 1 } << 21) - 1;
+    constexpr std::int32_t ChunkSizeY = 32;
+    constexpr std::int32_t CoordBias = 1 << 20;
+    constexpr std::int64_t CoordMask = (std::int64_t { 1 } << 21) - 1;
 
     struct CudaOverride {
-        int64_t key;
-        uint8_t block;
+        std::int64_t key;
+        std::uint8_t block;
     };
 
     struct CudaBuildParams {
-        uint32_t seed;
-        int32_t centerX;
-        int32_t centerY;
-        int32_t centerZ;
-        int32_t width;
-        int32_t height;
-        int32_t depth;
-        int32_t originX;
-        int32_t originY;
-        int32_t originZ;
-        int32_t overrideCount;
-        uint32_t maxVoxels;
+        std::uint32_t seed;
+        std::int32_t centerX;
+        std::int32_t centerY;
+        std::int32_t centerZ;
+        std::int32_t width;
+        std::int32_t height;
+        std::int32_t depth;
+        std::int32_t originX;
+        std::int32_t originY;
+        std::int32_t originZ;
+        std::int32_t overrideCount;
+        std::uint32_t maxVoxels;
     };
 
-    int64_t packKeyHost(int32_t x, int32_t y, int32_t z)
+    std::int64_t packKeyHost(std::int32_t x, std::int32_t y, std::int32_t z)
     {
-        return ((int64_t { x + CoordBias } & CoordMask) << 42) | ((int64_t { y + CoordBias } & CoordMask) << 21)
-            | (int64_t { z + CoordBias } & CoordMask);
+        return ((std::int64_t { x + CoordBias } & CoordMask) << 42)
+            | ((std::int64_t { y + CoordBias } & CoordMask) << 21) | (std::int64_t { z + CoordBias } & CoordMask);
     }
 
-    __device__ int64_t packKeyDevice(int32_t x, int32_t y, int32_t z)
+    __device__ std::int64_t packKeyDevice(std::int32_t x, std::int32_t y, std::int32_t z)
     {
-        return ((int64_t { x + CoordBias } & CoordMask) << 42) | ((int64_t { y + CoordBias } & CoordMask) << 21)
-            | (int64_t { z + CoordBias } & CoordMask);
+        return ((std::int64_t { x + CoordBias } & CoordMask) << 42)
+            | ((std::int64_t { y + CoordBias } & CoordMask) << 21) | (std::int64_t { z + CoordBias } & CoordMask);
     }
 
-    __device__ float valueNoise(uint32_t seed, int32_t x, int32_t z)
+    __device__ float valueNoise(std::uint32_t seed, std::int32_t x, std::int32_t z)
     {
-        const uint32_t hash = hashCombine(seed, x, z);
+        const std::uint32_t hash = hashCombine(seed, x, z);
         return static_cast<float>(hash & 0x00ffffffU) / static_cast<float>(0x00ffffffU) * 2.0f - 1.0f;
     }
 
-    __device__ float terrainHeight(uint32_t seed, int32_t x, int32_t z)
+    __device__ float terrainHeight(std::uint32_t seed, std::int32_t x, std::int32_t z)
     {
-        const int32_t sampleX = x + seedOffset(seed, 0x4f1bbc21U);
-        const int32_t sampleZ = z + seedOffset(seed, 0x9a7c15d3U);
+        const std::int32_t sampleX = x + seedOffset(seed, 0x4f1bbc21U);
+        const std::int32_t sampleZ = z + seedOffset(seed, 0x9a7c15d3U);
         const float low = __sinf(static_cast<float>(sampleX) * 0.17f) * 2.2f;
         const float high = __cosf(static_cast<float>(sampleZ) * 0.13f) * 1.8f;
         const float diagonal = __sinf(static_cast<float>(sampleX + sampleZ) * 0.08f) * 2.0f;
@@ -91,14 +91,14 @@ namespace {
         return 9.0f + low + high + diagonal + rough;
     }
 
-    __device__ uint8_t generatedBlock(uint32_t seed, int32_t x, int32_t y, int32_t z)
+    __device__ std::uint8_t generatedBlock(std::uint32_t seed, std::int32_t x, std::int32_t y, std::int32_t z)
     {
         if (y < 0)
             return BlockId::Stone;
         if (y >= ChunkSizeY)
             return BlockId::Air;
 
-        int32_t height = static_cast<int32_t>(terrainHeight(seed, x, z));
+        std::int32_t height = static_cast<std::int32_t>(terrainHeight(seed, x, z));
         height = min(max(height, 2), ChunkSizeY - 2);
         if (y > height)
             return BlockId::Air;
@@ -109,14 +109,15 @@ namespace {
         return BlockId::Stone;
     }
 
-    __device__ uint8_t overriddenBlock(const CudaOverride* overrides, int32_t count, int32_t x, int32_t y, int32_t z)
+    __device__ std::uint8_t overriddenBlock(
+        const CudaOverride* overrides, std::int32_t count, std::int32_t x, std::int32_t y, std::int32_t z)
     {
-        const int64_t key = packKeyDevice(x, y, z);
-        int32_t left = 0;
-        int32_t right = count - 1;
+        const std::int64_t key = packKeyDevice(x, y, z);
+        std::int32_t left = 0;
+        std::int32_t right = count - 1;
         while (left <= right) {
-            const int32_t mid = left + (right - left) / 2;
-            const int64_t midKey = overrides[mid].key;
+            const std::int32_t mid = left + (right - left) / 2;
+            const std::int64_t midKey = overrides[mid].key;
             if (midKey == key)
                 return overrides[mid].block;
             if (midKey < key)
@@ -127,52 +128,52 @@ namespace {
         return BlockId::NoOverride;
     }
 
-    __device__ uint8_t blockAt(
-        const CudaBuildParams params, const CudaOverride* overrides, int32_t x, int32_t y, int32_t z)
+    __device__ std::uint8_t blockAt(
+        const CudaBuildParams params, const CudaOverride* overrides, std::int32_t x, std::int32_t y, std::int32_t z)
     {
-        const uint8_t overrideBlock = overriddenBlock(overrides, params.overrideCount, x, y, z);
+        const std::uint8_t overrideBlock = overriddenBlock(overrides, params.overrideCount, x, y, z);
         if (overrideBlock != BlockId::NoOverride)
             return overrideBlock;
         return generatedBlock(params.seed, x, y, z);
     }
 
     __global__ void buildTerrainKernel(CudaBuildParams params, const CudaOverride* overrides, TerrainHeader* header,
-        Voxel* voxels, uint32_t* voxelCount, uint8_t* blocks)
+        Voxel* voxels, std::uint32_t* voxelCount, std::uint8_t* blocks)
     {
-        const int32_t index = static_cast<int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
+        const std::int32_t index = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
         if (index == 0) {
             header->originX = params.originX;
             header->originZ = params.originZ;
         }
 
-        const int32_t volume = params.width * params.height * params.depth;
+        const std::int32_t volume = params.width * params.height * params.depth;
         if (index >= volume)
             return;
 
-        const int32_t localX = index % params.width;
-        const int32_t localY = (index / params.width) % params.height;
-        const int32_t localZ = index / (params.width * params.height);
-        const int32_t x = params.originX + localX;
-        const int32_t y = params.originY + localY;
-        const int32_t z = params.originZ + localZ;
+        const std::int32_t localX = index % params.width;
+        const std::int32_t localY = (index / params.width) % params.height;
+        const std::int32_t localZ = index / (params.width * params.height);
+        const std::int32_t x = params.originX + localX;
+        const std::int32_t y = params.originY + localY;
+        const std::int32_t z = params.originZ + localZ;
 
-        const uint8_t block = blockAt(params, overrides, x, y, z);
+        const std::uint8_t block = blockAt(params, overrides, x, y, z);
         blocks[index] = block;
         if (block == BlockId::Air)
             return;
 
-        const uint8_t rightBlock = blockAt(params, overrides, x + 1, y, z);
-        const uint8_t leftBlock = blockAt(params, overrides, x - 1, y, z);
-        const uint8_t topBlock = blockAt(params, overrides, x, y + 1, z);
-        const uint8_t bottomBlock = blockAt(params, overrides, x, y - 1, z);
-        const uint8_t frontBlock = blockAt(params, overrides, x, y, z + 1);
-        const uint8_t backBlock = blockAt(params, overrides, x, y, z - 1);
+        const std::uint8_t rightBlock = blockAt(params, overrides, x + 1, y, z);
+        const std::uint8_t leftBlock = blockAt(params, overrides, x - 1, y, z);
+        const std::uint8_t topBlock = blockAt(params, overrides, x, y + 1, z);
+        const std::uint8_t bottomBlock = blockAt(params, overrides, x, y - 1, z);
+        const std::uint8_t frontBlock = blockAt(params, overrides, x, y, z + 1);
+        const std::uint8_t backBlock = blockAt(params, overrides, x, y, z - 1);
 
         if (rightBlock != BlockId::Air && leftBlock != BlockId::Air && topBlock != BlockId::Air
             && bottomBlock != BlockId::Air && frontBlock != BlockId::Air && backBlock != BlockId::Air)
             return;
 
-        uint8_t visibleFaces = 0;
+        std::uint8_t visibleFaces = 0;
         visibleFaces |= rightBlock == BlockId::Air ? VisibleFace::Right : 0;
         visibleFaces |= leftBlock == BlockId::Air ? VisibleFace::Left : 0;
         visibleFaces |= topBlock == BlockId::Air ? VisibleFace::Top : 0;
@@ -180,7 +181,7 @@ namespace {
         visibleFaces |= frontBlock == BlockId::Air ? VisibleFace::Front : 0;
         visibleFaces |= backBlock == BlockId::Air ? VisibleFace::Back : 0;
 
-        const uint32_t voxelIndex = atomicAdd(voxelCount, 1);
+        const std::uint32_t voxelIndex = atomicAdd(voxelCount, 1);
         if (voxelIndex >= params.maxVoxels)
             return;
 
@@ -191,11 +192,11 @@ namespace {
 
 struct CudaWorldGenerator::State {
     CudaOverride* overrides = nullptr;
-    uint32_t* voxelCount = nullptr;
-    uint32_t* voxelCountHost = nullptr;
+    std::uint32_t* voxelCount = nullptr;
+    std::uint32_t* voxelCountHost = nullptr;
     cudaStream_t stream = nullptr;
     PageLockedVector<CudaOverride> packedOverrides;
-    uint32_t overrideCapacity = 0;
+    std::uint32_t overrideCapacity = 0;
     bool pending = false;
 };
 
@@ -203,8 +204,8 @@ CudaWorldGenerator::CudaWorldGenerator()
     : m_state(std::make_unique<State>())
 {
     cudaCheck(cudaStreamCreateWithFlags(&m_state->stream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags");
-    cudaCheck(cudaMalloc(&m_state->voxelCount, sizeof(uint32_t)), "cudaMalloc voxelCount");
-    cudaCheck(cudaMallocHost(&m_state->voxelCountHost, sizeof(uint32_t)), "cudaMallocHost voxelCount");
+    cudaCheck(cudaMalloc(&m_state->voxelCount, sizeof(m_state->voxelCount)), "cudaMalloc voxelCount");
+    cudaCheck(cudaMallocHost(&m_state->voxelCountHost, sizeof(m_state->voxelCountHost)), "cudaMallocHost voxelCount");
 }
 
 CudaWorldGenerator::~CudaWorldGenerator()
@@ -232,14 +233,14 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
         m_state->pending = false;
     };
 
-    const int32_t width = input.halfExtent * 2;
-    const int32_t height = ChunkSizeY;
-    const int32_t depth = input.halfExtent * 2;
-    const int32_t volume = width * height * depth;
+    const std::int32_t width = input.halfExtent * 2;
+    const std::int32_t height = ChunkSizeY;
+    const std::int32_t depth = input.halfExtent * 2;
+    const std::int32_t volume = width * height * depth;
     const auto blockCount = static_cast<std::size_t>(volume);
     // Do not resize the borrowed cache buffer in-place: it may still be part of an async
     // CUDA/Vulkan handoff chain.
-    PageLockedVector<uint8_t> outBlocks;
+    PageLockedVector<std::uint8_t> outBlocks;
     if (buffers.blocks.size() >= blockCount)
         outBlocks = std::move(buffers.blocks);
     outBlocks.uninitializedResize(blockCount);
@@ -262,7 +263,7 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
     if (m_state->overrideCapacity < packedOverrides.size()) {
         cudaFree(m_state->overrides);
         m_state->overrides = nullptr;
-        m_state->overrideCapacity = static_cast<uint32_t>(std::max<std::size_t>(packedOverrides.size(), 1U));
+        m_state->overrideCapacity = static_cast<std::uint32_t>(std::max<std::size_t>(packedOverrides.size(), 1U));
         cudaCheck(
             cudaMalloc(&m_state->overrides, sizeof(CudaOverride) * m_state->overrideCapacity), "cudaMalloc overrides");
     }
@@ -272,7 +273,8 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
             "cudaMemcpyAsync overrides");
     }
 
-    cudaCheck(cudaMemsetAsync(m_state->voxelCount, 0, sizeof(uint32_t), m_state->stream), "cudaMemsetAsync voxelCount");
+    cudaCheck(
+        cudaMemsetAsync(m_state->voxelCount, 0, sizeof(std::uint32_t), m_state->stream), "cudaMemsetAsync voxelCount");
     const CudaBuildParams params {
         .seed = input.seed,
         .centerX = input.center.x,
@@ -284,11 +286,11 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
         .originX = input.originX,
         .originY = 0,
         .originZ = input.originZ,
-        .overrideCount = static_cast<int32_t>(packedOverrides.size()),
-        .maxVoxels = static_cast<uint32_t>(buffers.maxVoxelCount),
+        .overrideCount = static_cast<std::int32_t>(packedOverrides.size()),
+        .maxVoxels = static_cast<std::uint32_t>(buffers.maxVoxelCount),
     };
 
-    constexpr int32_t ThreadCount = 256;
+    constexpr std::int32_t ThreadCount = 256;
     buildTerrainKernel<<<(volume + ThreadCount - 1) / ThreadCount, ThreadCount, 0, m_state->stream>>>(
         params, m_state->overrides, buffers.header, buffers.voxels, m_state->voxelCount, outBlocks.data());
     cudaCheck(cudaGetLastError(), "buildTerrainKernel");
@@ -308,7 +310,7 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
     return CudaFuture<WorldGenerationOutput>(m_state->stream, [state = m_state.get(), outputStorage]() mutable {
         state->pending = false;
         outputStorage->voxelCount
-            = std::min(*state->voxelCountHost, static_cast<uint32_t>(outputStorage->buffers.maxVoxelCount));
+            = std::min(*state->voxelCountHost, static_cast<std::uint32_t>(outputStorage->buffers.maxVoxelCount));
         return std::move(*outputStorage);
     });
 }

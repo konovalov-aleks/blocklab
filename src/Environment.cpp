@@ -5,17 +5,18 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace blocklab {
 
 static constexpr Vec3 InitialAgentPosition { 0.5f, 14.0f, 0.5f };
 
-Environment::Environment(ObservationRenderer& renderer, uint32_t numEnvs)
+Environment::Environment(ObservationRenderer& renderer, std::uint32_t numEnvs)
     : m_batchSize(numEnvs)
     , m_worlds(std::make_unique<World[]>(numEnvs))
     , m_agents(std::make_unique<Agent[]>(numEnvs))
     , m_observationRenderer(renderer)
-    , m_stepCounts(std::make_unique<int32_t[]>(numEnvs))
+    , m_stepCounts(std::make_unique<std::int32_t[]>(numEnvs))
     , m_stepResults(std::make_unique<StepResult[]>(numEnvs))
     , m_renderAgents(std::make_unique<AgentState[]>(numEnvs))
 {
@@ -23,9 +24,9 @@ Environment::Environment(ObservationRenderer& renderer, uint32_t numEnvs)
         fatalError("Environment batch size must be positive");
 }
 
-void Environment::reset(uint32_t seed)
+void Environment::reset(std::uint32_t seed)
 {
-    for (uint32_t i = 0; i < m_batchSize; ++i) {
+    for (std::uint32_t i = 0; i < m_batchSize; ++i) {
         World& world = m_worlds[i];
         world.resetSeed(hash(seed + i));
         m_agents[i].reset(InitialAgentPosition);
@@ -34,7 +35,7 @@ void Environment::reset(uint32_t seed)
     // update block cache before character's initialization
     updateObservation();
 
-    for (uint32_t i = 0; i < m_batchSize; ++i) {
+    for (std::uint32_t i = 0; i < m_batchSize; ++i) {
         World& world = m_worlds[i];
         m_stepCounts[i] = 0;
         world.resetCharacters();
@@ -52,7 +53,7 @@ std::span<const StepResult> Environment::step(std::span<const AgentAction> actio
     if (actions.size() != m_batchSize)
         fatalError("Action batch size does not match environment batch size");
 
-    for (uint32_t i = 0; i < m_batchSize; ++i) {
+    for (std::uint32_t i = 0; i < m_batchSize; ++i) {
         World& world = m_worlds[i];
         Agent& agent = m_agents[i];
         StepResult& result = m_stepResults[i];
@@ -80,7 +81,7 @@ std::span<const StepResult> Environment::step(std::span<const AgentAction> actio
 
 const Observation& Environment::updateObservation()
 {
-    for (uint32_t i = 0; i < m_batchSize; ++i)
+    for (std::uint32_t i = 0; i < m_batchSize; ++i)
         m_renderAgents[i] = m_agents[i].state();
     const Observation& observation = m_observationRenderer.renderObservations(
         { m_worlds.get(), m_batchSize }, { m_renderAgents.get(), m_batchSize });

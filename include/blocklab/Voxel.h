@@ -7,7 +7,7 @@
 
 namespace blocklab {
 
-enum VisibleFace : uint8_t {
+enum VisibleFace : std::uint8_t {
     Left = 1 << 0,
     Right = 1 << 1,
     Top = 1 << 2,
@@ -17,6 +17,6 @@ enum VisibleFace : uint8_t {
 };
 
 class Voxel;
-static constexpr size_t VoxelSize = 4;
+static constexpr std::size_t VoxelSize = 4;
 
 } // namespace blocklab

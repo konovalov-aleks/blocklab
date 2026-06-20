@@ -8,7 +8,7 @@
 
 namespace blocklab {
 
-enum class Material : uint8_t {
+enum class Material : std::uint8_t {
     GrassTop = 0,
     Dirt = 1,
     Stone = 2,

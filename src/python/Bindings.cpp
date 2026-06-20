@@ -23,29 +23,29 @@ namespace py = pybind11;
 namespace blocklab {
 namespace {
 
-    enum class DLDeviceType : int32_t {
+    enum class DLDeviceType : std::int32_t {
         Cuda = 2,
     };
 
     struct DLDevice {
         DLDeviceType device_type;
-        int32_t device_id;
+        std::int32_t device_id;
     };
 
     struct DLDataType {
-        uint8_t code;
-        uint8_t bits;
-        uint16_t lanes;
+        std::uint8_t code;
+        std::uint8_t bits;
+        std::uint16_t lanes;
     };
 
     struct DLTensor {
         void* data;
         DLDevice device;
-        int32_t ndim;
+        std::int32_t ndim;
         DLDataType dtype;
-        int64_t* shape;
-        int64_t* strides;
-        uint64_t byte_offset;
+        std::int64_t* shape;
+        std::int64_t* strides;
+        std::uint64_t byte_offset;
     };
 
     struct DLManagedTensor {
@@ -55,8 +55,8 @@ namespace {
     };
 
     struct DlpackObservationContext {
-        int64_t shape[4];
-        int64_t strides[4];
+        std::int64_t shape[4];
+        std::int64_t strides[4];
     };
 
     void deleteDlpackObservation(DLManagedTensor* managed)
@@ -67,7 +67,7 @@ namespace {
 
     class NativeEnvironment {
     public:
-        NativeEnvironment(uint32_t numEnvs, uint32_t width, uint32_t height, uint32_t seed)
+        NativeEnvironment(std::uint32_t numEnvs, std::uint32_t width, std::uint32_t height, std::uint32_t seed)
             : m_numEnvs(numEnvs)
             , m_width(width)
             , m_height(height)
@@ -78,8 +78,8 @@ namespace {
             , m_vulkan(m_vulkanInstance)
             , m_renderer(m_vulkan,
                   RenderConfig {
-                      .width = static_cast<int32_t>(width),
-                      .height = static_cast<int32_t>(height),
+                      .width = static_cast<std::int32_t>(width),
+                      .height = static_cast<std::int32_t>(height),
                       .batchSize = numEnvs,
                   })
             , m_environment(m_renderer, numEnvs)
@@ -92,7 +92,7 @@ namespace {
         NativeEnvironment(const NativeEnvironment&) = delete;
         NativeEnvironment& operator=(const NativeEnvironment&) = delete;
 
-        py::dict reset(uint32_t seed)
+        py::dict reset(std::uint32_t seed)
         {
             m_environment.reset(seed);
             const Observation& observation = m_environment.observe();
@@ -139,9 +139,9 @@ namespace {
                 fatalError("cudaGetDevice failed: ", cudaGetErrorString(cudaResult));
 
             auto* context = new DlpackObservationContext {
-                .shape = { static_cast<int64_t>(m_numEnvs), 3, m_height, m_width },
-                .strides = { static_cast<int64_t>(m_height) * m_width * 3, static_cast<int64_t>(m_height) * m_width,
-                    m_width, 1 },
+                .shape = { static_cast<std::int64_t>(m_numEnvs), 3, m_height, m_width },
+                .strides = { static_cast<std::int64_t>(m_height) * m_width * 3,
+                    static_cast<std::int64_t>(m_height) * m_width, m_width, 1 },
             };
             auto* managed = new DLManagedTensor {
                 .dl_tensor = {
@@ -183,7 +183,7 @@ namespace {
             return result;
         }
 
-        py::dict observationInfo(uint64_t version) const
+        py::dict observationInfo(std::uint64_t version) const
         {
             py::dict info;
             info["version"] = version;
@@ -218,9 +218,9 @@ namespace {
 
         std::size_t observationBytes() const { return m_numEnvs * observationSliceBytes(); }
 
-        uint32_t m_numEnvs = 0;
-        uint32_t m_width = 0;
-        uint32_t m_height = 0;
+        std::uint32_t m_numEnvs = 0;
+        std::uint32_t m_width = 0;
+        std::uint32_t m_height = 0;
         std::unique_ptr<float[]> m_rewards;
         std::unique_ptr<bool[]> m_terminated;
         std::unique_ptr<bool[]> m_truncated;
@@ -266,8 +266,8 @@ PYBIND11_MODULE(_native, module)
         .def_readonly("truncated", &blocklab::StepResult::truncated);
 
     py::class_<blocklab::NativeEnvironment>(module, "NativeEnvironment")
-        .def(py::init<uint32_t, uint32_t, uint32_t, uint32_t>(), py::arg("num_envs") = 1, py::arg("width") = 160,
-            py::arg("height") = 90, py::arg("seed") = 1)
+        .def(py::init<std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t>(), py::arg("num_envs") = 1,
+            py::arg("width") = 160, py::arg("height") = 90, py::arg("seed") = 1)
         .def("reset", &blocklab::NativeEnvironment::reset, py::arg("seed") = 1)
         .def("step", &blocklab::NativeEnvironment::step, py::arg("actions"))
         .def("observe", &blocklab::NativeEnvironment::observe)

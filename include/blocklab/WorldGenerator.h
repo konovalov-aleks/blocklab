@@ -7,6 +7,7 @@
 #include "blocklab/PageLockedVector.h"
 #include "blocklab/Voxel.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -17,23 +18,23 @@ namespace blocklab {
 class CudaWorldGenerator;
 
 struct TerrainHeader {
-    int32_t originX;
-    int32_t originZ;
+    std::int32_t originX;
+    std::int32_t originZ;
 };
 static_assert(sizeof(TerrainHeader) == 8, "The layout must match the structure layout in the voxel shader");
 
 struct WorldGenerationConfig {
-    int32_t halfExtent = 32;
+    std::int32_t halfExtent = 32;
 };
 
 struct WorldGenerationInput {
-    uint32_t seed = 1;
-    uint64_t worldVersion = 0;
+    std::uint32_t seed = 1;
+    std::uint64_t worldVersion = 0;
     IVec3 center {};
     IVec3 size {};
-    int32_t originX = 0;
-    int32_t originZ = 0;
-    int32_t halfExtent = 0;
+    std::int32_t originX = 0;
+    std::int32_t originZ = 0;
+    std::int32_t halfExtent = 0;
     std::span<const BlockOverride> overrides;
 };
 
@@ -41,17 +42,17 @@ struct WorldGenerationBuffers {
     TerrainHeader* header;
 
     Voxel* voxels;
-    size_t maxVoxelCount;
+    std::size_t maxVoxelCount;
 
-    PageLockedVector<uint8_t> blocks;
+    PageLockedVector<std::uint8_t> blocks;
 };
 
 struct WorldGenerationOutput {
     IVec3 origin {};
     IVec3 size {};
-    uint64_t worldVersion = 0;
+    std::uint64_t worldVersion = 0;
     // TODO is this field necessary? it seems, we can use buffers.voxels.size() instead
-    uint32_t voxelCount = 0;
+    std::uint32_t voxelCount = 0;
     WorldGenerationBuffers buffers;
 };
 

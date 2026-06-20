@@ -23,8 +23,8 @@ struct AgentState {
     float yaw = 0.0f;
     float pitch = 0.0f;
     bool onGround = false;
-    int32_t blocksCollected = 0;
-    int32_t blocksPlaced = 0;
+    std::int32_t blocksCollected = 0;
+    std::int32_t blocksPlaced = 0;
 };
 
 class Agent final : public Character {

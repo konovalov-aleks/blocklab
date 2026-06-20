@@ -2,6 +2,7 @@
 
 #include <blocklab/graphics/Vulkan.h>
 
+#include <cstdint>
 #include <utility>
 
 namespace blocklab {

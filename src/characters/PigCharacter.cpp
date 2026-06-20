@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <iterator>
 
 namespace blocklab {
@@ -20,16 +21,16 @@ namespace {
 
     float length2D(Vec3 value) { return std::sqrt(value.x * value.x + value.z * value.z); }
 
-    constexpr uint32_t pigSeed(EntityId id, Vec3 position)
+    constexpr std::uint32_t pigSeed(EntityId id, Vec3 position)
     {
-        const uint32_t x = static_cast<uint32_t>(floorToInt32(position.x * 16.0f));
-        const uint32_t z = static_cast<uint32_t>(floorToInt32(position.z * 16.0f));
+        const std::uint32_t x = static_cast<std::uint32_t>(floorToInt32(position.x * 16.0f));
+        const std::uint32_t z = static_cast<std::uint32_t>(floorToInt32(position.z * 16.0f));
         return hashCombine(id, x, z);
     }
 
-    Vec3 pigTarget(Vec3 home, uint32_t seed, int32_t step)
+    Vec3 pigTarget(Vec3 home, std::uint32_t seed, std::int32_t step)
     {
-        const uint32_t stepSeed = hashCombine(seed, step);
+        const std::uint32_t stepSeed = hashCombine(seed, step);
         const float angle = randomFloat01(stepSeed) * Pi * 2.0f;
         const float distance = 1.25f + randomFloat01(stepSeed) * 2.25f;
         return home + Vec3 { std::sin(angle) * distance, 0.0f, std::cos(angle) * distance };

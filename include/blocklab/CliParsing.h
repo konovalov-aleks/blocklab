@@ -3,6 +3,8 @@
 #include <blocklab/graphics/Renderer.h>
 
 #include <charconv>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
@@ -39,8 +41,8 @@ inline std::optional<RenderConfig> parseResolution(std::string_view text)
     if (separator == std::string_view::npos) [[unlikely]]
         return std::nullopt;
 
-    const auto width = parseInt<int32_t>(text.substr(0, separator));
-    const auto height = parseInt<int32_t>(text.substr(separator + 1));
+    const auto width = parseInt<std::int32_t>(text.substr(0, separator));
+    const auto height = parseInt<std::int32_t>(text.substr(separator + 1));
     if (!width || !height || *width <= 0 || *height <= 0) [[unlikely]]
         return std::nullopt;
 
@@ -50,14 +52,14 @@ inline std::optional<RenderConfig> parseResolution(std::string_view text)
     return config;
 }
 
-inline std::optional<std::pair<int32_t, int32_t>> parseActionSteps(std::string_view text)
+inline std::optional<std::pair<std::int32_t, std::int32_t>> parseActionSteps(std::string_view text)
 {
     const std::size_t separator = text.find(':');
     if (separator == std::string_view::npos) [[unlikely]]
         return std::nullopt;
 
-    const auto minSteps = parseInt<int32_t>(text.substr(0, separator));
-    const auto maxSteps = parseInt<int32_t>(text.substr(separator + 1));
+    const auto minSteps = parseInt<std::int32_t>(text.substr(0, separator));
+    const auto maxSteps = parseInt<std::int32_t>(text.substr(separator + 1));
     if (!minSteps || !maxSteps || *minSteps <= 0 || *maxSteps < *minSteps) [[unlikely]]
         return std::nullopt;
 

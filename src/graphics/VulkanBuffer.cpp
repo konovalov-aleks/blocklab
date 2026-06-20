@@ -3,6 +3,7 @@
 #include <blocklab/graphics/Memory.h>
 
 #include <cassert>
+#include <cstddef>
 #include <cstring>
 #include <utility>
 

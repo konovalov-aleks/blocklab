@@ -6,7 +6,7 @@
 
 namespace blocklab {
 
-enum class CharacterStateKind : uint8_t {
+enum class CharacterStateKind : std::uint8_t {
     Idle,
     MoveTo,
     EatGrass,

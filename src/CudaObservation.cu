@@ -10,18 +10,18 @@ namespace blocklab {
 namespace {
 
     __global__ void rgba8ToFloatNchwKernel(
-        const uchar4* rgba, float* nchw, uint32_t batchSize, uint32_t width, uint32_t height)
+        const uchar4* rgba, float* nchw, std::uint32_t batchSize, std::uint32_t width, std::uint32_t height)
     {
-        const uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
-        const uint32_t pixelsPerImage = width * height;
-        const uint32_t totalPixels = batchSize * pixelsPerImage;
+        const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
+        const std::uint32_t pixelsPerImage = width * height;
+        const std::uint32_t totalPixels = batchSize * pixelsPerImage;
         if (index >= totalPixels)
             return;
 
-        const uint32_t image = index / pixelsPerImage;
-        const uint32_t pixel = index - image * pixelsPerImage;
+        const std::uint32_t image = index / pixelsPerImage;
+        const std::uint32_t pixel = index - image * pixelsPerImage;
         const uchar4 sample = rgba[index];
-        const uint32_t planeBase = image * 3U * pixelsPerImage;
+        const std::uint32_t planeBase = image * 3U * pixelsPerImage;
         constexpr float Inv255 = 1.0f / 255.0f;
         nchw[planeBase + pixel] = static_cast<float>(sample.x) * Inv255;
         nchw[planeBase + pixelsPerImage + pixel] = static_cast<float>(sample.y) * Inv255;
@@ -30,11 +30,11 @@ namespace {
 
 } // namespace
 
-void convertRgba8ToFloatNchw(
-    const void* rgba8, float* nchw, uint32_t batchSize, uint32_t width, uint32_t height, uintptr_t streamHandle)
+void convertRgba8ToFloatNchw(const void* rgba8, float* nchw, std::uint32_t batchSize, std::uint32_t width,
+    std::uint32_t height, std::uintptr_t streamHandle)
 {
-    const uint32_t totalPixels = batchSize * width * height;
-    constexpr uint32_t ThreadCount = 256;
+    const std::uint32_t totalPixels = batchSize * width * height;
+    constexpr std::uint32_t ThreadCount = 256;
     auto stream = reinterpret_cast<cudaStream_t>(streamHandle);
     rgba8ToFloatNchwKernel<<<(totalPixels + ThreadCount - 1U) / ThreadCount, ThreadCount, 0, stream>>>(
         static_cast<const uchar4*>(rgba8), nchw, batchSize, width, height);

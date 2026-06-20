@@ -8,6 +8,7 @@
 #include <GLFW/glfw3.h>
 
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -120,12 +121,12 @@ int main(int argc, char** argv)
 
     using Clock = std::chrono::steady_clock;
     constexpr float fixedDt = 1.0f / 60.0f;
-    uint64_t totalSteps = 0;
-    uint64_t statsFrames = 0;
+    std::uint64_t totalSteps = 0;
+    std::uint64_t statsFrames = 0;
     auto previous = Clock::now();
     auto lastStatsAt = previous;
     float accumulator = 0.0f;
-    uint64_t statsSteps = 0;
+    std::uint64_t statsSteps = 0;
 
     while (!display.shouldClose()) {
         display.pollEvents();

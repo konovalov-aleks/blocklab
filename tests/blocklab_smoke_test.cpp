@@ -8,16 +8,17 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <vector>
 
 namespace {
 
-constexpr int32_t TestGenerationHalfExtent = 32;
-constexpr uint32_t TestGenerationExtent = TestGenerationHalfExtent * 2;
-constexpr uint32_t TestMaxTerrainVoxels
-    = static_cast<uint32_t>(TestGenerationExtent * blocklab::Chunk::SizeY * TestGenerationExtent);
+constexpr std::int32_t TestGenerationHalfExtent = 32;
+constexpr std::uint32_t TestGenerationExtent = TestGenerationHalfExtent * 2;
+constexpr std::uint32_t TestMaxTerrainVoxels
+    = static_cast<std::uint32_t>(TestGenerationExtent * blocklab::Chunk::SizeY * TestGenerationExtent);
 
 void updateWorldCacheAt(const blocklab::World& world, blocklab::IVec3 center)
 {
@@ -64,7 +65,7 @@ public:
 
 private:
     blocklab::Observation m_observation;
-    uint64_t m_version = 0;
+    std::uint64_t m_version = 0;
 };
 
 } // namespace
@@ -123,9 +124,9 @@ TEST_CASE("Agent cannot place a block into its own body", "[environment]")
     blocklab::Environment placeEnv(renderer, 1);
     placeEnv.reset(7);
     const blocklab::AgentState& state = placeEnv.agent(0).state();
-    const int32_t occupiedX = blocklab::floorToInt32(state.position.x);
-    const int32_t occupiedY = blocklab::floorToInt32(state.position.y + 1.0f);
-    const int32_t occupiedZ = blocklab::floorToInt32(state.position.z);
+    const std::int32_t occupiedX = blocklab::floorToInt32(state.position.x);
+    const std::int32_t occupiedY = blocklab::floorToInt32(state.position.y + 1.0f);
+    const std::int32_t occupiedZ = blocklab::floorToInt32(state.position.z);
     placeEnv.mutableWorld(0).setBlock({ occupiedX, occupiedY, occupiedZ + 2 }, blocklab::Block::Dirt);
 
     blocklab::AgentAction placeIntoSelf;
@@ -140,10 +141,10 @@ TEST_CASE("World collision queries respect air and solid override masks", "[worl
 {
     blocklab::World world;
     world.resetSeed(17);
-    const int32_t x = 5;
-    const int32_t z = -3;
+    const std::int32_t x = 5;
+    const std::int32_t z = -3;
     updateWorldCacheAt(world, { x, 0, z });
-    const int32_t groundY
+    const std::int32_t groundY
         = blocklab::floorToInt32(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1;
     const blocklab::IVec3 groundBlock { x, groundY, z };
     REQUIRE(world.getBlock({ x, groundY, z }) != blocklab::Block::Air);
@@ -358,7 +359,7 @@ TEST_CASE("Environment returns renderer observations when renderer is installed"
     CountingRenderer renderer;
     blocklab::Environment renderEnv(renderer, 1);
     renderEnv.reset(9);
-    const uint64_t renderedResetVersion = renderEnv.observe().version();
+    const std::uint64_t renderedResetVersion = renderEnv.observe().version();
     CHECK(renderEnv.observe().batchSize() == 1);
     CHECK(renderEnv.observe().data() == reinterpret_cast<float*>(0x1234));
     CHECK(renderedResetVersion != 0);

@@ -8,9 +8,9 @@ namespace blocklab {
 
 class World;
 
-using EntityId = uint32_t;
+using EntityId = std::uint32_t;
 
-enum class CharacterKind : uint8_t {
+enum class CharacterKind : std::uint8_t {
     Agent,
     Pig,
 };
@@ -23,7 +23,7 @@ struct CharacterSnapshot {
     Vec3 forward { 0.0f, 0.0f, 1.0f };
     float radius = 0.35f;
     float height = 0.8f;
-    int32_t health = 1;
+    std::int32_t health = 1;
 };
 
 class Character {
@@ -35,7 +35,7 @@ public:
     CharacterKind kind() const { return m_kind; }
     const Vec3& position() const { return m_position; }
     const Vec3& velocity() const { return m_velocity; }
-    int32_t health() const { return m_health; }
+    std::int32_t health() const { return m_health; }
     bool onGround() const { return m_onGround; }
     bool horizontalBlocked() const { return m_horizontalBlocked; }
     bool isAlive() const { return m_health > 0; }
@@ -61,7 +61,7 @@ protected:
     Vec3 m_forward { 0.0f, 0.0f, 1.0f };
     float m_radius = 0.35f;
     float m_height = 0.8f;
-    int32_t m_health = 1;
+    std::int32_t m_health = 1;
     bool m_onGround = false;
     bool m_hasHorizontalMovement = false;
     bool m_horizontalBlocked = false;

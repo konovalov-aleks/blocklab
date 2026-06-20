@@ -16,6 +16,6 @@ using IVec4 = glm::ivec4;
 
 inline static constexpr float Pi = std::numbers::pi_v<float>;
 
-inline constexpr int32_t floorToInt32(float value) { return static_cast<int32_t>(std::floor(value)); }
+inline constexpr std::int32_t floorToInt32(float value) { return static_cast<std::int32_t>(std::floor(value)); }
 
 } // namespace blocklab

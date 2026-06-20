@@ -14,9 +14,9 @@ template <typename Value>
 class QuadTree {
 private:
     struct Square {
-        int32_t x = 0;
-        int32_t z = 0;
-        int32_t size = 0;
+        std::int32_t x = 0;
+        std::int32_t z = 0;
+        std::int32_t size = 0;
     };
 
     struct Node;
@@ -35,8 +35,8 @@ public:
 
         ValueT& operator*() const { return *m_current->value; }
         ValueT* operator->() const { return &*m_current->value; }
-        int32_t x() const { return m_currentBounds.x; }
-        int32_t z() const { return m_currentBounds.z; }
+        std::int32_t x() const { return m_currentBounds.x; }
+        std::int32_t z() const { return m_currentBounds.z; }
 
         BasicIterator& operator++()
         {
@@ -70,7 +70,7 @@ public:
             descend(root, rootBounds);
         }
 
-        BasicIterator(NodeT* root, Square rootBounds, int32_t x, int32_t z)
+        BasicIterator(NodeT* root, Square rootBounds, std::int32_t x, std::int32_t z)
             : m_root(root)
             , m_rootBounds(rootBounds)
         {
@@ -109,7 +109,7 @@ public:
             }
         }
 
-        void findLeaf(NodeT* node, Square bounds, int32_t x, int32_t z)
+        void findLeaf(NodeT* node, Square bounds, std::int32_t x, std::int32_t z)
         {
             while (node) {
                 if (isLeaf(bounds)) {
@@ -198,10 +198,10 @@ public:
     using const_iterator = BasicIterator<const Node, const Value>;
 
     struct Rect {
-        int32_t x = 0;
-        int32_t z = 0;
-        int32_t width = 0;
-        int32_t height = 0;
+        std::int32_t x = 0;
+        std::int32_t z = 0;
+        std::int32_t width = 0;
+        std::int32_t height = 0;
     };
 
     QuadTree() = default;
@@ -249,17 +249,17 @@ public:
         m_size = 0;
     }
 
-    void insert(int32_t x, int32_t z, const Value& value) { insertImpl(x, z, Value(value)); }
-    void insert(int32_t x, int32_t z, Value&& value) { insertImpl(x, z, std::move(value)); }
+    void insert(std::int32_t x, std::int32_t z, const Value& value) { insertImpl(x, z, Value(value)); }
+    void insert(std::int32_t x, std::int32_t z, Value&& value) { insertImpl(x, z, std::move(value)); }
 
-    iterator find(int32_t x, int32_t z)
+    iterator find(std::int32_t x, std::int32_t z)
     {
         if (!m_root || !contains(m_rootBounds, x, z))
             return end();
         return iterator(m_root.get(), m_rootBounds, x, z);
     }
 
-    const_iterator find(int32_t x, int32_t z) const
+    const_iterator find(std::int32_t x, std::int32_t z) const
     {
         if (!m_root || !contains(m_rootBounds, x, z))
             return end();
@@ -289,7 +289,7 @@ public:
 
     std::size_t erase(const Rect& rect)
     {
-        return eraseIf(rect, [](int32_t, int32_t, const Value&) { return true; });
+        return eraseIf(rect, [](std::int32_t, std::int32_t, const Value&) { return true; });
     }
 
     template <typename Predicate>
@@ -313,15 +313,15 @@ private:
     static bool isValid(const Rect& rect) { return rect.width > 0 && rect.height > 0; }
     static bool isLeaf(const Square& bounds) { return bounds.size == 1; }
 
-    static int64_t right(const Rect& rect) { return static_cast<int64_t>(rect.x) + rect.width; }
-    static int64_t bottom(const Rect& rect) { return static_cast<int64_t>(rect.z) + rect.height; }
-    static int64_t right(const Square& square) { return static_cast<int64_t>(square.x) + square.size; }
-    static int64_t bottom(const Square& square) { return static_cast<int64_t>(square.z) + square.size; }
+    static std::int64_t right(const Rect& rect) { return static_cast<std::int64_t>(rect.x) + rect.width; }
+    static std::int64_t bottom(const Rect& rect) { return static_cast<std::int64_t>(rect.z) + rect.height; }
+    static std::int64_t right(const Square& square) { return static_cast<std::int64_t>(square.x) + square.size; }
+    static std::int64_t bottom(const Square& square) { return static_cast<std::int64_t>(square.z) + square.size; }
 
-    static bool contains(const Square& square, int32_t x, int32_t z)
+    static bool contains(const Square& square, std::int32_t x, std::int32_t z)
     {
-        return x >= square.x && z >= square.z && static_cast<int64_t>(x) < right(square)
-            && static_cast<int64_t>(z) < bottom(square);
+        return x >= square.x && z >= square.z && static_cast<std::int64_t>(x) < right(square)
+            && static_cast<std::int64_t>(z) < bottom(square);
     }
 
     static bool intersects(const Square& a, const Rect& b)
@@ -329,9 +329,9 @@ private:
         return right(a) > b.x && right(b) > a.x && bottom(a) > b.z && bottom(b) > a.z;
     }
 
-    static int childIndex(const Square& parent, int32_t x, int32_t z)
+    static int childIndex(const Square& parent, std::int32_t x, std::int32_t z)
     {
-        const int32_t half = parent.size / 2;
+        const std::int32_t half = parent.size / 2;
         const bool east = x >= parent.x + half;
         const bool south = z >= parent.z + half;
         return (south ? 2 : 0) + (east ? 1 : 0);
@@ -339,7 +339,7 @@ private:
 
     static Square childBounds(const Square& parent, int index)
     {
-        const int32_t half = parent.size / 2;
+        const std::int32_t half = parent.size / 2;
         return {
             .x = parent.x + (index % 2) * half,
             .z = parent.z + (index / 2) * half,
@@ -348,14 +348,14 @@ private:
     }
 
     template <typename T>
-    void insertImpl(int32_t x, int32_t z, T&& value)
+    void insertImpl(std::int32_t x, std::int32_t z, T&& value)
     {
         ensureRootContains(x, z);
         if (insertIntoNode(*m_root, m_rootBounds, x, z, std::forward<T>(value)))
             ++m_size;
     }
 
-    void ensureRootContains(int32_t x, int32_t z)
+    void ensureRootContains(std::int32_t x, std::int32_t z)
     {
         if (!m_root) {
             m_rootBounds = Square {
@@ -371,10 +371,10 @@ private:
             expandRootToward(x, z);
     }
 
-    void expandRootToward(int32_t x, int32_t z)
+    void expandRootToward(std::int32_t x, std::int32_t z)
     {
         const Square oldBounds = m_rootBounds;
-        const int32_t oldSize = oldBounds.size;
+        const std::int32_t oldSize = oldBounds.size;
         const bool expandWest = x < oldBounds.x;
         const bool expandNorth = z < oldBounds.z;
         m_rootBounds = Square {
@@ -390,7 +390,7 @@ private:
     }
 
     template <typename T>
-    static bool insertIntoNode(Node& node, const Square& bounds, int32_t x, int32_t z, T&& value)
+    static bool insertIntoNode(Node& node, const Square& bounds, std::int32_t x, std::int32_t z, T&& value)
     {
         if (isLeaf(bounds)) {
             const bool inserted = !node.value;

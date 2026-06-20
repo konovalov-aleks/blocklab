@@ -23,11 +23,11 @@ namespace blocklab {
 
 class OverrideCluster {
 public:
-    using Mask = uint64_t;
+    using Mask = std::uint64_t;
 
-    static constexpr int32_t Edge = 4;
-    static constexpr int32_t Volume = Edge * Edge * Edge;
-    static constexpr uint8_t NoOverride = BlockId::NoOverride;
+    static constexpr std::int32_t Edge = 4;
+    static constexpr std::int32_t Volume = Edge * Edge * Edge;
+    static constexpr std::uint8_t NoOverride = BlockId::NoOverride;
 
     OverrideCluster();
     std::optional<Block> get(std::size_t index) const;
@@ -37,7 +37,7 @@ public:
     bool hasSolidOverride(std::size_t index) const;
     bool hasOverrideInMask(Mask mask) const { return (m_overrideMask & mask) != 0; }
     bool hasSolidOverrideInMask(Mask mask) const { return (m_solidMask & mask) != 0; }
-    uint16_t count() const { return m_count; }
+    std::uint16_t count() const { return m_count; }
     bool isEmpty() const { return m_count == 0; }
     Mask overrideMask() const { return m_overrideMask; }
     Mask solidMask() const { return m_solidMask; }
@@ -45,15 +45,15 @@ public:
 private:
     static Mask bitFor(std::size_t index);
 
-    uint16_t m_count = 0;
+    std::uint16_t m_count = 0;
     Mask m_overrideMask = 0;
     Mask m_solidMask = 0;
-    std::array<uint8_t, Volume> m_blocks;
+    std::array<std::uint8_t, Volume> m_blocks;
 };
 
 static_assert(OverrideCluster::Volume <= std::numeric_limits<OverrideCluster::Mask>::digits);
-static_assert(sizeof(Block) == sizeof(uint8_t),
-    "OverrideCluster stores dense uint8_t block ids. If Block becomes heavier, consider storing compact ids or "
+static_assert(sizeof(Block) == sizeof(std::uint8_t),
+    "OverrideCluster stores dense std::uint8_t block ids. If Block becomes heavier, consider storing compact ids or "
     "pointers.");
 static_assert(BlockId::Air != OverrideCluster::NoOverride);
 static_assert(BlockId::Grass != OverrideCluster::NoOverride);
@@ -61,7 +61,7 @@ static_assert(BlockId::Dirt != OverrideCluster::NoOverride);
 static_assert(BlockId::Stone != OverrideCluster::NoOverride);
 
 struct OverrideClusterColumn {
-    std::map<int32_t, OverrideCluster> clusters;
+    std::map<std::int32_t, OverrideCluster> clusters;
 
     bool isEmpty() const { return clusters.empty(); }
 };
@@ -69,7 +69,7 @@ struct OverrideClusterColumn {
 class World {
 public:
     struct BlocksCache {
-        enum class State : uint8_t {
+        enum class State : std::uint8_t {
             Empty,
             Ready,
             Borrowed,
@@ -119,7 +119,7 @@ public:
 
         IVec3 origin {};
         IVec3 size {};
-        PageLockedVector<uint8_t> blocks;
+        PageLockedVector<std::uint8_t> blocks;
         CudaSharedFuture<WorldGenerationOutput> pendingFuture;
         State state = State::Empty;
     };
@@ -130,7 +130,7 @@ public:
 
     // resets the world to the initial state with the given seed,
     // invalidating all block overrides and cached blocks
-    void resetSeed(uint32_t seed);
+    void resetSeed(std::uint32_t seed);
     // spawns characters and resets their states, without modifying blocks or overrides
     // note: the block cache must be initialized
     void resetCharacters();
@@ -143,13 +143,13 @@ public:
 
     void collectOverridesInRegion(IVec3 origin, IVec3 size, std::vector<BlockOverride>& out) const;
 
-    PageLockedVector<uint8_t> borrowGenerationBuffers() const;
+    PageLockedVector<std::uint8_t> borrowGenerationBuffers() const;
     void updateGeneration(CudaSharedFuture<WorldGenerationOutput>) const;
     void waitForGeneration() const;
 
-    uint32_t seed() const { return m_seed; }
-    uint64_t version() const { return m_version; }
-    uint64_t logicalTimeMs() const { return m_logicalTimeMs; }
+    std::uint32_t seed() const { return m_seed; }
+    std::uint64_t version() const { return m_version; }
+    std::uint64_t logicalTimeMs() const { return m_logicalTimeMs; }
 
     std::size_t overrideCount() const { return m_overrideCount; }
 
@@ -161,9 +161,9 @@ private:
     void updateCharacters(float dt, Vec3 threatPosition);
     void spawnTestPigs();
 
-    uint32_t m_seed = 0;
-    uint64_t m_version = 1;
-    uint64_t m_logicalTimeMs = 0;
+    std::uint32_t m_seed = 0;
+    std::uint64_t m_version = 1;
+    std::uint64_t m_logicalTimeMs = 0;
     std::size_t m_overrideCount = 0;
     EntityId m_nextEntityId = 1;
     QuadTree<OverrideClusterColumn> m_overrideColumns;

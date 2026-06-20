@@ -13,17 +13,20 @@
 
 namespace blocklab {
 
-enum class RenderEntityKind : uint32_t {
+enum class RenderEntityKind : std::uint32_t {
     None = 0,
     Pig = 1,
 };
 
-constexpr float renderEntityKindId(RenderEntityKind kind) { return static_cast<float>(static_cast<uint32_t>(kind)); }
+constexpr float renderEntityKindId(RenderEntityKind kind)
+{
+    return static_cast<float>(static_cast<std::uint32_t>(kind));
+}
 
 struct RenderConfig {
-    int32_t width = 320;
-    int32_t height = 180;
-    uint32_t batchSize = 1;
+    std::int32_t width = 320;
+    std::int32_t height = 180;
+    std::uint32_t batchSize = 1;
 };
 
 class Renderer final : public ObservationRenderer {
@@ -41,7 +44,7 @@ public:
     struct VulkanState;
     struct RenderParams {
         struct alignas(16) FrameInfo {
-            int32_t animationTimeMs = 0;
+            std::int32_t animationTimeMs = 0;
         };
 
         Vec4 origin;
@@ -58,28 +61,28 @@ public:
         Vec4 velocityAndKind;
     };
     struct DrawPushConstants {
-        uint32_t envIndex = 0;
-        uint32_t layerIndex = 0;
-        uint32_t padding0 = 0;
-        uint32_t padding1 = 0;
+        std::uint32_t envIndex = 0;
+        std::uint32_t layerIndex = 0;
+        std::uint32_t padding0 = 0;
+        std::uint32_t padding1 = 0;
     };
     static_assert(sizeof(RenderParams::FrameInfo) == sizeof(IVec4));
 
 private:
     struct RenderSlot {
-        IVec3 lastMeshCenter { std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::min(),
-            std::numeric_limits<int32_t>::min() };
+        IVec3 lastMeshCenter { std::numeric_limits<std::int32_t>::min(), std::numeric_limits<std::int32_t>::min(),
+            std::numeric_limits<std::int32_t>::min() };
 
-        uint32_t terrainVoxelOffset = 0;
-        uint32_t terrainVoxelCount = 0;
+        std::uint32_t terrainVoxelOffset = 0;
+        std::uint32_t terrainVoxelCount = 0;
 
-        uint32_t pigVertexCount = 0;
+        std::uint32_t pigVertexCount = 0;
 
-        uint32_t instanceOffset = 0;
-        uint32_t instanceCount = 0;
+        std::uint32_t instanceOffset = 0;
+        std::uint32_t instanceCount = 0;
 
         CudaSharedFuture<WorldGenerationOutput> pendingGeneration;
-        uint64_t lastWorldVersion = 0;
+        std::uint64_t lastWorldVersion = 0;
     };
 
     RenderParams buildRenderParams(const AgentState&, const World&) const;
@@ -98,9 +101,9 @@ private:
     std::vector<EntityInstance> m_instances;
     std::unique_ptr<RenderSlot[]> m_slots;
     std::unique_ptr<RenderParams[]> m_renderParams;
-    uint32_t m_batchSize = 0;
-    uint32_t m_pigMeshVertexCount = 0;
-    uint64_t m_observationVersion = 0;
+    std::uint32_t m_batchSize = 0;
+    std::uint32_t m_pigMeshVertexCount = 0;
+    std::uint64_t m_observationVersion = 0;
     bool m_pigMeshUploaded = false;
 };
 

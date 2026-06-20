@@ -123,7 +123,7 @@ void Vulkan::createDevice(const RequiredExtensions& extensions)
     };
 
     const float priority[] = { 1.0f };
-    uint32_t infoCount = 1;
+    std::uint32_t infoCount = 1;
     vk::DeviceQueueCreateInfo queueCreateInfos[2] {
         {
             .queueFamilyIndex = m_graphicsQueueIndex,
@@ -144,7 +144,7 @@ void Vulkan::createDevice(const RequiredExtensions& extensions)
         .pNext = &features12,
         .queueCreateInfoCount = infoCount,
         .pQueueCreateInfos = queueCreateInfos,
-        .enabledExtensionCount = static_cast<uint32_t>(extensions.size()),
+        .enabledExtensionCount = static_cast<std::uint32_t>(extensions.size()),
         .ppEnabledExtensionNames = extensions.data(),
     };
 
