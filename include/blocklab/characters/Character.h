@@ -1,6 +1,6 @@
 #pragma once
 
-#include "blocklab/Math.h"
+#include <blocklab/utility/Math.h>
 
 #include <cstdint>
 

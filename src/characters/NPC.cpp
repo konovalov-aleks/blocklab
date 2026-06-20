@@ -1,4 +1,4 @@
-#include "blocklab/characters/NPC.h"
+#include <blocklab/characters/NPC.h>
 
 namespace blocklab {
 

@@ -1,8 +1,8 @@
-#include "blocklab/characters/PigCharacter.h"
+#include <blocklab/characters/PigCharacter.h>
 
-#include "blocklab/Hash.h"
-#include "blocklab/Math.h"
-#include "blocklab/World.h"
+#include <blocklab/utility/Hash.h>
+#include <blocklab/utility/Math.h>
+#include <blocklab/world/World.h>
 
 #include <algorithm>
 #include <cmath>

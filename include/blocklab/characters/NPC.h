@@ -1,6 +1,6 @@
 #pragma once
 
-#include "blocklab/characters/Character.h"
+#include "Character.h"
 
 #include <cstdint>
 

@@ -1,6 +1,6 @@
-#include "blocklab/Environment.h"
+#include <blocklab/environment/Environment.h>
 
-#include "blocklab/CudaHelpers.h"
+#include <blocklab/gpu/cuda/CudaHelpers.h>
 
 #include <catch2/catch_test_macros.hpp>
 

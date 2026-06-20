@@ -83,12 +83,12 @@ if(NOT pybind11_FOUND)
 endif()
 
 add_library(blocklab_env
-    src/Agent.cpp
     src/characters/Character.cpp
     src/characters/NPC.cpp
     src/characters/PigCharacter.cpp
-    src/Environment.cpp
-    src/World.cpp
+    src/environment/Agent.cpp
+    src/environment/Environment.cpp
+    src/world/World.cpp
 )
 
 target_include_directories(blocklab_env
@@ -107,19 +107,19 @@ target_link_libraries(blocklab_env
 blocklab_enable_strict_warnings(blocklab_env)
 
 add_library(blocklab_render
-    src/CudaObservation.cu
-    src/CudaWorldGenerator.cu
+    src/characters/meshes/PigMesh.cpp
+    src/environment/CudaObservation.cu
+    src/gpu/interop/VulkanCudaInteropBuffer.cpp
+    src/gpu/interop/VulkanCudaInteropSemaphore.cpp
+    src/gpu/vulkan/GLFWInit.cpp
+    src/gpu/vulkan/VulkanBuffer.cpp
+    src/gpu/vulkan/Vulkan.cpp
+    src/gpu/vulkan/VulkanSemaphore.cpp
     src/graphics/Display.cpp
     src/graphics/Display.cu
-    src/graphics/GLFWInit.cpp
     src/graphics/Renderer.cpp
-    src/graphics/Vulkan.cpp
-    src/graphics/VulkanBuffer.cpp
-    src/graphics/VulkanSemaphore.cpp
-    src/graphics/VulkanCudaInteropBuffer.cpp
-    src/graphics/VulkanCudaInteropSemaphore.cpp
-    src/meshes/PigMesh.cpp
-    src/WorldGenerator.cpp
+    src/world/CudaWorldGenerator.cu
+    src/world/WorldGenerator.cpp
 )
 
 target_include_directories(blocklab_render
@@ -145,7 +145,7 @@ target_compile_definitions(blocklab_render PUBLIC VULKAN_HPP_NO_EXCEPTIONS VULKA
 blocklab_enable_strict_warnings(blocklab_render)
 
 add_executable(blocklab
-    src/main.cpp
+    src/app/main.cpp
 )
 
 target_link_libraries(blocklab PRIVATE blocklab_render)
@@ -153,7 +153,7 @@ target_link_libraries(blocklab PRIVATE blocklab_render)
 blocklab_enable_strict_warnings(blocklab)
 
 add_executable(blocklab_benchmark
-    src/benchmark.cpp
+    src/app/benchmark.cpp
 )
 
 target_link_libraries(blocklab_benchmark PRIVATE blocklab_render)

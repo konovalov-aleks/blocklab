@@ -1,5 +1,5 @@
-#include "blocklab/CudaFuture.h"
-#include "blocklab/CudaSharedFuture.h"
+#include <blocklab/gpu/cuda/CudaFuture.h>
+#include <blocklab/gpu/cuda/CudaSharedFuture.h>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cuda_runtime.h>

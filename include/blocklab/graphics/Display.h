@@ -1,10 +1,10 @@
 #pragma once
 
-#include "Vulkan.h"
-#include "VulkanCudaInteropBuffer.h"
-#include "VulkanCudaInteropSemaphore.h"
-#include "VulkanSemaphore.h"
-#include <blocklab/Observation.h>
+#include <blocklab/environment/Observation.h>
+#include <blocklab/gpu/interop/VulkanCudaInteropBuffer.h>
+#include <blocklab/gpu/interop/VulkanCudaInteropSemaphore.h>
+#include <blocklab/gpu/vulkan/Vulkan.h>
+#include <blocklab/gpu/vulkan/VulkanSemaphore.h>
 
 #include <GLFW/glfw3.h>
 #include <cuda_runtime.h>

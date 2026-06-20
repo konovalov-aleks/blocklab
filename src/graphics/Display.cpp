@@ -1,8 +1,8 @@
 #include <blocklab/graphics/Display.h>
 
-#include <blocklab/CudaHelpers.h>
-#include <blocklab/Error.h>
-#include <blocklab/graphics/Vulkan.h>
+#include <blocklab/gpu/cuda/CudaHelpers.h>
+#include <blocklab/gpu/vulkan/Vulkan.h>
+#include <blocklab/utility/Error.h>
 
 #include <GLFW/glfw3.h>
 #include <vulkan/vulkan.hpp>

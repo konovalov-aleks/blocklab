@@ -1,14 +1,14 @@
 #include <blocklab/graphics/Renderer.h>
 
-#include <blocklab/CudaHelpers.h>
-#include <blocklab/CudaObservation.h>
-#include <blocklab/Error.h>
-#include <blocklab/graphics/Memory.h>
-#include <blocklab/graphics/Vulkan.h>
-#include <blocklab/graphics/VulkanBuffer.h>
-#include <blocklab/graphics/VulkanCudaInteropBuffer.h>
-#include <blocklab/graphics/VulkanCudaInteropSemaphore.h>
-#include <blocklab/meshes/PigMesh.h>
+#include <blocklab/characters/meshes/PigMesh.h>
+#include <blocklab/environment/CudaObservation.h>
+#include <blocklab/gpu/cuda/CudaHelpers.h>
+#include <blocklab/gpu/interop/VulkanCudaInteropBuffer.h>
+#include <blocklab/gpu/interop/VulkanCudaInteropSemaphore.h>
+#include <blocklab/gpu/vulkan/Memory.h>
+#include <blocklab/gpu/vulkan/Vulkan.h>
+#include <blocklab/gpu/vulkan/VulkanBuffer.h>
+#include <blocklab/utility/Error.h>
 
 #include <cuda_runtime.h>
 #include <vulkan/vulkan.hpp>

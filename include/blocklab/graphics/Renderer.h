@@ -1,8 +1,8 @@
 #pragma once
 
-#include <blocklab/Environment.h>
-#include <blocklab/WorldGenerator.h>
-#include <blocklab/graphics/Vulkan.h>
+#include <blocklab/environment/Environment.h>
+#include <blocklab/gpu/vulkan/Vulkan.h>
+#include <blocklab/world/WorldGenerator.h>
 
 #include <cstddef>
 #include <cstdint>

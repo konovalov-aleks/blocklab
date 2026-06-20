@@ -1,7 +1,7 @@
-#include "blocklab/characters/Character.h"
+#include <blocklab/characters/Character.h>
 
-#include "blocklab/Math.h"
-#include "blocklab/World.h"
+#include <blocklab/utility/Math.h>
+#include <blocklab/world/World.h>
 
 #include <algorithm>
 #include <cmath>

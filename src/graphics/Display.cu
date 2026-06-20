@@ -1,4 +1,4 @@
-#include <blocklab/CudaHelpers.h>
+#include <blocklab/gpu/cuda/CudaHelpers.h>
 
 #include <cuda_runtime.h>
 

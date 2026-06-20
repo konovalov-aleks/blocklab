@@ -1,10 +1,10 @@
-#include <blocklab/Agent.h>
-#include <blocklab/CudaHelpers.h>
-#include <blocklab/Environment.h>
-#include <blocklab/Error.h>
-#include <blocklab/Observation.h>
+#include <blocklab/environment/Agent.h>
+#include <blocklab/environment/Environment.h>
+#include <blocklab/environment/Observation.h>
+#include <blocklab/gpu/cuda/CudaHelpers.h>
+#include <blocklab/gpu/vulkan/Vulkan.h>
 #include <blocklab/graphics/Renderer.h>
-#include <blocklab/graphics/Vulkan.h>
+#include <blocklab/utility/Error.h>
 
 #include <cuda_runtime.h>
 #include <pybind11/numpy.h>
