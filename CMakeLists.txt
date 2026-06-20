@@ -9,6 +9,9 @@ project(blocklab LANGUAGES CXX CUDA)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CUDA_STANDARD 20)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_EXTENSIONS OFF)
 
 include(FetchContent)
 
@@ -80,17 +83,20 @@ if(NOT pybind11_FOUND)
 endif()
 
 add_library(blocklab_env
-    src/Agent.cpp
+    src/characters/AgentCharacter.cpp
     src/characters/Character.cpp
     src/characters/NPC.cpp
     src/characters/PigCharacter.cpp
-    src/Environment.cpp
-    src/World.cpp
+    src/environment/Agent.cpp
+    src/environment/Environment.cpp
+    src/world/World.cpp
 )
 
 target_include_directories(blocklab_env
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 target_compile_features(blocklab_env PUBLIC cxx_std_20)
@@ -104,16 +110,26 @@ target_link_libraries(blocklab_env
 blocklab_enable_strict_warnings(blocklab_env)
 
 add_library(blocklab_render
-    src/CudaObservation.cu
-    src/CudaWorldGenerator.cu
-    src/meshes/PigMesh.cpp
-    src/Renderer.cpp
-    src/WorldGenerator.cpp
+    src/characters/meshes/PigMesh.cpp
+    src/environment/CudaObservation.cu
+    src/gpu/interop/VulkanCudaInteropBuffer.cpp
+    src/gpu/interop/VulkanCudaInteropSemaphore.cpp
+    src/gpu/vulkan/GLFWInit.cpp
+    src/gpu/vulkan/VulkanBuffer.cpp
+    src/gpu/vulkan/Vulkan.cpp
+    src/gpu/vulkan/VulkanSemaphore.cpp
+    src/graphics/Display.cpp
+    src/graphics/Display.cu
+    src/graphics/Renderer.cpp
+    src/world/WorldGenerator.cu
+    src/world/WorldGenerator.cpp
 )
 
 target_include_directories(blocklab_render
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 target_compile_features(blocklab_render PUBLIC cxx_std_20)
@@ -129,22 +145,24 @@ target_link_libraries(blocklab_render
 )
 add_dependencies(blocklab_render blocklab_shaders)
 target_compile_definitions(blocklab_render PRIVATE BLOCKLAB_SHADER_DIR="${BLOCKLAB_SHADER_OUTPUT_DIR}")
+target_compile_definitions(blocklab_render PUBLIC VULKAN_HPP_NO_EXCEPTIONS VULKAN_HPP_NO_STRUCT_CONSTRUCTORS)
 
 blocklab_enable_strict_warnings(blocklab_render)
-set_source_files_properties(src/CudaObservation.cu src/CudaWorldGenerator.cu PROPERTIES CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED ON)
 
 add_executable(blocklab
-    src/main.cpp
+    src/app/main.cpp
 )
 
+target_include_directories(blocklab PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(blocklab PRIVATE blocklab_render)
 
 blocklab_enable_strict_warnings(blocklab)
 
 add_executable(blocklab_benchmark
-    src/benchmark.cpp
+    src/app/benchmark.cpp
 )
 
+target_include_directories(blocklab_benchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(blocklab_benchmark PRIVATE blocklab_render)
 
 blocklab_enable_strict_warnings(blocklab_benchmark)
@@ -158,6 +176,7 @@ blocklab_enable_strict_warnings(_native)
 set_target_properties(_native PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/python/blocklab
 )
+target_include_directories(_native PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 enable_testing()
 
@@ -165,6 +184,7 @@ add_executable(blocklab_smoke_test
     tests/blocklab_smoke_test.cpp
 )
 
+target_include_directories(blocklab_smoke_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(blocklab_smoke_test PRIVATE blocklab_render Catch2::Catch2WithMain)
 
 blocklab_enable_strict_warnings(blocklab_smoke_test)
@@ -175,6 +195,7 @@ add_executable(blocklab_quad_tree_test
     tests/blocklab_quad_tree_test.cpp
 )
 
+target_include_directories(blocklab_quad_tree_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(blocklab_quad_tree_test PRIVATE blocklab_env Catch2::Catch2WithMain)
 
 blocklab_enable_strict_warnings(blocklab_quad_tree_test)
@@ -185,6 +206,7 @@ add_executable(blocklab_page_locked_vector_test
     tests/page_locked_vector_test.cpp
 )
 
+target_include_directories(blocklab_page_locked_vector_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(blocklab_page_locked_vector_test PRIVATE blocklab_env Catch2::Catch2WithMain)
 
 blocklab_enable_strict_warnings(blocklab_page_locked_vector_test)
@@ -205,6 +227,7 @@ add_executable(blocklab_hash_test
     tests/hash_test.cpp
 )
 
+target_include_directories(blocklab_hash_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(blocklab_hash_test PRIVATE blocklab_env Catch2::Catch2WithMain)
 
 blocklab_enable_strict_warnings(blocklab_hash_test)

@@ -1,10 +1,11 @@
-#include "blocklab/PageLockedVector.h"
+#include <gpu/cuda/PageLockedVector.h>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cuda_runtime.h>
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <numeric>
 #include <type_traits>
@@ -14,7 +15,7 @@ namespace {
 void requireCuda(cudaError_t result) { REQUIRE(result == cudaSuccess); }
 
 struct Sample {
-    int32_t x = 0;
+    std::int32_t x = 0;
     float y = 0.0f;
 };
 
@@ -24,7 +25,7 @@ static_assert(std::is_trivially_copyable_v<Sample>);
 
 TEST_CASE("PageLockedVector grows and preserves existing values", "[cuda][page-locked-vector]")
 {
-    blocklab::PageLockedVector<int32_t> values;
+    blocklab::PageLockedVector<std::int32_t> values;
     CHECK(values.empty());
     CHECK(values.size() == 0);
     CHECK(values.capacity() == 0);
@@ -68,9 +69,9 @@ TEST_CASE("PageLockedVector resize zero-initializes new storage", "[cuda][page-l
 TEST_CASE("PageLockedVector uninitializedResize updates size without reallocating within capacity",
     "[cuda][page-locked-vector]")
 {
-    blocklab::PageLockedVector<uint8_t> values;
+    blocklab::PageLockedVector<std::uint8_t> values;
     values.reserve(16);
-    uint8_t* const data = values.data();
+    std::uint8_t* const data = values.data();
     const std::size_t capacity = values.capacity();
 
     values.uninitializedResize(12);
@@ -79,7 +80,7 @@ TEST_CASE("PageLockedVector uninitializedResize updates size without reallocatin
     CHECK(values.data() == data);
 
     for (std::size_t i = 0; i < values.size(); ++i)
-        values[i] = static_cast<uint8_t>(i + 1U);
+        values[i] = static_cast<std::uint8_t>(i + 1U);
 
     values.clear();
     CHECK(values.empty());
@@ -94,12 +95,12 @@ TEST_CASE("PageLockedVector uninitializedResize updates size without reallocatin
 
 TEST_CASE("PageLockedVector move transfers ownership and leaves source empty", "[cuda][page-locked-vector]")
 {
-    blocklab::PageLockedVector<int32_t> source;
+    blocklab::PageLockedVector<std::int32_t> source;
     source.push_back(10);
     source.push_back(20);
-    int32_t* const originalData = source.data();
+    std::int32_t* const originalData = source.data();
 
-    blocklab::PageLockedVector<int32_t> moved(std::move(source));
+    blocklab::PageLockedVector<std::int32_t> moved(std::move(source));
     CHECK(source.empty());
     CHECK(source.capacity() == 0);
     CHECK(source.data() == nullptr);
@@ -108,7 +109,7 @@ TEST_CASE("PageLockedVector move transfers ownership and leaves source empty", "
     CHECK(moved[0] == 10);
     CHECK(moved[1] == 20);
 
-    blocklab::PageLockedVector<int32_t> assigned;
+    blocklab::PageLockedVector<std::int32_t> assigned;
     assigned.push_back(1);
     assigned = std::move(moved);
     CHECK(moved.empty());
@@ -122,34 +123,34 @@ TEST_CASE("PageLockedVector move transfers ownership and leaves source empty", "
 
 TEST_CASE("PageLockedVector memory can be used as CUDA memcpy host memory", "[cuda][page-locked-vector]")
 {
-    blocklab::PageLockedVector<uint32_t> values;
+    blocklab::PageLockedVector<std::uint32_t> values;
     values.resize(8);
     for (std::size_t i = 0; i < values.size(); ++i)
-        values[i] = static_cast<uint32_t>(100U + i);
+        values[i] = static_cast<std::uint32_t>(100U + i);
 
-    uint32_t* device = nullptr;
-    requireCuda(cudaMalloc(&device, sizeof(uint32_t) * values.size()));
-    requireCuda(cudaMemcpy(device, values.data(), sizeof(uint32_t) * values.size(), cudaMemcpyHostToDevice));
+    std::uint32_t* device = nullptr;
+    requireCuda(cudaMalloc(&device, sizeof(std::uint32_t) * values.size()));
+    requireCuda(cudaMemcpy(device, values.data(), sizeof(std::uint32_t) * values.size(), cudaMemcpyHostToDevice));
 
-    std::array<uint32_t, 8> copied {};
-    requireCuda(cudaMemcpy(copied.data(), device, sizeof(uint32_t) * copied.size(), cudaMemcpyDeviceToHost));
+    std::array<std::uint32_t, 8> copied {};
+    requireCuda(cudaMemcpy(copied.data(), device, sizeof(std::uint32_t) * copied.size(), cudaMemcpyDeviceToHost));
     requireCuda(cudaFree(device));
 
     for (std::size_t i = 0; i < copied.size(); ++i)
-        CHECK(copied[i] == static_cast<uint32_t>(100U + i));
+        CHECK(copied[i] == static_cast<std::uint32_t>(100U + i));
 }
 
 TEST_CASE("PageLockedVector iterators cover mutable elements", "[cuda][page-locked-vector]")
 {
-    blocklab::PageLockedVector<int32_t> values;
-    for (int32_t value : { 1, 2, 3, 4 })
+    blocklab::PageLockedVector<std::int32_t> values;
+    for (std::int32_t value : { 1, 2, 3, 4 })
         values.push_back(value);
 
     CHECK(values.begin() == values.data());
     CHECK(values.end() == values.data() + values.size());
     CHECK(std::distance(values.begin(), values.end()) == static_cast<std::ptrdiff_t>(values.size()));
 
-    for (int32_t& value : values)
+    for (std::int32_t& value : values)
         value *= 3;
 
     CHECK(values[0] == 3);
@@ -160,28 +161,28 @@ TEST_CASE("PageLockedVector iterators cover mutable elements", "[cuda][page-lock
 
 TEST_CASE("PageLockedVector const iterators expose read-only range", "[cuda][page-locked-vector]")
 {
-    blocklab::PageLockedVector<int32_t> values;
+    blocklab::PageLockedVector<std::int32_t> values;
     values.push_back(5);
     values.push_back(7);
     values.push_back(11);
 
-    const blocklab::PageLockedVector<int32_t>& constValues = values;
+    const blocklab::PageLockedVector<std::int32_t>& constValues = values;
     CHECK(constValues.begin() == values.data());
     CHECK(constValues.cbegin() == values.data());
     CHECK(constValues.end() == values.data() + values.size());
     CHECK(constValues.cend() == values.data() + values.size());
 
-    const int32_t sum = std::accumulate(constValues.begin(), constValues.end(), 0);
+    const std::int32_t sum = std::accumulate(constValues.begin(), constValues.end(), 0);
     CHECK(sum == 23);
 }
 
 TEST_CASE("PageLockedVector iterators work with standard algorithms", "[cuda][page-locked-vector]")
 {
-    blocklab::PageLockedVector<int32_t> values;
+    blocklab::PageLockedVector<std::int32_t> values;
     values.resize(6);
 
     std::fill(values.begin(), values.end(), 4);
-    CHECK(std::all_of(values.cbegin(), values.cend(), [](int32_t value) { return value == 4; }));
+    CHECK(std::all_of(values.cbegin(), values.cend(), [](std::int32_t value) { return value == 4; }));
 
     values[2] = 9;
     auto found = std::find(values.begin(), values.end(), 9);
@@ -192,7 +193,7 @@ TEST_CASE("PageLockedVector iterators work with standard algorithms", "[cuda][pa
 
 TEST_CASE("PageLockedVector empty iterators form an empty range", "[cuda][page-locked-vector]")
 {
-    blocklab::PageLockedVector<int32_t> values;
+    blocklab::PageLockedVector<std::int32_t> values;
     CHECK(values.begin() == values.end());
     CHECK(values.cbegin() == values.cend());
 

@@ -25,16 +25,17 @@ class ObservationSpec:
 
 
 class BlockLabObservation:
-    """Lazy DLPack producer for an observation frame.
+    """DLPack producer for an asynchronously prepared observation tensor.
 
-    The Vulkan render is submitted by reset()/step(), but synchronization is
-    delayed until a consumer calls torch.from_dlpack(observation).
+    reset()/step() submits Vulkan rendering and schedules CUDA conversion to
+    float NCHW. A consumer stream waits for completion when it calls
+    torch.from_dlpack(observation).
     """
 
-    def __init__(self, backend: "NativeBlockLabBackend", *, frame_indices: list[int], version: int) -> None:
+    def __init__(self, backend: "NativeBlockLabBackend", *, observation: Any) -> None:
         self._backend = backend
-        self._frame_indices = frame_indices
-        self.version = version
+        self._observation = observation
+        self.version = int(observation.version)
         self.shape = backend.observation_spec.shape
         self.dtype = backend.observation_spec.dtype
         self.device = backend.observation_spec.device
@@ -45,7 +46,7 @@ class BlockLabObservation:
         return (2, 0 if self.device.index is None else self.device.index)
 
     def __dlpack__(self, stream: int | None = None):
-        return self._backend._env.observation_dlpack(self._frame_indices, 0 if stream is None else stream)
+        return self._backend._env.observation_dlpack(self._observation, 0 if stream is None else stream)
 
     def to_tensor(self) -> torch.Tensor:
         return torch.from_dlpack(self)
@@ -105,13 +106,10 @@ class NativeBlockLabBackend:
             "terminated": result["terminated"],
             "truncated": result["truncated"],
             "observation_version": result["version"],
-            "observation_frame_indices": result["frame_indices"],
         }
 
     def _observation_ref(self, info: Any) -> BlockLabObservation:
-        return BlockLabObservation(
-            self, frame_indices=list(info["frame_indices"]), version=int(info["version"])
-        )
+        return BlockLabObservation(self, observation=info["observation"])
 
     def sample_action(self) -> int:
         if self.num_envs == 1:

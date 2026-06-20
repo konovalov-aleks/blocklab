@@ -1,9 +1,9 @@
-#include "blocklab/characters/NPC.h"
+#include "NPC.h"
 
 namespace blocklab {
 
-NPC::NPC(EntityId id, CharacterKind kind, Vec3 position)
-    : Character(id, kind, position)
+NPC::NPC(EntityId id, CharacterKind kind, Vec3 position, HitBox hitBox)
+    : Character(id, kind, position, hitBox)
 {
 }
 

@@ -1,10 +1,11 @@
-#include "blocklab/characters/Character.h"
+#include "Character.h"
 
-#include "blocklab/Math.h"
-#include "blocklab/World.h"
+#include <blocklab/utility/Math.h>
+#include <world/World.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace blocklab {
 
@@ -35,26 +36,13 @@ namespace {
 
 } // namespace
 
-Character::Character(EntityId id, CharacterKind kind, Vec3 position)
+Character::Character(EntityId id, CharacterKind kind, Vec3 position, HitBox hitbox)
     : m_position(position)
     , m_home(position)
+    , m_hitBox(hitbox)
     , m_id(id)
     , m_kind(kind)
 {
-}
-
-CharacterSnapshot Character::snapshot() const
-{
-    return {
-        .id = m_id,
-        .kind = m_kind,
-        .position = m_position,
-        .velocity = m_velocity,
-        .forward = m_forward,
-        .radius = m_radius,
-        .height = m_height,
-        .health = m_health,
-    };
 }
 
 void Character::moveToward(World& world, Vec3 target, float speed, float dt)
@@ -85,12 +73,6 @@ void Character::resetBody(Vec3 position)
     m_onGround = false;
     m_hasHorizontalMovement = false;
     m_horizontalBlocked = false;
-}
-
-void Character::setCollisionShape(float radius, float height)
-{
-    m_radius = radius;
-    m_height = height;
 }
 
 void Character::setAutoJump(bool enabled, float jumpSpeed)
@@ -132,25 +114,25 @@ bool Character::collides(const World& world, Vec3 position) const
 {
     return world.hasSolidBlockInArea(
         {
-            floorToInt32(position.x - m_radius),
+            floorToInt32(position.x - m_hitBox.radius),
             floorToInt32(position.y),
-            floorToInt32(position.z - m_radius),
+            floorToInt32(position.z - m_hitBox.radius),
         },
         {
-            floorToInt32(position.x + m_radius),
-            floorToInt32(position.y + m_height),
-            floorToInt32(position.z + m_radius),
+            floorToInt32(position.x + m_hitBox.radius),
+            floorToInt32(position.y + m_hitBox.height),
+            floorToInt32(position.z + m_hitBox.radius),
         });
 }
 
 bool Character::occupiesBlock(IVec3 block) const
 {
-    const int32_t minX = floorToInt32(m_position.x - m_radius);
-    const int32_t maxX = floorToInt32(m_position.x + m_radius);
-    const int32_t minY = floorToInt32(m_position.y);
-    const int32_t maxY = floorToInt32(m_position.y + m_height);
-    const int32_t minZ = floorToInt32(m_position.z - m_radius);
-    const int32_t maxZ = floorToInt32(m_position.z + m_radius);
+    const std::int32_t minX = floorToInt32(m_position.x - m_hitBox.radius);
+    const std::int32_t maxX = floorToInt32(m_position.x + m_hitBox.radius);
+    const std::int32_t minY = floorToInt32(m_position.y);
+    const std::int32_t maxY = floorToInt32(m_position.y + m_hitBox.height);
+    const std::int32_t minZ = floorToInt32(m_position.z - m_hitBox.radius);
+    const std::int32_t maxZ = floorToInt32(m_position.z + m_hitBox.radius);
     return block.x >= minX && block.x <= maxX && block.y >= minY && block.y <= maxY && block.z >= minZ
         && block.z <= maxZ;
 }

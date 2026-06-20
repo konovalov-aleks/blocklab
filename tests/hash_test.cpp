@@ -1,4 +1,4 @@
-#include "blocklab/Hash.h"
+#include <utility/Hash.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -6,7 +6,7 @@
 #include <type_traits>
 
 static_assert(blocklab::hash(123U) == blocklab::hash(123U));
-static_assert(std::is_same_v<decltype(blocklab::hashCombine(1U, 2U)), uint32_t>);
+static_assert(std::is_same_v<decltype(blocklab::hashCombine(1U, 2U)), std::uint32_t>);
 
 TEST_CASE("hashCombine is deterministic and order-sensitive", "[hash]")
 {
