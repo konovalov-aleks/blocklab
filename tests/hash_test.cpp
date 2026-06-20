@@ -1,4 +1,4 @@
-#include <blocklab/utility/Hash.h>
+#include <utility/Hash.h>
 
 #include <catch2/catch_test_macros.hpp>
 

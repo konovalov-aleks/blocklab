@@ -1,6 +1,6 @@
 #include <blocklab/gpu/vulkan/VulkanBuffer.h>
 
-#include <blocklab/gpu/vulkan/Memory.h>
+#include "Memory.h"
 
 #include <cassert>
 #include <cstddef>

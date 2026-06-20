@@ -1,4 +1,3 @@
-#include <blocklab/environment/Agent.h>
 #include <blocklab/environment/Environment.h>
 #include <blocklab/environment/Observation.h>
 #include <blocklab/gpu/cuda/CudaHelpers.h>

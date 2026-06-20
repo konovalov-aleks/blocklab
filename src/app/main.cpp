@@ -1,4 +1,5 @@
-#include <blocklab/app/CliParsing.h>
+#include "CliParsing.h"
+
 #include <blocklab/environment/Environment.h>
 #include <blocklab/gpu/vulkan/GLFWInit.h>
 #include <blocklab/gpu/vulkan/Vulkan.h>

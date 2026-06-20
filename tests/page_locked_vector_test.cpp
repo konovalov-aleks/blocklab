@@ -1,4 +1,4 @@
-#include <blocklab/gpu/cuda/PageLockedVector.h>
+#include <gpu/cuda/PageLockedVector.h>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cuda_runtime.h>

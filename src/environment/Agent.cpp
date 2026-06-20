@@ -1,7 +1,7 @@
-#include <blocklab/environment/Agent.h>
+#include "Agent.h"
 
 #include <blocklab/utility/Math.h>
-#include <blocklab/world/World.h>
+#include <world/World.h>
 
 #include <algorithm>
 #include <cmath>
@@ -10,9 +10,7 @@ namespace blocklab {
 
 namespace {
 
-    constexpr float EyeHeight = 1.62f;
-    constexpr float AgentHeight = 1.8f;
-    constexpr float Radius = 0.32f;
+    constexpr float s_eyeHeight = 1.62f;
 
     Vec3 forwardFromYaw(float yaw) { return { std::sin(yaw), 0.0f, std::cos(yaw) }; }
 
@@ -31,15 +29,14 @@ namespace {
 } // namespace
 
 Agent::Agent()
-    : Character(0, CharacterKind::Agent, { 0.0f, 14.0f, 0.0f })
+    : m_character({ 0.0f, 14.0f, 0.0f })
 {
-    setCollisionShape(Radius, AgentHeight);
 }
 
 void Agent::reset(Vec3 position)
 {
     m_state = {};
-    resetBody(position);
+    m_character.resetBody(position);
     syncStateFromBody();
 }
 
@@ -60,10 +57,10 @@ void Agent::step(World& world, const AgentAction& action, float dt)
     constexpr float acceleration = 28.0f;
     constexpr float jumpSpeed = 7.0f;
 
-    setHorizontalMovement(wishDir, moveSpeed, acceleration, dt);
+    m_character.setHorizontalMovement(wishDir, moveSpeed, acceleration, dt);
     if (action.jump)
-        requestJump(jumpSpeed);
-    applyPhysics(world, dt);
+        m_character.requestJump(jumpSpeed);
+    m_character.applyPhysics(world, dt);
     syncStateFromBody();
     interact(world, action);
     syncStateFromBody();
@@ -74,7 +71,7 @@ void Agent::interact(World& world, const AgentAction& action)
     if (!action.dig && !action.place)
         return;
 
-    const Vec3 eye = position() + Vec3 { 0.0f, EyeHeight, 0.0f };
+    const Vec3 eye = m_character.position() + Vec3 { 0.0f, s_eyeHeight, 0.0f };
     const Vec3 forward = forwardFromAngles(m_state.yaw, m_state.pitch);
 
     IVec3 previousAir { floorToInt32(eye.x), floorToInt32(eye.y), floorToInt32(eye.z) };
@@ -85,7 +82,7 @@ void Agent::interact(World& world, const AgentAction& action)
             if (action.dig) {
                 world.setBlock(blockPos, Block::Air);
                 ++m_state.blocksCollected;
-            } else if (action.place && !occupiesBlock(previousAir)) {
+            } else if (action.place && !m_character.occupiesBlock(previousAir)) {
                 world.setBlock(previousAir, Block::Dirt);
                 ++m_state.blocksPlaced;
             }
@@ -97,9 +94,9 @@ void Agent::interact(World& world, const AgentAction& action)
 
 void Agent::syncStateFromBody()
 {
-    m_state.position = position();
-    m_state.velocity = velocity();
-    m_state.onGround = onGround();
+    m_state.position = m_character.position();
+    m_state.velocity = m_character.velocity();
+    m_state.onGround = m_character.onGround();
 }
 
 } // namespace blocklab

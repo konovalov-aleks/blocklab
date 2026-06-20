@@ -1,8 +1,8 @@
-#include <blocklab/characters/PigCharacter.h>
+#include "PigCharacter.h"
 
-#include <blocklab/utility/Hash.h>
 #include <blocklab/utility/Math.h>
-#include <blocklab/world/World.h>
+#include <utility/Hash.h>
+#include <world/World.h>
 
 #include <algorithm>
 #include <cmath>
@@ -39,11 +39,9 @@ namespace {
 } // namespace
 
 PigCharacter::PigCharacter(EntityId id, Vec3 position)
-    : NPC(id, CharacterKind::Pig, position)
+    : NPC(id, CharacterKind::Pig, position, { .radius = 0.35f, .height = 0.8f })
     , m_walkSeed(pigSeed(id, position))
 {
-    m_radius = 0.35f;
-    m_height = 0.8f;
     m_health = 3;
     setAutoJump(true, 7.0f);
     setTurnSpeed(3.5f);

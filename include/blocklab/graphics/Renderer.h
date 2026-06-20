@@ -1,27 +1,26 @@
 #pragma once
 
-#include <blocklab/environment/Environment.h>
-#include <blocklab/gpu/vulkan/Vulkan.h>
-#include <blocklab/world/WorldGenerator.h>
+#include <blocklab/environment/Observation.h>
+#include <blocklab/utility/Math.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <span>
 #include <vector>
 
 namespace blocklab {
 
+class AgentState;
+class Environment;
+class Vulkan;
+class World;
+class WorldGenerator;
+
 enum class RenderEntityKind : std::uint32_t {
     None = 0,
     Pig = 1,
 };
-
-constexpr float renderEntityKindId(RenderEntityKind kind)
-{
-    return static_cast<float>(static_cast<std::uint32_t>(kind));
-}
 
 struct RenderConfig {
     std::int32_t width = 320;
@@ -29,7 +28,7 @@ struct RenderConfig {
     std::uint32_t batchSize = 1;
 };
 
-class Renderer final : public ObservationRenderer {
+class Renderer final {
 public:
     Renderer(Vulkan&, RenderConfig config = {});
     ~Renderer();
@@ -37,11 +36,9 @@ public:
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
 
-    const Observation& renderObservations(std::span<const World>, std::span<const AgentState>) override;
     const Observation& observation() const { return m_observation; }
     std::size_t cudaObservationTensorBytes() const;
 
-    struct VulkanState;
     struct RenderParams {
         struct alignas(16) FrameInfo {
             std::int32_t animationTimeMs = 0;
@@ -68,23 +65,11 @@ public:
     };
     static_assert(sizeof(RenderParams::FrameInfo) == sizeof(IVec4));
 
+    struct RenderSlot;
+    struct VulkanState;
+
 private:
-    struct RenderSlot {
-        IVec3 lastMeshCenter { std::numeric_limits<std::int32_t>::min(), std::numeric_limits<std::int32_t>::min(),
-            std::numeric_limits<std::int32_t>::min() };
-
-        std::uint32_t terrainVoxelOffset = 0;
-        std::uint32_t terrainVoxelCount = 0;
-
-        std::uint32_t pigVertexCount = 0;
-
-        std::uint32_t instanceOffset = 0;
-        std::uint32_t instanceCount = 0;
-
-        CudaSharedFuture<WorldGenerationOutput> pendingGeneration;
-        std::uint64_t lastWorldVersion = 0;
-    };
-
+    const Observation& renderObservations(std::span<const World>, std::span<const AgentState>);
     RenderParams buildRenderParams(const AgentState&, const World&) const;
     void uploadInstances(std::size_t slot, const World&);
     void drawFrame();
@@ -96,7 +81,7 @@ private:
     Vulkan& m_vk;
     std::unique_ptr<VulkanState> m_state;
 
-    WorldGenerator m_worldGenerator;
+    std::unique_ptr<WorldGenerator> m_worldGenerator;
     Observation m_observation;
     std::vector<EntityInstance> m_instances;
     std::unique_ptr<RenderSlot[]> m_slots;
@@ -105,6 +90,8 @@ private:
     std::uint32_t m_pigMeshVertexCount = 0;
     std::uint64_t m_observationVersion = 0;
     bool m_pigMeshUploaded = false;
+
+    friend class Environment;
 };
 
 } // namespace blocklab

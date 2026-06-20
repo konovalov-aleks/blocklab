@@ -3,11 +3,11 @@
 #include "Block.h"
 #include "WorldGenerator.h"
 
-#include <blocklab/characters/NPC.h>
-#include <blocklab/containers/QuadTree.h>
 #include <blocklab/gpu/cuda/CudaSharedFuture.h>
-#include <blocklab/gpu/cuda/PageLockedVector.h>
 #include <blocklab/utility/Math.h>
+#include <characters/NPC.h>
+#include <containers/QuadTree.h>
+#include <gpu/cuda/PageLockedVector.h>
 
 #include <array>
 #include <cstddef>

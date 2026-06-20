@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CharacterKind.h"
+
 #include <blocklab/utility/Math.h>
 
 #include <cstdint>
@@ -10,57 +12,46 @@ class World;
 
 using EntityId = std::uint32_t;
 
-enum class CharacterKind : std::uint8_t {
-    Agent,
-    Pig,
-};
-
-struct CharacterSnapshot {
-    EntityId id = 0;
-    CharacterKind kind = CharacterKind::Pig;
-    Vec3 position {};
-    Vec3 velocity {};
-    Vec3 forward { 0.0f, 0.0f, 1.0f };
-    float radius = 0.35f;
-    float height = 0.8f;
-    std::int32_t health = 1;
-};
-
 class Character {
 public:
-    Character(EntityId id, CharacterKind kind, Vec3 position);
+    struct HitBox {
+        float radius;
+        float height;
+    };
+
+    Character(EntityId, CharacterKind, Vec3 position, HitBox);
     virtual ~Character() = default;
 
     EntityId id() const { return m_id; }
     CharacterKind kind() const { return m_kind; }
-    const Vec3& position() const { return m_position; }
-    const Vec3& velocity() const { return m_velocity; }
+
     std::int32_t health() const { return m_health; }
-    bool onGround() const { return m_onGround; }
-    bool horizontalBlocked() const { return m_horizontalBlocked; }
     bool isAlive() const { return m_health > 0; }
 
-    CharacterSnapshot snapshot() const;
+    const Vec3& position() const { return m_position; }
+    const Vec3& velocity() const { return m_velocity; }
+    const Vec3& direction() const { return m_forward; }
+
+    bool onGround() const { return m_onGround; }
+    bool horizontalBlocked() const { return m_horizontalBlocked; }
+    bool occupiesBlock(IVec3 block) const;
 
 protected:
-    void moveToward(World& world, Vec3 target, float speed, float dt);
-    void fleeFrom(World& world, Vec3 threatPosition, float speed, float dt);
+    void moveToward(World&, Vec3 target, float speed, float dt);
+    void fleeFrom(World&, Vec3 threatPosition, float speed, float dt);
     void dampHorizontalMovement(float dt);
     void resetBody(Vec3 position);
-    void setCollisionShape(float radius, float height);
     void setAutoJump(bool enabled, float jumpSpeed);
     void setTurnSpeed(float turnSpeed);
     void setHorizontalMovement(Vec3 direction, float speed, float acceleration, float dt);
     void requestJump(float jumpSpeed);
-    void applyPhysics(World& world, float dt);
-    bool occupiesBlock(IVec3 block) const;
+    void applyPhysics(World&, float dt);
 
     Vec3 m_position {};
     Vec3 m_velocity {};
     Vec3 m_home {};
     Vec3 m_forward { 0.0f, 0.0f, 1.0f };
-    float m_radius = 0.35f;
-    float m_height = 0.8f;
+    const HitBox m_hitBox;
     std::int32_t m_health = 1;
     bool m_onGround = false;
     bool m_hasHorizontalMovement = false;
@@ -70,10 +61,10 @@ protected:
     float m_turnSpeed = 8.0f;
 
 private:
-    EntityId m_id = 0;
-    CharacterKind m_kind = CharacterKind::Pig;
-
     bool collides(const World& world, Vec3 position) const;
+
+    const EntityId m_id;
+    const CharacterKind m_kind;
 };
 
 } // namespace blocklab

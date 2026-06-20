@@ -1,4 +1,4 @@
-#include <blocklab/containers/QuadTree.h>
+#include <containers/QuadTree.h>
 
 #include <catch2/catch_test_macros.hpp>
 

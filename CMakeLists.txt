@@ -83,6 +83,7 @@ if(NOT pybind11_FOUND)
 endif()
 
 add_library(blocklab_env
+    src/characters/AgentCharacter.cpp
     src/characters/Character.cpp
     src/characters/NPC.cpp
     src/characters/PigCharacter.cpp
@@ -94,6 +95,8 @@ add_library(blocklab_env
 target_include_directories(blocklab_env
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 target_compile_features(blocklab_env PUBLIC cxx_std_20)
@@ -125,6 +128,8 @@ add_library(blocklab_render
 target_include_directories(blocklab_render
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 target_compile_features(blocklab_render PUBLIC cxx_std_20)
@@ -148,6 +153,7 @@ add_executable(blocklab
     src/app/main.cpp
 )
 
+target_include_directories(blocklab PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(blocklab PRIVATE blocklab_render)
 
 blocklab_enable_strict_warnings(blocklab)
@@ -156,6 +162,7 @@ add_executable(blocklab_benchmark
     src/app/benchmark.cpp
 )
 
+target_include_directories(blocklab_benchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(blocklab_benchmark PRIVATE blocklab_render)
 
 blocklab_enable_strict_warnings(blocklab_benchmark)
@@ -169,6 +176,7 @@ blocklab_enable_strict_warnings(_native)
 set_target_properties(_native PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/python/blocklab
 )
+target_include_directories(_native PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 enable_testing()
 
@@ -176,6 +184,7 @@ add_executable(blocklab_smoke_test
     tests/blocklab_smoke_test.cpp
 )
 
+target_include_directories(blocklab_smoke_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(blocklab_smoke_test PRIVATE blocklab_render Catch2::Catch2WithMain)
 
 blocklab_enable_strict_warnings(blocklab_smoke_test)
@@ -186,6 +195,7 @@ add_executable(blocklab_quad_tree_test
     tests/blocklab_quad_tree_test.cpp
 )
 
+target_include_directories(blocklab_quad_tree_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(blocklab_quad_tree_test PRIVATE blocklab_env Catch2::Catch2WithMain)
 
 blocklab_enable_strict_warnings(blocklab_quad_tree_test)
@@ -196,6 +206,7 @@ add_executable(blocklab_page_locked_vector_test
     tests/page_locked_vector_test.cpp
 )
 
+target_include_directories(blocklab_page_locked_vector_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(blocklab_page_locked_vector_test PRIVATE blocklab_env Catch2::Catch2WithMain)
 
 blocklab_enable_strict_warnings(blocklab_page_locked_vector_test)
@@ -216,6 +227,7 @@ add_executable(blocklab_hash_test
     tests/hash_test.cpp
 )
 
+target_include_directories(blocklab_hash_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(blocklab_hash_test PRIVATE blocklab_env Catch2::Catch2WithMain)
 
 blocklab_enable_strict_warnings(blocklab_hash_test)

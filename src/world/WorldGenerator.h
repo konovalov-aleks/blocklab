@@ -3,10 +3,10 @@
 #include "Block.h"
 #include "Voxel.h"
 
-#include <blocklab/environment/Agent.h>
 #include <blocklab/gpu/cuda/CudaFuture.h>
-#include <blocklab/gpu/cuda/PageLockedVector.h>
 #include <blocklab/utility/Math.h>
+#include <environment/Agent.h>
+#include <gpu/cuda/PageLockedVector.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +17,7 @@
 namespace blocklab {
 
 class CudaWorldGenerator;
+class World;
 
 struct TerrainHeader {
     std::int32_t originX;

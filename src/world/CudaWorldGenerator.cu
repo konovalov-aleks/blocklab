@@ -1,7 +1,7 @@
-#include <blocklab/world/CudaWorldGenerator.h>
+#include "CudaWorldGenerator.h"
 
 #include <blocklab/gpu/cuda/CudaHelpers.h>
-#include <blocklab/utility/Hash.h>
+#include <utility/Hash.h>
 
 #include <cuda_runtime.h>
 

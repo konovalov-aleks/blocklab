@@ -1,7 +1,9 @@
 #include <blocklab/environment/Environment.h>
 
+#include <blocklab/graphics/Renderer.h>
 #include <blocklab/utility/Error.h>
-#include <blocklab/utility/Hash.h>
+#include <utility/Hash.h>
+#include <world/World.h>
 
 #include <algorithm>
 #include <cmath>
@@ -11,11 +13,11 @@ namespace blocklab {
 
 static constexpr Vec3 InitialAgentPosition { 0.5f, 14.0f, 0.5f };
 
-Environment::Environment(ObservationRenderer& renderer, std::uint32_t numEnvs)
+Environment::Environment(Renderer& renderer, std::uint32_t numEnvs)
     : m_batchSize(numEnvs)
     , m_worlds(std::make_unique<World[]>(numEnvs))
     , m_agents(std::make_unique<Agent[]>(numEnvs))
-    , m_observationRenderer(renderer)
+    , m_renderer(renderer)
     , m_stepCounts(std::make_unique<std::int32_t[]>(numEnvs))
     , m_stepResults(std::make_unique<StepResult[]>(numEnvs))
     , m_renderAgents(std::make_unique<AgentState[]>(numEnvs))
@@ -23,6 +25,8 @@ Environment::Environment(ObservationRenderer& renderer, std::uint32_t numEnvs)
     if (numEnvs == 0) [[unlikely]]
         fatalError("Environment batch size must be positive");
 }
+
+Environment::~Environment() = default;
 
 void Environment::reset(std::uint32_t seed)
 {
@@ -83,8 +87,8 @@ const Observation& Environment::updateObservation()
 {
     for (std::uint32_t i = 0; i < m_batchSize; ++i)
         m_renderAgents[i] = m_agents[i].state();
-    const Observation& observation = m_observationRenderer.renderObservations(
-        { m_worlds.get(), m_batchSize }, { m_renderAgents.get(), m_batchSize });
+    const Observation& observation
+        = m_renderer.renderObservations({ m_worlds.get(), m_batchSize }, { m_renderAgents.get(), m_batchSize });
     if (observation.batchSize() != m_batchSize) [[unlikely]]
         fatalError("Observation renderer returned an unexpected batch size");
     m_observation = &observation;

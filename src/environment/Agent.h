@@ -1,21 +1,14 @@
 #pragma once
 
-#include <blocklab/characters/Character.h>
+#include <blocklab/environment/AgentAction.h>
 #include <blocklab/utility/Math.h>
+#include <characters/AgentCharacter.h>
 
 #include <cstdint>
 
 namespace blocklab {
 
-struct AgentAction {
-    float forward = 0.0f;
-    float right = 0.0f;
-    bool jump = false;
-    bool dig = false;
-    bool place = false;
-    float yawDelta = 0.0f;
-    float pitchDelta = 0.0f;
-};
+class World;
 
 struct AgentState {
     Vec3 position { 0.0f, 14.0f, 0.0f };
@@ -27,7 +20,7 @@ struct AgentState {
     std::int32_t blocksPlaced = 0;
 };
 
-class Agent final : public Character {
+class Agent {
 public:
     Agent();
 
@@ -38,10 +31,11 @@ public:
     void step(World& world, const AgentAction& action, float dt);
 
 private:
-    AgentState m_state;
-
     void interact(World& world, const AgentAction& action);
     void syncStateFromBody();
+
+    AgentState m_state;
+    AgentCharacter m_character;
 };
 
 } // namespace blocklab

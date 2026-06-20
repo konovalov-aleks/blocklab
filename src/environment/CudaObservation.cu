@@ -1,4 +1,4 @@
-#include <blocklab/environment/CudaObservation.h>
+#include "CudaObservation.h"
 
 #include <blocklab/gpu/cuda/CudaHelpers.h>
 

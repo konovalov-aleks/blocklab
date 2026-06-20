@@ -1,4 +1,4 @@
-#include <blocklab/characters/meshes/PigMesh.h>
+#include "PigMesh.h"
 
 #include <cassert>
 #include <cstddef>

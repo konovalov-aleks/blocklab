@@ -1,6 +1,6 @@
 #pragma once
 
-#include <blocklab/graphics/MeshTypes.h>
+#include <graphics/MeshTypes.h>
 
 #include <array>
 #include <cstdint>

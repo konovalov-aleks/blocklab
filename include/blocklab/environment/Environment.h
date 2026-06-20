@@ -1,9 +1,7 @@
 #pragma once
 
-#include "Agent.h"
+#include "AgentAction.h"
 #include "Observation.h"
-
-#include <blocklab/world/World.h>
 
 #include <cstdint>
 #include <memory>
@@ -11,12 +9,10 @@
 
 namespace blocklab {
 
-class ObservationRenderer {
-public:
-    virtual ~ObservationRenderer() = default;
-
-    virtual const Observation& renderObservations(std::span<const World>, std::span<const AgentState>) = 0;
-};
+class Agent;
+class AgentState;
+class Renderer;
+class World;
 
 struct StepResult {
     float reward = 0.0f;
@@ -26,7 +22,8 @@ struct StepResult {
 
 class Environment {
 public:
-    Environment(ObservationRenderer&, std::uint32_t numEnvs);
+    Environment(Renderer&, std::uint32_t numEnvs);
+    ~Environment();
 
     // TODO implement per-batch reset
     void reset(std::uint32_t seed = 1);
@@ -35,9 +32,6 @@ public:
     const Observation& observe() const { return *m_observation; }
 
     std::uint32_t batchSize() const { return m_batchSize; }
-    const World& world(std::uint32_t batchId) const { return m_worlds[batchId]; }
-    World& mutableWorld(std::uint32_t batchId) { return m_worlds[batchId]; }
-    const Agent& agent(std::uint32_t batchId) const { return m_agents[batchId]; }
 
 private:
     static constexpr float s_fixedDt = 1.0f / 60.0f;
@@ -47,12 +41,15 @@ private:
     std::unique_ptr<World[]> m_worlds;
     std::unique_ptr<Agent[]> m_agents;
     const Observation* m_observation = nullptr;
-    ObservationRenderer& m_observationRenderer;
+    Renderer& m_renderer;
     std::unique_ptr<std::int32_t[]> m_stepCounts;
     std::unique_ptr<StepResult[]> m_stepResults;
     std::unique_ptr<AgentState[]> m_renderAgents;
 
     const Observation& updateObservation();
+
+    friend class EnvironmentInternalAccessTestHelper;
+    friend class EnvironmentInternalAccessBenchmarkHelper;
 };
 
 } // namespace blocklab

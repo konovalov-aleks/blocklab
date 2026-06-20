@@ -1,7 +1,7 @@
-#include <blocklab/world/WorldGenerator.h>
+#include "WorldGenerator.h"
 
-#include <blocklab/world/CudaWorldGenerator.h>
-#include <blocklab/world/World.h>
+#include "CudaWorldGenerator.h"
+#include "World.h"
 
 #include <cstdint>
 #include <memory>

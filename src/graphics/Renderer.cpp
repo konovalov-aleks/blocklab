@@ -1,14 +1,16 @@
 #include <blocklab/graphics/Renderer.h>
 
-#include <blocklab/characters/meshes/PigMesh.h>
-#include <blocklab/environment/CudaObservation.h>
 #include <blocklab/gpu/cuda/CudaHelpers.h>
 #include <blocklab/gpu/interop/VulkanCudaInteropBuffer.h>
 #include <blocklab/gpu/interop/VulkanCudaInteropSemaphore.h>
-#include <blocklab/gpu/vulkan/Memory.h>
 #include <blocklab/gpu/vulkan/Vulkan.h>
 #include <blocklab/gpu/vulkan/VulkanBuffer.h>
 #include <blocklab/utility/Error.h>
+#include <characters/meshes/PigMesh.h>
+#include <environment/CudaObservation.h>
+#include <gpu/vulkan/Memory.h>
+#include <world/World.h>
+#include <world/WorldGenerator.h>
 
 #include <cuda_runtime.h>
 #include <vulkan/vulkan.hpp>
@@ -37,6 +39,18 @@ namespace {
     constexpr std::uint32_t TerrainMeshExtent = TerrainMeshHalfExtent * 2;
     constexpr std::size_t MaxTerrainVoxels
         = static_cast<std::size_t>(TerrainMeshExtent * Chunk::SizeY * TerrainMeshExtent);
+
+    float renderEntityKindId(CharacterKind characterKind)
+    {
+        switch (characterKind) {
+        case CharacterKind::Pig:
+            return static_cast<float>(RenderEntityKind::Pig);
+        case CharacterKind::Agent:
+            // the agent character is not intended for rendering
+            return static_cast<float>(RenderEntityKind::None);
+        }
+        fatalError("corrupted CharacterKind value: ", static_cast<int>(characterKind));
+    }
 
     Vec3 cameraForward(float yaw, float pitch)
     {
@@ -104,6 +118,22 @@ namespace {
     }
 
 } // namespace
+
+struct Renderer::RenderSlot {
+    IVec3 lastMeshCenter { std::numeric_limits<std::int32_t>::min(), std::numeric_limits<std::int32_t>::min(),
+        std::numeric_limits<std::int32_t>::min() };
+
+    std::uint32_t terrainVoxelOffset = 0;
+    std::uint32_t terrainVoxelCount = 0;
+
+    std::uint32_t pigVertexCount = 0;
+
+    std::uint32_t instanceOffset = 0;
+    std::uint32_t instanceCount = 0;
+
+    CudaSharedFuture<WorldGenerationOutput> pendingGeneration;
+    std::uint64_t lastWorldVersion = 0;
+};
 
 struct Renderer::VulkanState {
     VulkanState() = default;
@@ -672,7 +702,7 @@ Renderer::Renderer(Vulkan& vk, RenderConfig config)
     : m_config(config)
     , m_vk(vk)
     , m_state(std::make_unique<VulkanState>())
-    , m_worldGenerator({ .halfExtent = TerrainMeshHalfExtent })
+    , m_worldGenerator(std::make_unique<WorldGenerator>(WorldGenerationConfig { .halfExtent = TerrainMeshHalfExtent }))
 {
     initVulkan(m_vk, *m_state, m_config);
     initializeBatchData();
@@ -737,16 +767,15 @@ void Renderer::uploadInstances(std::size_t slotIndex, const World& world)
     m_instances.reserve(world.characters().size() + 1U);
     m_instances.push_back({});
     for (const std::unique_ptr<NPC>& character : world.characters()) {
-        if (!character->isAlive())
+        if (!character->isAlive() || character->kind() == CharacterKind::Agent)
             continue;
-        const CharacterSnapshot snapshot = character->snapshot();
-        if (snapshot.kind != CharacterKind::Pig)
-            continue;
-        const float yaw = std::atan2(snapshot.forward.x, snapshot.forward.z);
+        const Vec3 position = character->position();
+        const Vec3 velocity = character->velocity();
+        const Vec3 direction = character->direction();
+        const float yaw = std::atan2(direction.x, direction.z);
         m_instances.push_back({
-            .positionAndYaw = { snapshot.position.x, snapshot.position.y, snapshot.position.z, yaw },
-            .velocityAndKind = { snapshot.velocity.x, snapshot.velocity.y, snapshot.velocity.z,
-                renderEntityKindId(RenderEntityKind::Pig) },
+            .positionAndYaw = { position.x, position.y, position.z, yaw },
+            .velocityAndKind = { velocity.x, velocity.y, velocity.z, renderEntityKindId(character->kind()) },
         });
         if (m_instances.size() >= MaxEntityInstances)
             break;
@@ -920,7 +949,7 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
         for (OffscreenFrame& frame : m_state->frames) {
             if (frame.worldGenerationLastWaitVersion >= frame.observationVersion)
                 continue;
-            frame.frameCompletionSemaphore.enqueueWait(m_worldGenerator.stream(), frame.observationVersion);
+            frame.frameCompletionSemaphore.enqueueWait(m_worldGenerator->stream(), frame.observationVersion);
             frame.worldGenerationLastWaitVersion = frame.observationVersion;
         }
 
@@ -932,7 +961,7 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
         buffers.blocks = world.borrowGenerationBuffers();
 
         CudaSharedFuture<WorldGenerationOutput> generation
-            = m_worldGenerator.generate(world, agent, std::move(buffers)).share();
+            = m_worldGenerator->generate(world, agent, std::move(buffers)).share();
         world.updateGeneration(generation);
         slot.pendingGeneration = std::move(generation);
         slot.lastWorldVersion = world.version();

@@ -1,8 +1,8 @@
 #pragma once
 
 #include <blocklab/utility/Math.h>
-#include <blocklab/world/Block.h>
-#include <blocklab/world/Voxel.h>
+#include <world/Block.h>
+#include <world/Voxel.h>
 
 #include <cstdint>
 
