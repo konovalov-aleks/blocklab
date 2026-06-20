@@ -121,7 +121,7 @@ add_library(blocklab_render
     src/graphics/Display.cpp
     src/graphics/Display.cu
     src/graphics/Renderer.cpp
-    src/world/CudaWorldGenerator.cu
+    src/world/WorldGenerator.cu
     src/world/WorldGenerator.cpp
 )
 

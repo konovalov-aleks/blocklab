@@ -1,4 +1,4 @@
-#include "CudaWorldGenerator.h"
+#include "WorldGenerator.h"
 
 #include <blocklab/gpu/cuda/CudaHelpers.h>
 #include <utility/Hash.h>
@@ -190,47 +190,64 @@ namespace {
 
 } // namespace
 
-struct CudaWorldGenerator::State {
-    CudaOverride* overrides = nullptr;
-    std::uint32_t* voxelCount = nullptr;
-    std::uint32_t* voxelCountHost = nullptr;
-    cudaStream_t stream = nullptr;
-    PageLockedVector<CudaOverride> packedOverrides;
-    std::uint32_t overrideCapacity = 0;
-    bool pending = false;
+class WorldGenerator::Impl {
+public:
+    Impl()
+    {
+        cudaCheck(cudaStreamCreateWithFlags(&m_stream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags");
+        cudaCheck(cudaMalloc(&m_voxelCount, sizeof(*m_voxelCount)), "cudaMalloc voxelCount");
+        cudaCheck(cudaMallocHost(&m_voxelCountHost, sizeof(*m_voxelCountHost)), "cudaMallocHost voxelCount");
+    }
+
+    ~Impl()
+    {
+        cudaStreamSynchronize(m_stream);
+        cudaFree(m_overrides);
+        cudaFree(m_voxelCount);
+        cudaFreeHost(m_voxelCountHost);
+        cudaStreamDestroy(m_stream);
+    }
+
+    cudaStream_t stream() const { return m_stream; }
+    CudaFuture<WorldGenerationOutput> generate(const WorldGenerationInput&, WorldGenerationBuffers&&);
+
+private:
+    CudaOverride* m_overrides = nullptr;
+    std::uint32_t* m_voxelCount = nullptr;
+    std::uint32_t* m_voxelCountHost = nullptr;
+    cudaStream_t m_stream = nullptr;
+    PageLockedVector<CudaOverride> m_packedOverrides;
+    std::uint32_t m_overrideCapacity = 0;
+    bool m_pending = false;
 };
 
-CudaWorldGenerator::CudaWorldGenerator()
-    : m_state(std::make_unique<State>())
+WorldGenerator::WorldGenerator(WorldGenerationConfig config)
+    : m_config(config)
+    , m_impl(std::make_unique<Impl>())
 {
-    cudaCheck(cudaStreamCreateWithFlags(&m_state->stream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags");
-    cudaCheck(cudaMalloc(&m_state->voxelCount, sizeof(m_state->voxelCount)), "cudaMalloc voxelCount");
-    cudaCheck(cudaMallocHost(&m_state->voxelCountHost, sizeof(m_state->voxelCountHost)), "cudaMallocHost voxelCount");
 }
 
-CudaWorldGenerator::~CudaWorldGenerator()
+WorldGenerator::~WorldGenerator() = default;
+
+cudaStream_t WorldGenerator::stream() const
 {
-    if (!m_state)
-        return;
-    cudaStreamSynchronize(m_state->stream);
-    cudaFree(m_state->overrides);
-    cudaFree(m_state->voxelCount);
-    cudaFreeHost(m_state->voxelCountHost);
-    cudaStreamDestroy(m_state->stream);
+    assert(m_impl);
+    return m_impl->stream();
 }
 
-cudaStream_t CudaWorldGenerator::stream() const
+CudaFuture<WorldGenerationOutput> WorldGenerator::generate(
+    const WorldGenerationInput& input, WorldGenerationBuffers&& buffers)
 {
-    assert(m_state);
-    return m_state->stream;
+    assert(m_impl);
+    return m_impl->generate(input, std::move(buffers));
 }
 
-CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
+CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
     const WorldGenerationInput& input, WorldGenerationBuffers&& buffers)
 {
     const auto waitForPendingBuild = [this] {
-        cudaCheck(cudaStreamSynchronize(m_state->stream), "cudaStreamSynchronize previous terrain mesh build");
-        m_state->pending = false;
+        cudaCheck(cudaStreamSynchronize(m_stream), "cudaStreamSynchronize previous terrain mesh build");
+        m_pending = false;
     };
 
     const std::int32_t width = input.halfExtent * 2;
@@ -245,10 +262,10 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
         outBlocks = std::move(buffers.blocks);
     outBlocks.uninitializedResize(blockCount);
 
-    if (m_state->pending)
+    if (m_pending)
         waitForPendingBuild();
 
-    PageLockedVector<CudaOverride>& packedOverrides = m_state->packedOverrides;
+    PageLockedVector<CudaOverride>& packedOverrides = m_packedOverrides;
     packedOverrides.clear();
     packedOverrides.reserve(input.overrides.size());
     for (const BlockOverride& blockOverride : input.overrides) {
@@ -260,21 +277,19 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
     std::sort(packedOverrides.begin(), packedOverrides.end(),
         [](const CudaOverride& a, const CudaOverride& b) { return a.key < b.key; });
 
-    if (m_state->overrideCapacity < packedOverrides.size()) {
-        cudaFree(m_state->overrides);
-        m_state->overrides = nullptr;
-        m_state->overrideCapacity = static_cast<std::uint32_t>(std::max<std::size_t>(packedOverrides.size(), 1U));
-        cudaCheck(
-            cudaMalloc(&m_state->overrides, sizeof(CudaOverride) * m_state->overrideCapacity), "cudaMalloc overrides");
+    if (m_overrideCapacity < packedOverrides.size()) {
+        cudaFree(m_overrides);
+        m_overrides = nullptr;
+        m_overrideCapacity = static_cast<std::uint32_t>(std::max<std::size_t>(packedOverrides.size(), 1U));
+        cudaCheck(cudaMalloc(&m_overrides, sizeof(CudaOverride) * m_overrideCapacity), "cudaMalloc overrides");
     }
     if (!packedOverrides.empty()) {
-        cudaCheck(cudaMemcpyAsync(m_state->overrides, packedOverrides.data(),
-                      sizeof(CudaOverride) * packedOverrides.size(), cudaMemcpyHostToDevice, m_state->stream),
+        cudaCheck(cudaMemcpyAsync(m_overrides, packedOverrides.data(), sizeof(CudaOverride) * packedOverrides.size(),
+                      cudaMemcpyHostToDevice, m_stream),
             "cudaMemcpyAsync overrides");
     }
 
-    cudaCheck(
-        cudaMemsetAsync(m_state->voxelCount, 0, sizeof(std::uint32_t), m_state->stream), "cudaMemsetAsync voxelCount");
+    cudaCheck(cudaMemsetAsync(m_voxelCount, 0, sizeof(*m_voxelCount), m_stream), "cudaMemsetAsync voxelCount");
     const CudaBuildParams params {
         .seed = input.seed,
         .centerX = input.center.x,
@@ -291,15 +306,15 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
     };
 
     constexpr std::int32_t ThreadCount = 256;
-    buildTerrainKernel<<<(volume + ThreadCount - 1) / ThreadCount, ThreadCount, 0, m_state->stream>>>(
-        params, m_state->overrides, buffers.header, buffers.voxels, m_state->voxelCount, outBlocks.data());
+    buildTerrainKernel<<<(volume + ThreadCount - 1) / ThreadCount, ThreadCount, 0, m_stream>>>(
+        params, m_overrides, buffers.header, buffers.voxels, m_voxelCount, outBlocks.data());
     cudaCheck(cudaGetLastError(), "buildTerrainKernel");
 
-    cudaCheck(cudaMemcpyAsync(m_state->voxelCountHost, m_state->voxelCount, sizeof(*m_state->voxelCountHost),
-                  cudaMemcpyDeviceToHost, m_state->stream),
+    cudaCheck(
+        cudaMemcpyAsync(m_voxelCountHost, m_voxelCount, sizeof(*m_voxelCountHost), cudaMemcpyDeviceToHost, m_stream),
         "cudaMemcpyAsync voxelCount");
 
-    m_state->pending = true;
+    m_pending = true;
     WorldGenerationOutput output;
     output.origin = { input.originX, 0, input.originZ };
     output.size = input.size;
@@ -307,10 +322,10 @@ CudaFuture<WorldGenerationOutput> CudaWorldGenerator::generate(
     output.buffers = std::move(buffers);
     output.buffers.blocks = std::move(outBlocks);
     auto outputStorage = std::make_shared<WorldGenerationOutput>(std::move(output));
-    return CudaFuture<WorldGenerationOutput>(m_state->stream, [state = m_state.get(), outputStorage]() mutable {
-        state->pending = false;
+    return CudaFuture<WorldGenerationOutput>(m_stream, [this, outputStorage]() mutable {
+        m_pending = false;
         outputStorage->voxelCount
-            = std::min(*state->voxelCountHost, static_cast<std::uint32_t>(outputStorage->buffers.maxVoxelCount));
+            = std::min(*m_voxelCountHost, static_cast<std::uint32_t>(outputStorage->buffers.maxVoxelCount));
         return std::move(*outputStorage);
     });
 }

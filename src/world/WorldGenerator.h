@@ -8,6 +8,8 @@
 #include <environment/Agent.h>
 #include <gpu/cuda/PageLockedVector.h>
 
+#include <cuda_runtime.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -16,7 +18,6 @@
 
 namespace blocklab {
 
-class CudaWorldGenerator;
 class World;
 
 struct TerrainHeader {
@@ -63,15 +64,21 @@ public:
     explicit WorldGenerator(WorldGenerationConfig config = {});
     ~WorldGenerator();
 
-    // TODO join WorldGenerator and CudaWorldGenerator
+    WorldGenerator(const WorldGenerator&) = delete;
+    WorldGenerator& operator=(const WorldGenerator&) = delete;
+
     cudaStream_t stream() const;
 
     CudaFuture<WorldGenerationOutput> generate(const World&, const AgentState&, WorldGenerationBuffers&& buffers);
 
 private:
+    CudaFuture<WorldGenerationOutput> generate(const WorldGenerationInput&, WorldGenerationBuffers&&);
+
+    struct Impl;
+
     WorldGenerationConfig m_config;
     std::vector<BlockOverride> m_overrides;
-    std::unique_ptr<blocklab::CudaWorldGenerator> m_cudaGenerator;
+    std::unique_ptr<Impl> m_impl;
 };
 
 } // namespace blocklab
