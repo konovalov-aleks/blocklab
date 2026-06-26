@@ -1,5 +1,6 @@
 #include "Agent.h"
 
+#include <blocklab/utility/Error.h>
 #include <blocklab/utility/Math.h>
 #include <world/World.h>
 
@@ -24,6 +25,19 @@ namespace {
             std::sin(pitch),
             std::cos(yaw) * pitchCos,
         };
+    }
+
+    Block placementBlock(PlacementBlock block)
+    {
+        switch (block) {
+        case PlacementBlock::Torch:
+            return Block::Torch;
+        case PlacementBlock::Dirt:
+            return Block::Dirt;
+        case PlacementBlock::Stone:
+            return Block::Stone;
+        }
+        fatalError("Invalid PlacementBlock value: ", static_cast<int>(block));
     }
 
 } // namespace
@@ -78,13 +92,17 @@ void Agent::interact(World& world, const AgentAction& action)
     for (float distance = 0.5f; distance <= 4.0f; distance += 0.2f) {
         const Vec3 sample = eye + forward * distance;
         const IVec3 blockPos { floorToInt32(sample.x), floorToInt32(sample.y), floorToInt32(sample.z) };
-        if (world.isSolid(blockPos)) {
+        const Block hitBlock = world.getBlock(blockPos);
+        if (hitBlock != Block::Air) {
             if (action.dig) {
                 world.setBlock(blockPos, Block::Air);
                 ++m_state.blocksCollected;
-            } else if (action.place && !m_character.occupiesBlock(previousAir)) {
-                world.setBlock(previousAir, Block::Dirt);
-                ++m_state.blocksPlaced;
+            } else if (action.place && isSolidBlock(hitBlock) && !m_character.occupiesBlock(previousAir)) {
+                const Block block = placementBlock(action.placementBlock);
+                if (block != Block::Torch || previousAir == blockPos + IVec3 { 0, 1, 0 }) {
+                    world.setBlock(previousAir, block);
+                    ++m_state.blocksPlaced;
+                }
             }
             return;
         }

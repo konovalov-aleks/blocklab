@@ -1,12 +1,11 @@
+#include "WorldTestUtils.h"
+
 #include <blocklab/environment/Environment.h>
-#include <blocklab/gpu/cuda/CudaHelpers.h>
 #include <blocklab/gpu/vulkan/Vulkan.h>
 #include <blocklab/graphics/Renderer.h>
 #include <world/World.h>
-#include <world/WorldGenerator.h>
 
 #include <catch2/catch_test_macros.hpp>
-#include <cuda_runtime.h>
 
 #include <algorithm>
 #include <cmath>
@@ -15,7 +14,7 @@
 #include <memory>
 #include <vector>
 
-namespace blocklab {
+namespace blocklab::test {
 
 class EnvironmentInternalAccessTestHelper {
 public:
@@ -24,37 +23,6 @@ public:
 };
 
 namespace {
-
-    constexpr std::int32_t TestGenerationHalfExtent = 32;
-    constexpr std::uint32_t TestGenerationExtent = TestGenerationHalfExtent * 2;
-    constexpr std::uint32_t TestMaxTerrainVoxels
-        = static_cast<std::uint32_t>(TestGenerationExtent * Chunk::SizeY * TestGenerationExtent);
-
-    void updateWorldCacheAt(const World& world, IVec3 center)
-    {
-        WorldGenerator generator({ .halfExtent = TestGenerationHalfExtent });
-        void* voxelMemory = nullptr;
-        cudaCheck(cudaMalloc(&voxelMemory, VoxelSize * TestMaxTerrainVoxels), "cudaMalloc test terrain voxels");
-        auto* const voxels = static_cast<Voxel*>(voxelMemory);
-        TerrainHeader* terrainHeader = nullptr;
-        cudaCheck(cudaMalloc(&terrainHeader, sizeof(TerrainHeader)), "cudaMalloc test terrain header");
-        AgentState agent;
-        agent.position = { static_cast<float>(center.x), static_cast<float>(center.y), static_cast<float>(center.z) };
-        CudaSharedFuture<WorldGenerationOutput> generation = generator
-                                                                 .generate(world, agent,
-                                                                     {
-                                                                         .header = terrainHeader,
-                                                                         .voxels = voxels,
-                                                                         .maxVoxelCount = TestMaxTerrainVoxels,
-                                                                         .blocks = world.borrowGenerationBuffers(),
-                                                                     })
-                                                                 .share();
-        world.updateGeneration(generation);
-        world.waitForGeneration();
-        cudaCheck(cudaFree(terrainHeader), "cudaFree test terrain header");
-        cudaCheck(cudaFree(voxels), "cudaFree test terrain voxels");
-    }
-
     struct TestRenderContext {
         explicit TestRenderContext(std::uint32_t batchSize = 1)
             : vkInstance(false)
@@ -350,4 +318,4 @@ TEST_CASE("Pig panics when threat is close", "[world][characters]")
     CHECK(world.characters().front()->stateKind() == CharacterStateKind::Panic);
 }
 
-} // namespace blocklab
+} // namespace blocklab::test

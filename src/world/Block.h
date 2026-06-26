@@ -1,10 +1,10 @@
 #pragma once
 
+#include <blocklab/gpu/cuda/CudaHelpers.h>
 #include <blocklab/utility/Math.h>
 
 #include <array>
 #include <cstdint>
-#include <limits>
 
 namespace blocklab {
 
@@ -13,19 +13,25 @@ enum class Block : std::uint8_t {
     Grass,
     Dirt,
     Stone,
+    Torch,
 
     COUNT
 };
 
-struct BlockId {
-    static constexpr std::uint8_t Air = static_cast<std::uint8_t>(Block::Air);
-    static constexpr std::uint8_t Grass = static_cast<std::uint8_t>(Block::Grass);
-    static constexpr std::uint8_t Dirt = static_cast<std::uint8_t>(Block::Dirt);
-    static constexpr std::uint8_t Stone = static_cast<std::uint8_t>(Block::Stone);
-    static constexpr std::uint8_t NoOverride = std::numeric_limits<std::uint8_t>::max();
+struct BlockInfo {
+    Block blockType;
+    // TODO use more compact representation
+    // std::uint8_t blockLight : 4;
+    // std::uint8_t skyLight : 4;
+    std::uint32_t blockLight;
+    std::uint32_t skyLight;
 };
 
-constexpr std::uint8_t blockId(Block block) { return static_cast<std::uint8_t>(block); }
+constexpr BLOCKLAB_HOST_DEVICE bool isSolidBlock(Block block) { return block != Block::Air && block != Block::Torch; }
+constexpr BLOCKLAB_HOST_DEVICE bool isSolidBlock(const BlockInfo& block) { return isSolidBlock(block.blockType); }
+
+constexpr BLOCKLAB_HOST_DEVICE bool isOpaqueBlock(Block block) { return block != Block::Air && block != Block::Torch; }
+constexpr BLOCKLAB_HOST_DEVICE bool isOpaqueBlock(const BlockInfo& block) { return isOpaqueBlock(block.blockType); }
 
 struct BlockOverride {
     IVec3 coord {};

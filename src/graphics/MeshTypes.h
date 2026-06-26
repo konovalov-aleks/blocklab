@@ -15,6 +15,8 @@ enum class Material : std::uint8_t {
     GrassSide = 3,
     PigSkin = 4,
     PigSnout = 5,
+    TorchSide = 6,
+    TorchTop = 7,
     VertexColor = 8,
 };
 

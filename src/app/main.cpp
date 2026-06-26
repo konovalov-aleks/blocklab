@@ -34,6 +34,7 @@ struct InputState {
     MouseLookState mouse;
     bool digRequested = false;
     bool placeRequested = false;
+    blocklab::PlacementBlock placementBlock = blocklab::PlacementBlock::Dirt;
 };
 
 AppConfig parseAppConfig(int argc, char** argv)
@@ -88,12 +89,18 @@ void cursorPositionCallback(GLFWwindow* window, double x, double y)
 void keyCallback(GLFWwindow* window, int key, int, int action, int)
 {
     auto* input = static_cast<InputState*>(glfwGetWindowUserPointer(window));
-    if (!input || action != GLFW_RELEASE)
+    if (!input)
         return;
 
-    if (key == GLFW_KEY_Q)
+    if (action == GLFW_PRESS && key == GLFW_KEY_1)
+        input->placementBlock = blocklab::PlacementBlock::Torch;
+    else if (action == GLFW_PRESS && key == GLFW_KEY_2)
+        input->placementBlock = blocklab::PlacementBlock::Dirt;
+    else if (action == GLFW_PRESS && key == GLFW_KEY_3)
+        input->placementBlock = blocklab::PlacementBlock::Stone;
+    else if (action == GLFW_RELEASE && key == GLFW_KEY_Q)
         input->digRequested = true;
-    else if (key == GLFW_KEY_E)
+    else if (action == GLFW_RELEASE && key == GLFW_KEY_E)
         input->placeRequested = true;
 }
 
@@ -148,6 +155,7 @@ int main(int argc, char** argv)
             action.jump = keyDown(window, GLFW_KEY_SPACE);
             action.dig = input.digRequested;
             action.place = input.placeRequested;
+            action.placementBlock = input.placementBlock;
             action.yawDelta
                 = (keyDown(window, GLFW_KEY_RIGHT) ? 0.045f : 0.0f) - (keyDown(window, GLFW_KEY_LEFT) ? 0.045f : 0.0f);
             action.yawDelta += input.mouse.pendingYawDelta;

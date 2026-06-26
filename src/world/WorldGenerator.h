@@ -45,9 +45,9 @@ struct WorldGenerationBuffers {
     TerrainHeader* header;
 
     Voxel* voxels;
-    std::size_t maxVoxelCount;
+    std::uint32_t maxVoxels;
 
-    PageLockedVector<std::uint8_t> blocks;
+    PageLockedVector<BlockInfo> blocks;
 };
 
 struct WorldGenerationOutput {

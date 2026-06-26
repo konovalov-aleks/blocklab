@@ -37,8 +37,7 @@ namespace {
     constexpr std::uint32_t MaxEntityInstances = 256;
     constexpr std::int32_t TerrainMeshHalfExtent = 32;
     constexpr std::uint32_t TerrainMeshExtent = TerrainMeshHalfExtent * 2;
-    constexpr std::size_t MaxTerrainVoxels
-        = static_cast<std::size_t>(TerrainMeshExtent * Chunk::SizeY * TerrainMeshExtent);
+    constexpr std::uint32_t s_maxTerrainVoxels = TerrainMeshExtent * Chunk::SizeY * TerrainMeshExtent;
 
     float renderEntityKindId(CharacterKind characterKind)
     {
@@ -565,7 +564,7 @@ namespace {
             = VulkanCudaInteropBuffer(vk, terrainHeadersSizeBytes, vk::BufferUsageFlagBits::eStorageBuffer);
 
         state.terrainVoxelBufferCapacityBytes
-            = static_cast<vk::DeviceSize>(MaxTerrainVoxels) * state.batchSize * VoxelSize;
+            = static_cast<vk::DeviceSize>(s_maxTerrainVoxels) * state.batchSize * VoxelSize;
         state.terrainVoxelBuffer = VulkanCudaInteropBuffer(
             vk, state.terrainVoxelBufferCapacityBytes, vk::BufferUsageFlagBits::eStorageBuffer);
         state.pigVertexBuffer
@@ -733,7 +732,7 @@ void Renderer::initializeBatchData()
     }
     for (std::uint32_t i = 0; i < m_batchSize; ++i) {
         RenderSlot& slot = m_slots[i];
-        slot.terrainVoxelOffset = i * MaxTerrainVoxels;
+        slot.terrainVoxelOffset = i * s_maxTerrainVoxels;
         slot.pigVertexCount = m_pigMeshVertexCount;
         slot.instanceOffset = i * MaxEntityInstances;
     }
@@ -955,7 +954,7 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
 
         WorldGenerationBuffers buffers;
         buffers.header = &m_state->terrainHeaderBuffer.cudaPtr<TerrainHeader>()[slotIndex];
-        buffers.maxVoxelCount = MaxTerrainVoxels;
+        buffers.maxVoxels = s_maxTerrainVoxels;
         buffers.voxels = reinterpret_cast<Voxel*>(
             m_state->terrainVoxelBuffer.cudaPtr<std::byte>() + slot.terrainVoxelOffset * VoxelSize);
         buffers.blocks = world.borrowGenerationBuffers();

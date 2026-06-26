@@ -14,6 +14,10 @@ class AgentState;
 class Renderer;
 class World;
 
+namespace test {
+    class EnvironmentInternalAccessTestHelper;
+} // namespace test
+
 struct StepResult {
     float reward = 0.0f;
     bool terminated = false;
@@ -48,7 +52,7 @@ private:
 
     const Observation& updateObservation();
 
-    friend class EnvironmentInternalAccessTestHelper;
+    friend class test::EnvironmentInternalAccessTestHelper;
     friend class EnvironmentInternalAccessBenchmarkHelper;
 };
 

@@ -80,7 +80,7 @@ bool OverrideCluster::set(std::size_t index, Block block)
         ++m_count;
 
     m_overrideMask |= bit;
-    if (block == Block::Air)
+    if (!isSolidBlock(block))
         m_solidMask &= ~bit;
     else
         m_solidMask |= bit;
@@ -118,7 +118,7 @@ void World::BlocksCache::waitIfPending()
     state = State::Ready;
 }
 
-PageLockedVector<std::uint8_t> World::borrowGenerationBuffers() const
+PageLockedVector<BlockInfo> World::borrowGenerationBuffers() const
 {
     m_blockCache.waitIfPending();
     m_blockCache.state = BlocksCache::State::Borrowed;
@@ -169,15 +169,16 @@ Block World::getBlock(IVec3 pos) const
     if (pos.y < 0 || pos.y >= Chunk::SizeY)
         return Block::Air;
 
-    if (!isInsideCacheBounds(pos)) [[unlikely]]
+    if (!isInsideCacheBounds(pos)) [[unlikely]] {
         fatalError(
             "Requested block (", pos.x, ", ", pos.y, ", ", pos.z, ") is outside of the world generation cache bounds");
+    }
 
     if (m_blockCache.blocks.empty()) [[unlikely]]
         fatalError("World generation cache blocks are not ready");
 
     const IVec3 local = pos - m_blockCache.origin;
-    return static_cast<Block>(m_blockCache.blocks[denseBlockIndex(local, m_blockCache.size)]);
+    return m_blockCache.blocks[denseBlockIndex(local, m_blockCache.size)].blockType;
 }
 
 void World::setBlock(IVec3 pos, Block block)
@@ -186,7 +187,8 @@ void World::setBlock(IVec3 pos, Block block)
     if (pos.y < 0 || pos.y >= Chunk::SizeY)
         return;
 
-    if (getBlock(pos) == block)
+    const Block oldBlock = getBlock(pos);
+    if (oldBlock == block)
         return;
 
     // add override
@@ -204,17 +206,22 @@ void World::setBlock(IVec3 pos, Block block)
         columnIt = m_overrideColumns.find(clusterX, clusterZ);
     }
 
-    OverrideCluster& cluster = columnIt->clusters[clusterY];
+    OverrideCluster& cluster = (*columnIt)[clusterY];
     if (cluster.set(localIndex, block))
         ++m_overrideCount;
 
-    // update the cache
+    // TODO: Revisit cache patching when lighting becomes incremental. This keeps CPU collision data coherent, but does
+    // not update derived lighting data; GPU-side unlight/light should eventually handle that without full regeneration.
     if (isInsideCacheBounds(pos)) {
         const IVec3 local = pos - m_blockCache.origin;
-        m_blockCache.blocks[denseBlockIndex(local, m_blockCache.size)] = static_cast<std::uint8_t>(block);
+        m_blockCache.blocks[denseBlockIndex(local, m_blockCache.size)].blockType = block;
     }
 
     ++m_version;
+
+    const IVec3 above = pos + IVec3 { 0, 1, 0 };
+    if (isSolidBlock(oldBlock) && !isSolidBlock(block) && getBlock(above) == Block::Torch)
+        setBlock(above, Block::Air);
 }
 
 bool World::hasSolidBlockInArea(IVec3 min, IVec3 max) const
@@ -237,10 +244,9 @@ bool World::cachedSolidBlockInArea(IVec3 min, IVec3 max) const
     for (std::int32_t y = localMin.y; y <= localMax.y; ++y) {
         for (std::int32_t z = localMin.z; z <= localMax.z; ++z) {
             for (std::int32_t x = localMin.x; x <= localMax.x; ++x) {
-                if (m_blockCache.blocks[denseBlockIndex({ x, y, z }, m_blockCache.size)]
-                    != static_cast<std::uint8_t>(Block::Air)) {
+                const Block block = m_blockCache.blocks[denseBlockIndex({ x, y, z }, m_blockCache.size)].blockType;
+                if (isSolidBlock(block))
                     return true;
-                }
             }
         }
     }
@@ -291,8 +297,8 @@ void World::collectOverridesInRegion(IVec3 origin, IVec3 size, std::vector<Block
             if (columnIt == m_overrideColumns.end())
                 continue;
 
-            const auto startYIt = columnIt->clusters.lower_bound(startClusterY);
-            const auto endYIt = columnIt->clusters.upper_bound(endClusterY);
+            const auto startYIt = columnIt->lower_bound(startClusterY);
+            const auto endYIt = columnIt->upper_bound(endClusterY);
             for (auto clusterIt = startYIt; clusterIt != endYIt; ++clusterIt) {
                 const std::int32_t clusterY = clusterIt->first;
                 const OverrideCluster& cluster = clusterIt->second;

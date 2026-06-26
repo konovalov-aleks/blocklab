@@ -249,6 +249,11 @@ PYBIND11_MODULE(_native, module)
                 + " version=" + std::to_string(observation.version()) + ">";
         });
 
+    py::enum_<blocklab::PlacementBlock>(module, "PlacementBlock")
+        .value("Torch", blocklab::PlacementBlock::Torch)
+        .value("Dirt", blocklab::PlacementBlock::Dirt)
+        .value("Stone", blocklab::PlacementBlock::Stone);
+
     py::class_<blocklab::AgentAction>(module, "AgentAction")
         .def(py::init<>())
         .def_readwrite("forward", &blocklab::AgentAction::forward)
@@ -256,6 +261,7 @@ PYBIND11_MODULE(_native, module)
         .def_readwrite("jump", &blocklab::AgentAction::jump)
         .def_readwrite("dig", &blocklab::AgentAction::dig)
         .def_readwrite("place", &blocklab::AgentAction::place)
+        .def_readwrite("placement_block", &blocklab::AgentAction::placementBlock)
         .def_readwrite("yaw_delta", &blocklab::AgentAction::yawDelta)
         .def_readwrite("pitch_delta", &blocklab::AgentAction::pitchDelta);
 
