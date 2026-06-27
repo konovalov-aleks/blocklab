@@ -3,7 +3,7 @@
 
 struct MeshVertex {
     float4 position;
-    float4 colorAndShade;
+    float4 colorAndLight;
     float4 uvMaterial;
 };
 
@@ -63,9 +63,9 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
     output.position.y = -viewY / tanHalfFov;
     output.position.z = viewZ * farPlane / (farPlane - nearPlane) - farPlane * nearPlane / (farPlane - nearPlane);
     output.position.w = viewZ;
-    output.color = float4(vertex.colorAndShade.rgb, 1.0);
+    output.color = float4(vertex.colorAndLight.rgb, 1.0);
     output.worldPosition = worldPosition;
-    output.shade = vertex.colorAndShade.a;
+    output.light = vertex.colorAndLight.a;
     output.uvMaterial = vertex.uvMaterial.xyz;
     output.fog = saturate((viewZ - params.tuning.z) / max(params.tuning.w - params.tuning.z, 0.001));
     output.layer = pushConstants.layerIndex;

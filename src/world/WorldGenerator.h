@@ -10,7 +10,6 @@
 
 #include <cuda_runtime.h>
 
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -22,9 +21,10 @@ class World;
 
 struct TerrainHeader {
     std::int32_t originX;
+    std::int32_t originY;
     std::int32_t originZ;
 };
-static_assert(sizeof(TerrainHeader) == 8, "The layout must match the structure layout in the voxel shader");
+static_assert(sizeof(TerrainHeader) == 12, "The layout must match the structure layout in the voxel shader");
 
 struct WorldGenerationConfig {
     std::int32_t halfExtent = 32;
@@ -35,9 +35,7 @@ struct WorldGenerationInput {
     std::uint64_t worldVersion = 0;
     IVec3 center {};
     IVec3 size {};
-    std::int32_t originX = 0;
-    std::int32_t originZ = 0;
-    std::int32_t halfExtent = 0;
+    IVec3 origin {};
     std::span<const BlockOverride> overrides;
 };
 

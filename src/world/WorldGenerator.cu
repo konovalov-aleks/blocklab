@@ -66,7 +66,6 @@ static_assert(static_cast<std::uint8_t>(Block::COUNT) <= (1 << 5));
 
 namespace {
 
-    constexpr std::int32_t ChunkSizeY = 32;
     constexpr std::int32_t CoordBias = 1 << 20;
     constexpr std::int64_t CoordMask = (std::int64_t { 1 } << 21) - 1;
 
@@ -122,13 +121,7 @@ namespace {
 
     __device__ Block generatedBlock(std::uint32_t seed, std::int32_t x, std::int32_t y, std::int32_t z)
     {
-        if (y < 0)
-            return Block::Stone;
-        if (y >= ChunkSizeY)
-            return Block::Air;
-
         std::int32_t height = static_cast<std::int32_t>(terrainHeight(seed, x, z));
-        height = min(max(height, 2), ChunkSizeY - 2);
         if (y > height)
             return Block::Air;
         if (y == height)
@@ -171,6 +164,7 @@ namespace {
         const int index = blockIdx.x * blockDim.x + threadIdx.x;
         if (index == 0) {
             header->originX = params.originX;
+            header->originY = params.originY;
             header->originZ = params.originZ;
         }
 
@@ -516,10 +510,7 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
         m_pending = false;
     }
 
-    const std::int32_t width = input.halfExtent * 2;
-    const std::int32_t height = ChunkSizeY;
-    const std::int32_t depth = input.halfExtent * 2;
-    const std::int32_t volume = width * height * depth;
+    const std::int32_t volume = input.size.x * input.size.y * input.size.z;
     const auto blockCount = static_cast<std::size_t>(volume);
 
     if (m_blockCacheCapacity < blockCount) {
@@ -563,12 +554,12 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
         .centerX = input.center.x,
         .centerY = input.center.y,
         .centerZ = input.center.z,
-        .width = width,
-        .height = height,
-        .depth = depth,
-        .originX = input.originX,
-        .originY = 0,
-        .originZ = input.originZ,
+        .width = input.size.x,
+        .height = input.size.y,
+        .depth = input.size.z,
+        .originX = input.origin.x,
+        .originY = input.origin.y,
+        .originZ = input.origin.z,
         .overrideCount = static_cast<std::int32_t>(packedOverrides.size()),
         .maxVoxels = buffers.maxVoxels,
         .maxLightSources = s_maxLightSourcesPerGeneration,
@@ -608,7 +599,7 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
 
     m_pending = true;
     WorldGenerationOutput output;
-    output.origin = { input.originX, 0, input.originZ };
+    output.origin = input.origin;
     output.size = input.size;
     output.worldVersion = input.worldVersion;
     output.buffers = std::move(buffers);

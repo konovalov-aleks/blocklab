@@ -18,22 +18,22 @@ namespace {
         const Vec4 packedColor { color, shade };
         const float materialId = meshMaterialId(material);
         vertices[0] = { .position = { p0, animationPhase },
-            .colorAndShade = packedColor,
+            .colorAndLight = packedColor,
             .uvMaterial = { 0.0f, 0.0f, materialId, 0.0f } };
         vertices[1] = { .position = { p1, animationPhase },
-            .colorAndShade = packedColor,
+            .colorAndLight = packedColor,
             .uvMaterial = { 1.0f, 0.0f, materialId, 0.0f } };
         vertices[2] = { .position = { p2, animationPhase },
-            .colorAndShade = packedColor,
+            .colorAndLight = packedColor,
             .uvMaterial = { 1.0f, 1.0f, materialId, 0.0f } };
         vertices[3] = { .position = { p0, animationPhase },
-            .colorAndShade = packedColor,
+            .colorAndLight = packedColor,
             .uvMaterial = { 0.0f, 0.0f, materialId, 0.0f } };
         vertices[4] = { .position = { p2, animationPhase },
-            .colorAndShade = packedColor,
+            .colorAndLight = packedColor,
             .uvMaterial = { 1.0f, 1.0f, materialId, 0.0f } };
         vertices[5] = { .position = { p3, animationPhase },
-            .colorAndShade = packedColor,
+            .colorAndLight = packedColor,
             .uvMaterial = { 0.0f, 1.0f, materialId, 0.0f } };
         vertices += 6;
     }

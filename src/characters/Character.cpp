@@ -13,15 +13,6 @@ namespace {
 
     float length2D(Vec3 value) { return std::sqrt(value.x * value.x + value.z * value.z); }
 
-    float wrapAngle(float angle)
-    {
-        while (angle > Pi)
-            angle -= 2.0f * Pi;
-        while (angle < -Pi)
-            angle += 2.0f * Pi;
-        return angle;
-    }
-
     Vec3 normalized2D(Vec3 value)
     {
         const float length = length2D(value);

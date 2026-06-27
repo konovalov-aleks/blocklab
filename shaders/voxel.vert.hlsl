@@ -4,6 +4,7 @@
 
 struct TerrainHeader {
     int originX;
+    int originY;
     int originZ;
 };
 
@@ -113,8 +114,9 @@ VertexOutput voxelVertexMain(uint vertexId : SV_VertexID)
     const int localPosY = (voxel.data >> 17) & ((1 << 9) - 1);
     const int localPosX = (voxel.data >> 26) & ((1 << 6) - 1);
     const int posZ = localPosZ + terrainHeaders[pushConstants.envIndex].originZ;
+    const int posY = localPosY + terrainHeaders[pushConstants.envIndex].originY;
     const int posX = localPosX + terrainHeaders[pushConstants.envIndex].originX;
-    const int3 blockPos = int3(posX, localPosY, posZ);
+    const int3 blockPos = int3(posX, posY, posZ);
 
     // unpack light
     const uint blockLight = (voxel.blockLight >> (faceIndex * 4)) & 0xF;
@@ -143,8 +145,10 @@ VertexOutput voxelVertexMain(uint vertexId : SV_VertexID)
     output.position.w = viewZ;
     output.color = float4(1.0, 0.0, 1.0, 1.0); // color is not used for voxels, but we set pink color for debugging purposes
     output.worldPosition = worldPosition;
-    // TODO rename shade -> light
-    output.shade = (max(1, max(skyLight, blockLight))) / 15.0;
+    // TODO temporary hack not to show a blackscreen if the scene has no light sources
+    // !!! need to remove it if the sky light is implemented !!!
+    // correct form: output.light = (max(skyLight, blockLight)) / 15.0;
+    output.light = (1 + max(skyLight, blockLight)) / 16.0;
     output.uvMaterial = float3(CUBE_UV[vertexInVoxelIndex], FACE_MATERIALS[blockType][faceIndex]);
     output.fog = saturate((viewZ - params.tuning.z) / max(params.tuning.w - params.tuning.z, 0.001));
     output.layer = pushConstants.layerIndex;

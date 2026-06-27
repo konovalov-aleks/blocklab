@@ -22,7 +22,7 @@ enum class Material : std::uint8_t {
 
 struct MeshVertex {
     Vec4 position;
-    Vec4 colorAndShade;
+    Vec4 colorAndLight;
     Vec4 uvMaterial;
 };
 

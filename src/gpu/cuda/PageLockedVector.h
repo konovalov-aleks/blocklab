@@ -16,6 +16,7 @@ namespace blocklab {
 template <typename T>
 class PageLockedVector {
 public:
+    using value_type = T;
     using iterator = T*;
     using const_iterator = const T*;
 

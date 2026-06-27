@@ -43,7 +43,7 @@ void Environment::reset(std::uint32_t seed)
         World& world = m_worlds[i];
         m_stepCounts[i] = 0;
         world.resetCharacters();
-        const float spawnY = world.groundHeight(0.0f, 0.0f) + 0.05f;
+        const float spawnY = static_cast<float>(world.terrainHeight({ 0, 0 })) + 1.05f;
         m_agents[i].reset({ InitialAgentPosition.x, spawnY, InitialAgentPosition.z });
     }
 
@@ -72,10 +72,10 @@ std::span<const StepResult> Environment::step(std::span<const AgentAction> actio
         float reward = 0.01f + std::min(0.05f, std::sqrt(dx * dx + dz * dz) * 0.02f);
         reward += static_cast<float>(after.blocksCollected - before.blocksCollected) * 0.5f;
         reward += static_cast<float>(after.blocksPlaced - before.blocksPlaced) * 0.2f;
-        if (after.position.y < -8.0f)
+        if (after.position.y < World::s_minY)
             reward -= 5.0f;
         result.reward = reward;
-        result.terminated = after.position.y < -8.0f;
+        result.terminated = after.position.y < World::s_minY;
         result.truncated = m_stepCounts[i] >= s_maxSteps;
     }
 

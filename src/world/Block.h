@@ -3,7 +3,6 @@
 #include <blocklab/gpu/cuda/CudaHelpers.h>
 #include <blocklab/utility/Math.h>
 
-#include <array>
 #include <cstdint>
 
 namespace blocklab {
@@ -36,20 +35,6 @@ constexpr BLOCKLAB_HOST_DEVICE bool isOpaqueBlock(const BlockInfo& block) { retu
 struct BlockOverride {
     IVec3 coord {};
     Block block = Block::Air;
-};
-
-class Chunk {
-public:
-    static constexpr std::int32_t SizeX = 16;
-    static constexpr std::int32_t SizeY = 32;
-    static constexpr std::int32_t SizeZ = 16;
-    static constexpr std::int32_t Volume = SizeX * SizeY * SizeZ;
-
-    Block get(std::int32_t x, std::int32_t y, std::int32_t z) const;
-    void set(std::int32_t x, std::int32_t y, std::int32_t z, Block block);
-
-private:
-    std::array<Block, Volume> m_blocks {};
 };
 
 } // namespace blocklab

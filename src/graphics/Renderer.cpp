@@ -37,7 +37,7 @@ namespace {
     constexpr std::uint32_t MaxEntityInstances = 256;
     constexpr std::int32_t TerrainMeshHalfExtent = 32;
     constexpr std::uint32_t TerrainMeshExtent = TerrainMeshHalfExtent * 2;
-    constexpr std::uint32_t s_maxTerrainVoxels = TerrainMeshExtent * Chunk::SizeY * TerrainMeshExtent;
+    constexpr std::uint32_t s_maxTerrainVoxels = TerrainMeshExtent * World::s_height * TerrainMeshExtent;
 
     float renderEntityKindId(CharacterKind characterKind)
     {

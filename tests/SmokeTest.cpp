@@ -107,7 +107,7 @@ TEST_CASE("World collision queries respect air and solid override masks", "[worl
     const std::int32_t x = 5;
     const std::int32_t z = -3;
     updateWorldCacheAt(world, { x, 0, z });
-    const std::int32_t groundY = floorToInt32(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1;
+    const std::int32_t groundY = world.terrainHeight({ x, z });
     const IVec3 groundBlock { x, groundY, z };
     REQUIRE(world.getBlock({ x, groundY, z }) != Block::Air);
     CHECK(world.hasSolidBlockInArea(groundBlock, groundBlock));
@@ -118,7 +118,7 @@ TEST_CASE("World collision queries respect air and solid override masks", "[worl
     CHECK(world.getBlock(groundBlock) == Block::Air);
     CHECK(!world.hasSolidBlockInArea(groundBlock, groundBlock));
 
-    const IVec3 airBlock { x, Chunk::SizeY - 1, z };
+    const IVec3 airBlock { x, World::s_maxY, z };
     REQUIRE(world.getBlock(airBlock) == Block::Air);
     CHECK(!world.hasSolidBlockInArea(airBlock, airBlock));
 

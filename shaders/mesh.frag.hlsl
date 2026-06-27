@@ -5,7 +5,7 @@ static const float3 SkyColor = float3(0.148302, 0.374624, 0.717623);
 struct FragmentInput {
     float4 color : TEXCOORD0;
     float3 worldPosition : TEXCOORD1;
-    float shade : TEXCOORD2;
+    float light : TEXCOORD2;
     float fog : TEXCOORD3;
     float3 uvMaterial : TEXCOORD4;
 };
@@ -79,6 +79,6 @@ float4 meshFragmentMain(FragmentInput input) : SV_Target0
 {
     uint material = uint(input.uvMaterial.z + 0.5);
     float3 albedo = texelColor(material, input.uvMaterial.xy, input.worldPosition, input.color.rgb);
-    float3 lit = saturate(albedo * input.shade);
+    float3 lit = saturate(albedo * input.light);
     return float4(lerp(lit, SkyColor, input.fog), 1.0);
 }

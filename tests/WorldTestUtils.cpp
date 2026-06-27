@@ -19,7 +19,7 @@ namespace {
     constexpr std::int32_t TestGenerationHalfExtent = 32;
     constexpr std::uint32_t TestGenerationExtent = TestGenerationHalfExtent * 2;
     constexpr std::uint32_t TestMaxTerrainVoxels
-        = static_cast<std::uint32_t>(TestGenerationExtent * Chunk::SizeY * TestGenerationExtent);
+        = static_cast<std::uint32_t>(TestGenerationExtent * World::s_height * TestGenerationExtent);
 
     std::size_t denseBlockIndex(IVec3 local, IVec3 size)
     {
@@ -50,14 +50,6 @@ namespace {
 
         FAIL("Unexpected light mask character");
         return 0;
-    }
-
-    IVec3 voxelPosition(const GeneratedVoxels& generated, const TestVoxel& voxel)
-    {
-        const std::int32_t localZ = static_cast<std::int32_t>((voxel.data >> 11U) & ((1U << 6U) - 1U));
-        const std::int32_t localY = static_cast<std::int32_t>((voxel.data >> 17U) & ((1U << 9U) - 1U));
-        const std::int32_t localX = static_cast<std::int32_t>((voxel.data >> 26U) & ((1U << 6U) - 1U));
-        return generated.origin + IVec3 { localX, localY, localZ };
     }
 
 } // namespace
@@ -135,41 +127,12 @@ void fillBlocks(World& world, IVec3 origin, IVec3 size, Block block)
 
 void clearBlocks(World& world, IVec3 origin, IVec3 size) { fillBlocks(world, origin, size, Block::Air); }
 
-void generateFlatWorld(World& world, IVec3 origin, IVec3 size, std::int32_t groundY, Block block)
-{
-    clearBlocks(world, origin, size);
-    for (std::int32_t z = 0; z < size.z; ++z) {
-        for (std::int32_t x = 0; x < size.x; ++x)
-            world.setBlock({ origin.x + x, groundY, origin.z + z }, block);
-    }
-}
-
 void generateCave(World& world, IVec3 origin, IVec3 size, Block wall)
 {
     fillBlocks(world, origin, size, wall);
     if (size.x <= 2 || size.y <= 2 || size.z <= 2)
         return;
     clearBlocks(world, origin + IVec3 { 1, 1, 1 }, size - IVec3 { 2, 2, 2 });
-}
-
-Block voxelBlock(const TestVoxel& voxel) { return static_cast<Block>(voxel.data & ((1U << 5U) - 1U)); }
-
-const TestVoxel& requireVoxelAt(const GeneratedVoxels& generated, IVec3 pos)
-{
-    const TestVoxel* result = nullptr;
-    for (const TestVoxel& voxel : generated.voxels) {
-        if (voxelPosition(generated, voxel) == pos) {
-            result = &voxel;
-            break;
-        }
-    }
-    REQUIRE(result != nullptr);
-    return *result;
-}
-
-std::uint8_t blockLight(const TestVoxel& voxel, VoxelFace face)
-{
-    return static_cast<std::uint8_t>((voxel.blockLight >> (static_cast<std::uint32_t>(face) * 4U)) & 0xFU);
 }
 
 void checkBlockLight(
