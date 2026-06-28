@@ -953,11 +953,11 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
         }
 
         WorldGenerationBuffers buffers;
-        buffers.header = &m_state->terrainHeaderBuffer.cudaPtr<TerrainHeader>()[slotIndex];
-        buffers.maxVoxels = s_maxTerrainVoxels;
-        buffers.voxels = reinterpret_cast<Voxel*>(
+        buffers.terrain.header = &m_state->terrainHeaderBuffer.cudaPtr<TerrainHeader>()[slotIndex];
+        buffers.terrain.maxVoxels = s_maxTerrainVoxels;
+        buffers.terrain.voxels = reinterpret_cast<Voxel*>(
             m_state->terrainVoxelBuffer.cudaPtr<std::byte>() + slot.terrainVoxelOffset * VoxelSize);
-        buffers.blocks = world.borrowGenerationBuffers();
+        buffers.cpuCache = world.borrowGenerationBuffers();
 
         CudaSharedFuture<WorldGenerationOutput> generation
             = m_worldGenerator->generate(world, agent, std::move(buffers)).share();

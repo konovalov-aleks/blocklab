@@ -79,9 +79,9 @@ namespace {
         std::int32_t centerX;
         std::int32_t centerY;
         std::int32_t centerZ;
-        std::int32_t width;
-        std::int32_t height;
-        std::int32_t depth;
+        std::uint32_t width;
+        std::uint32_t height;
+        std::uint32_t depth;
         std::int32_t originX;
         std::int32_t originY;
         std::int32_t originZ;
@@ -159,22 +159,19 @@ namespace {
     }
 
     __global__ void buildBlockCacheKernel(CudaBuildParams params, const CudaOverride* overrides, TerrainHeader* header,
-        uchar3* lightSources, std::uint32_t* lightSourceCount, BlockInfo* blocks)
+        uchar3* lightSources, std::uint32_t* lightSourceCount, BlockInfo* blocks, HeightMapValueT* heightMap)
     {
-        const int index = blockIdx.x * blockDim.x + threadIdx.x;
-        if (index == 0) {
+        if (blockIdx.x == 0 && blockIdx.y == 0 && threadIdx.x == 0) {
             header->originX = params.originX;
             header->originY = params.originY;
             header->originZ = params.originZ;
         }
 
-        const std::int32_t volume = params.width * params.height * params.depth;
-        if (index >= volume)
-            return;
+        const std::int32_t localY = threadIdx.x;
+        const std::int32_t localX = blockIdx.x;
+        const std::int32_t localZ = blockIdx.y;
+        const std::int32_t index = localX + params.width * (localY + params.height * localZ);
 
-        const std::int32_t localX = index % params.width;
-        const std::int32_t localY = (index / params.width) % params.height;
-        const std::int32_t localZ = index / (params.width * params.height);
         const std::int32_t x = params.originX + localX;
         const std::int32_t y = params.originY + localY;
         const std::int32_t z = params.originZ + localZ;
@@ -190,6 +187,18 @@ namespace {
             if (lightSourceIndex < params.maxLightSources)
                 lightSources[lightSourceIndex] = make_uchar3(localX, localY, localZ);
         }
+
+        __shared__ std::int32_t maxHeight;
+        if (threadIdx.x == 0)
+            maxHeight = params.originY - 1;
+        __syncthreads();
+
+        if (maxHeight < y && isSolidBlock(block))
+            atomicMax(&maxHeight, y);
+        __syncthreads();
+
+        if (threadIdx.x == 0)
+            heightMap[localX + params.width * localZ] = maxHeight;
     }
 
     __global__ void buildTerrainKernel(
@@ -452,6 +461,7 @@ public:
         cudaFreeHost(m_voxelCountHost);
 
         cudaFree(m_blockCacheDevice);
+        cudaFree(m_heightMapDevice);
 
         cudaFree(m_lightSourcesDevice);
         cudaFree(m_lightSourceCountDevice);
@@ -472,6 +482,9 @@ private:
 
     BlockInfo* m_blockCacheDevice = nullptr;
     std::uint32_t m_blockCacheCapacity = 0;
+
+    HeightMapValueT* m_heightMapDevice = nullptr;
+    std::uint32_t m_heightMapCapacity = 0;
 
     uchar3* m_lightSourcesDevice = nullptr;
     std::uint32_t* m_lightSourceCountDevice = nullptr;
@@ -510,14 +523,20 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
         m_pending = false;
     }
 
-    const std::int32_t volume = input.size.x * input.size.y * input.size.z;
-    const auto blockCount = static_cast<std::size_t>(volume);
-
+    const std::uint32_t blockCount = static_cast<std::uint32_t>(input.size.x * input.size.y * input.size.z);
     if (m_blockCacheCapacity < blockCount) {
         cudaFree(m_blockCacheDevice);
         m_blockCacheCapacity = blockCount;
         cudaCheck(cudaMalloc(&m_blockCacheDevice, sizeof(*m_blockCacheDevice) * m_blockCacheCapacity),
             "cudaMalloc blockCache");
+    }
+
+    const std::uint32_t heightMapSize = static_cast<std::uint32_t>(input.size.x * input.size.z);
+    if (m_heightMapCapacity < heightMapSize) {
+        cudaFree(m_heightMapDevice);
+        m_heightMapCapacity = heightMapSize;
+        cudaCheck(
+            cudaMalloc(&m_heightMapDevice, sizeof(*m_heightMapDevice) * m_heightMapCapacity), "cudaMalloc heightMap");
     }
 
     PageLockedVector<CudaOverride>& packedOverrides = m_packedOverrides;
@@ -561,15 +580,15 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
         .originY = input.origin.y,
         .originZ = input.origin.z,
         .overrideCount = static_cast<std::int32_t>(packedOverrides.size()),
-        .maxVoxels = buffers.maxVoxels,
+        .maxVoxels = buffers.terrain.maxVoxels,
         .maxLightSources = s_maxLightSourcesPerGeneration,
     };
 
     // 1. build a dense block cache
     {
-        constexpr std::int32_t threadCount = 256;
-        buildBlockCacheKernel<<<(volume + threadCount - 1) / threadCount, threadCount, 0, m_stream>>>(params,
-            m_overridesDevice, buffers.header, m_lightSourcesDevice, m_lightSourceCountDevice, m_blockCacheDevice);
+        buildBlockCacheKernel<<<{ params.width, params.depth }, params.height, 0, m_stream>>>(params, m_overridesDevice,
+            buffers.terrain.header, m_lightSourcesDevice, m_lightSourceCountDevice, m_blockCacheDevice,
+            m_heightMapDevice);
         cudaCheck(cudaGetLastError(), "buildBlockCacheKernel");
     }
     // 2. compute lighting
@@ -582,8 +601,8 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
     // 3. build a terrain for rendering
     {
         constexpr std::int32_t threadCount = 256;
-        buildTerrainKernel<<<(volume + threadCount - 1) / threadCount, threadCount, 0, m_stream>>>(
-            params, buffers.voxels, m_voxelCountDevice, m_blockCacheDevice);
+        buildTerrainKernel<<<(blockCount + threadCount - 1) / threadCount, threadCount, 0, m_stream>>>(
+            params, buffers.terrain.voxels, m_voxelCountDevice, m_blockCacheDevice);
         cudaCheck(cudaGetLastError(), "buildTerrainKernel");
     }
 
@@ -591,11 +610,17 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
                   m_voxelCountHost, m_voxelCountDevice, sizeof(*m_voxelCountHost), cudaMemcpyDeviceToHost, m_stream),
         "cudaMemcpyAsync voxelCount");
 
-    buffers.blocks.uninitializedResize(blockCount);
-    assert(m_blockCacheCapacity >= buffers.blocks.size());
-    cudaCheck(cudaMemcpyAsync(buffers.blocks.data(), m_blockCacheDevice,
-                  sizeof(*m_blockCacheDevice) * buffers.blocks.size(), cudaMemcpyDeviceToHost, m_stream),
+    buffers.cpuCache.blocks.uninitializedResize(blockCount);
+    assert(m_blockCacheCapacity >= buffers.cpuCache.blocks.size());
+    cudaCheck(cudaMemcpyAsync(buffers.cpuCache.blocks.data(), m_blockCacheDevice,
+                  sizeof(*m_blockCacheDevice) * buffers.cpuCache.blocks.size(), cudaMemcpyDeviceToHost, m_stream),
         "cudaMemcpyAsync blockCache");
+
+    buffers.cpuCache.heightMap.uninitializedResize(heightMapSize);
+    assert(m_heightMapCapacity >= buffers.cpuCache.heightMap.size());
+    cudaCheck(cudaMemcpyAsync(buffers.cpuCache.heightMap.data(), m_heightMapDevice,
+                  sizeof(*m_heightMapDevice) * buffers.cpuCache.heightMap.size(), cudaMemcpyDeviceToHost, m_stream),
+        "cudaMemcpyAsync heightMap");
 
     m_pending = true;
     WorldGenerationOutput output;
@@ -606,7 +631,7 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
     auto outputStorage = std::make_shared<WorldGenerationOutput>(std::move(output));
     return CudaFuture<WorldGenerationOutput>(m_stream, [this, outputStorage]() mutable {
         m_pending = false;
-        outputStorage->voxelCount = std::min(*m_voxelCountHost, outputStorage->buffers.maxVoxels);
+        outputStorage->voxelCount = std::min(*m_voxelCountHost, outputStorage->buffers.terrain.maxVoxels);
         return std::move(*outputStorage);
     });
 }

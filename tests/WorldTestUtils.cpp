@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include <utility>
 
 namespace blocklab::test {
 
@@ -64,15 +65,15 @@ void updateWorldCacheAt(const World& world, IVec3 center)
     cudaCheck(cudaMalloc(&terrainHeader, sizeof(TerrainHeader)), "cudaMalloc test terrain header");
     AgentState agent;
     agent.position = { static_cast<float>(center.x), static_cast<float>(center.y), static_cast<float>(center.z) };
-    CudaSharedFuture<WorldGenerationOutput> generation = generator
-                                                             .generate(world, agent,
-                                                                 {
-                                                                     .header = terrainHeader,
-                                                                     .voxels = voxels,
-                                                                     .maxVoxels = TestMaxTerrainVoxels,
-                                                                     .blocks = world.borrowGenerationBuffers(),
-                                                                 })
-                                                             .share();
+    WorldGenerationBuffers buffers {
+        .terrain = {
+            .header = terrainHeader,
+            .voxels = voxels,
+            .maxVoxels = TestMaxTerrainVoxels,
+        },
+        .cpuCache = world.borrowGenerationBuffers(),
+    };
+    CudaSharedFuture<WorldGenerationOutput> generation = generator.generate(world, agent, std::move(buffers)).share();
     world.updateGeneration(generation);
     world.waitForGeneration();
     cudaCheck(cudaFree(terrainHeader), "cudaFree test terrain header");
@@ -89,21 +90,21 @@ GeneratedVoxels generateVoxelsAt(const World& world, IVec3 center)
     cudaCheck(cudaMalloc(&terrainHeader, sizeof(TerrainHeader)), "cudaMalloc test terrain header");
     AgentState agent;
     agent.position = { static_cast<float>(center.x), static_cast<float>(center.y), static_cast<float>(center.z) };
-    CudaSharedFuture<WorldGenerationOutput> generation = generator
-                                                             .generate(world, agent,
-                                                                 {
-                                                                     .header = terrainHeader,
-                                                                     .voxels = voxels,
-                                                                     .maxVoxels = TestMaxTerrainVoxels,
-                                                                     .blocks = world.borrowGenerationBuffers(),
-                                                                 })
-                                                             .share();
+    WorldGenerationBuffers buffers {
+        .terrain = {
+            .header = terrainHeader,
+            .voxels = voxels,
+            .maxVoxels = TestMaxTerrainVoxels,
+        },
+        .cpuCache = world.borrowGenerationBuffers(),
+    };
+    CudaSharedFuture<WorldGenerationOutput> generation = generator.generate(world, agent, std::move(buffers)).share();
 
     WorldGenerationOutput& output = generation.get();
     GeneratedVoxels result;
     result.origin = output.origin;
     result.size = output.size;
-    result.blocks.assign(output.buffers.blocks.begin(), output.buffers.blocks.end());
+    result.blocks.assign(output.buffers.cpuCache.blocks.begin(), output.buffers.cpuCache.blocks.end());
     result.voxels.resize(output.voxelCount);
     cudaCheck(cudaMemcpy(result.voxels.data(), voxels, VoxelSize * result.voxels.size(), cudaMemcpyDeviceToHost),
         "cudaMemcpy test terrain voxels");

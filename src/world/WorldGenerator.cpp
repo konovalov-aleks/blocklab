@@ -15,11 +15,11 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::generate(
         floorToInt32(agent.position.y),
         floorToInt32(agent.position.z),
     };
-    const std::int32_t extent = m_config.halfExtent * 2;
+    const std::uint32_t extent = m_config.halfExtent * 2;
     // The cached/rendered area is half-open: [center - halfExtent, center + halfExtent).
     const std::int32_t originX = center.x - m_config.halfExtent;
     const std::int32_t originZ = center.z - m_config.halfExtent;
-    const IVec3 size { extent, World::s_height, extent };
+    const UVec3 size { extent, World::s_height, extent };
 
     world.collectOverridesInRegion({ originX, World::s_minY, originZ }, size, m_overrides);
     const WorldGenerationInput input {

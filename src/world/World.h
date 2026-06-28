@@ -25,6 +25,8 @@ public:
     static constexpr std::int32_t s_height = 32;
     static constexpr std::int32_t s_minY = 0;
     static constexpr std::int32_t s_maxY = s_minY + s_height - 1;
+    static_assert(std::numeric_limits<HeightMapValueT>::min() <= s_minY);
+    static_assert(std::numeric_limits<HeightMapValueT>::max() >= s_maxY);
 
     World() = default;
 
@@ -41,11 +43,11 @@ public:
     void setBlock(IVec3 pos, Block block);
     bool isSolid(IVec3 pos) const { return isSolidBlock(getBlock(pos)); }
     bool hasSolidBlockInArea(IVec3 min, IVec3 max) const;
-    std::int32_t terrainHeight(IVec2 xz) const;
+    std::int32_t terrainHeight(IVec2 xz) const { return m_blockCache.terrainHeight(xz); }
 
-    void collectOverridesInRegion(IVec3 origin, IVec3 size, std::vector<BlockOverride>& out) const;
+    void collectOverridesInRegion(IVec3 origin, UVec3 size, std::vector<BlockOverride>& out) const;
 
-    PageLockedVector<BlockInfo> borrowGenerationBuffers() const { return m_blockCache.borrowGenerationBuffers(); }
+    CPUCacheGenerationBuffers borrowGenerationBuffers() const { return m_blockCache.borrowGenerationBuffers(); }
     void updateGeneration(CudaSharedFuture<WorldGenerationOutput> gen) const { m_blockCache.update(std::move(gen)); }
     void waitForGeneration() const;
 
@@ -77,10 +79,8 @@ private:
         BlockCache(const BlockCache&) = delete;
         BlockCache& operator=(const BlockCache&) = delete;
 
-        BlockCache(BlockCache&& other) noexcept;
-        BlockCache& operator=(BlockCache&& other) noexcept;
-
         BlockInfo& operator[](IVec3);
+        std::int32_t terrainHeight(IVec2 xz);
 
         IVec3 size() const { return m_size; }
         IVec3 origin() const { return m_origin; }
@@ -90,7 +90,7 @@ private:
         void clear();
         void waitIfPending();
 
-        PageLockedVector<BlockInfo> borrowGenerationBuffers();
+        CPUCacheGenerationBuffers borrowGenerationBuffers();
         void update(CudaSharedFuture<WorldGenerationOutput>);
 
     private:
@@ -100,13 +100,10 @@ private:
         IVec3 m_size {};
 
         PageLockedVector<BlockInfo> m_blocks;
-        PageLockedVector<std::uint8_t> m_heightMap;
+        PageLockedVector<HeightMapValueT> m_heightMap;
 
         CudaSharedFuture<WorldGenerationOutput> m_pendingFuture;
         State m_state = State::Empty;
-
-        static_assert(std::numeric_limits<decltype(m_heightMap)::value_type>::min() <= World::s_minY);
-        static_assert(std::numeric_limits<decltype(m_heightMap)::value_type>::max() >= World::s_maxY);
     };
 
     void updateCharacters(float dt, Vec3 threatPosition);

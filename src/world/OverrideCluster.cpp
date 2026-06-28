@@ -52,5 +52,4 @@ bool OverrideCluster::clear(std::size_t index)
     return true;
 }
 
-
 } // namespace blocklab

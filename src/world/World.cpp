@@ -34,44 +34,33 @@ namespace {
 
 } // namespace
 
-World::BlockCache::BlockCache(BlockCache&& other) noexcept
-    : m_origin(other.m_origin)
-    , m_size(other.m_size)
-    , m_blocks(std::move(other.m_blocks))
-    , m_pendingFuture(std::move(other.m_pendingFuture))
-    , m_state(std::exchange(other.m_state, State::Ready))
-{
-}
-
-World::BlockCache& World::BlockCache::operator=(BlockCache&& other) noexcept
-{
-    if (this == &other)
-        return *this;
-
-    waitIfPending();
-    other.waitIfPending();
-
-    m_origin = other.m_origin;
-    m_size = other.m_size;
-    m_blocks = std::move(other.m_blocks);
-    m_pendingFuture = std::move(other.m_pendingFuture);
-    m_state = std::exchange(other.m_state, State::Ready);
-    return *this;
-}
-
 BlockInfo& World::BlockCache::operator[](IVec3 pos)
 {
     assert(!empty());
     assert(m_state == State::Ready);
+    assert(m_blocks.size() == static_cast<std::size_t>(m_size.x) * m_size.y * m_size.z);
     assert(isInsideBounds(pos));
     return m_blocks[denseBlockIndex(pos - m_origin)];
 }
 
+std::int32_t World::BlockCache::terrainHeight(IVec2 xz)
+{
+    waitIfPending();
+    assert(!empty());
+    assert(m_state == State::Ready);
+    assert(m_heightMap.size() == static_cast<std::size_t>(m_size.x) * m_size.z);
+
+    const std::int32_t localX = xz[0] - m_origin.x;
+    const std::int32_t localZ = xz[1] - m_origin.z;
+    assert(localX >= 0 && localX < m_size.x);
+    assert(localZ >= 0 && localZ < m_size.z);
+    return m_heightMap[localX + m_size.x * localZ];
+}
+
 bool World::BlockCache::isInsideBounds(IVec3 pos) const
 {
-    return pos.x >= m_origin.x && pos.y >= m_origin.y && pos.z >= m_origin.z
-        && pos.x < m_origin.x + m_size.x && pos.y < m_origin.y + m_size.y
-        && pos.z < m_origin.z + m_size.z;
+    return pos.x >= m_origin.x && pos.y >= m_origin.y && pos.z >= m_origin.z && pos.x < m_origin.x + m_size.x
+        && pos.y < m_origin.y + m_size.y && pos.z < m_origin.z + m_size.z;
 }
 
 void World::BlockCache::clear()
@@ -94,16 +83,20 @@ void World::BlockCache::waitIfPending()
     WorldGenerationOutput& output = m_pendingFuture.get();
     m_origin = output.origin;
     m_size = output.size;
-    m_blocks = std::move(output.buffers.blocks);
+    m_blocks = std::move(output.buffers.cpuCache.blocks);
+    m_heightMap = std::move(output.buffers.cpuCache.heightMap);
     m_pendingFuture = {};
     m_state = State::Ready;
 }
 
-PageLockedVector<BlockInfo> World::BlockCache::borrowGenerationBuffers()
+CPUCacheGenerationBuffers World::BlockCache::borrowGenerationBuffers()
 {
     waitIfPending();
     m_state = State::Borrowed;
-    return std::move(m_blocks);
+    return {
+        .blocks = std::move(m_blocks),
+        .heightMap = std::move(m_heightMap),
+    };
 }
 
 void World::BlockCache::update(CudaSharedFuture<WorldGenerationOutput> gen)
@@ -240,20 +233,10 @@ void World::updateCharacters(float dt, Vec3 threatPosition)
     }
 }
 
-std::int32_t World::terrainHeight(IVec2 xz) const
-{
-    // TODO compute on GPU and cache
-    for (std::int32_t y = s_maxY; y >= s_minY; --y) {
-        if (isSolid({ xz[0], y, xz[1] }))
-            return y;
-    }
-    return s_minY - 1;
-}
-
-void World::collectOverridesInRegion(IVec3 origin, IVec3 size, std::vector<BlockOverride>& out) const
+void World::collectOverridesInRegion(IVec3 origin, UVec3 size, std::vector<BlockOverride>& out) const
 {
     out.clear();
-    const IVec3 end = origin + size;
+    const IVec3 end = origin + static_cast<IVec3>(size);
     const std::int32_t startClusterX = floorDiv(origin.x, OverrideCluster::Edge);
     const std::int32_t startClusterY = floorDiv(origin.y, OverrideCluster::Edge);
     const std::int32_t startClusterZ = floorDiv(origin.z, OverrideCluster::Edge);
