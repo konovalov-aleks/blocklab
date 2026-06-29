@@ -119,6 +119,7 @@ void World::waitForGeneration() const { m_blockCache.waitIfPending(); }
 void World::resetSeed(std::uint32_t seed)
 {
     m_seed = seed;
+    m_logicalTimeMs = 0;
     m_overrideColumns.clear();
     m_overrideCount = 0;
     m_blockCache.clear();

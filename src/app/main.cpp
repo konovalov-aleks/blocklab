@@ -214,12 +214,14 @@ int main(int argc, char** argv)
 
         const double statsElapsed = std::chrono::duration<double>(now - lastStatsAt).count();
         if (statsElapsed >= 1.0) {
+            // clang-format off
             std::cout << std::fixed << std::setprecision(1)
-                      << "fps=" << static_cast<double>(statsFrames) / statsElapsed
-                      << " sim_steps/s=" << static_cast<double>(statsSteps) / statsElapsed
-                      << " total_steps=" << totalSteps
-                      << " observation_version=" << env.observe().version()
-                      << " mode=" << (frameLimiterEnabled ? "fixed" : "unlocked") << '\n';
+                << "fps=" << static_cast<double>(statsFrames) / statsElapsed
+                << " sim_steps/s=" << static_cast<double>(statsSteps) / statsElapsed
+                << " total_steps=" << totalSteps
+                << " observation_version=" << env.observe().version()
+                << " mode=" << (frameLimiterEnabled ? "fixed" : "unlocked") << '\n';
+            // clang-format on
             lastStatsAt = now;
             statsFrames = 0;
             statsSteps = 0;

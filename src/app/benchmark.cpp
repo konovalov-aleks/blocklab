@@ -145,7 +145,8 @@ namespace {
                 const char* const optionName
                     = (arg == "--num-envs" || arg.starts_with("--num-envs=")) ? "--num-envs" : "--batch-size";
                 const auto batchSize = cli::parseInt<std::uint64_t>(cli::optionValue(i, argc, argv, arg, optionName));
-                if (!batchSize || *batchSize == 0 || *batchSize > std::numeric_limits<std::uint32_t>::max()) [[unlikely]] {
+                if (!batchSize || *batchSize == 0 || *batchSize > std::numeric_limits<std::uint32_t>::max())
+                    [[unlikely]] {
                     std::fprintf(stderr, "Invalid %s value.\n", optionName);
                     std::exit(EXIT_FAILURE);
                 }

@@ -18,12 +18,10 @@ namespace blocklab {
 
 using VoxelLighting = std::uint8_t[6];
 
-static constexpr std::uint32_t s_maxLightSourcesPerGeneration = 512;
-
 static constexpr std::uint32_t s_maxLightPropagationDistance = 14;
 
 // 4 * N^2 + 2
-static constexpr std::int32_t s_maxLightComputeQueueLength = 786;
+static constexpr std::uint32_t s_maxLightComputeQueueLength = 786;
 
 class Voxel {
 public:
@@ -184,8 +182,14 @@ namespace {
 
         if (block == Block::Torch) {
             const std::uint32_t lightSourceIndex = atomicAdd(lightSourceCount, 1);
-            if (lightSourceIndex < params.maxLightSources)
+            if (lightSourceIndex < params.maxLightSources) {
+                // If the buffer is not large enough, we simply skip this light source and increase
+                // the buffer size only for the next frame.
+                //
+                // Lighting is an eventually consistent visual/sensory field.
+                // So, it's not a critical problem if some lights will be activated with one frame delay.
                 lightSources[lightSourceIndex] = make_uchar3(localX, localY, localZ);
+            }
         }
 
         __shared__ std::int32_t maxHeight;
@@ -204,7 +208,7 @@ namespace {
     __global__ void buildTerrainKernel(
         CudaBuildParams params, Voxel* voxels, std::uint32_t* voxelCount, BlockInfo* blocks)
     {
-        const int index = blockIdx.x * blockDim.x + threadIdx.x;
+        const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
         const std::int32_t volume = params.width * params.height * params.depth;
         if (index >= volume)
             return;
@@ -334,114 +338,118 @@ namespace {
     };
 
     __global__ void computeBlockLights(
-        CudaBuildParams params, uchar3* lightSources, std::uint32_t* lightSourceCount, BlockInfo* blocks)
+        CudaBuildParams params, uchar3* lightSources, const std::uint32_t* lightSourceCount, BlockInfo* blocks)
     {
-        const int lightIndex = blockIdx.x;
-        if (lightIndex >= *lightSourceCount)
-            return;
-        const uchar3& light = lightSources[lightIndex];
+        // lightSourceCount is the actual number of light sources found in the current scene. It may be larger than
+        // the currently allocated lightSources buffer: overflowed sources are skipped for this frame and capacity
+        // grows before the next one.
+        const std::uint32_t sourceCount = min(*lightSourceCount, params.maxLightSources);
 
-        const auto center = s_maxLightPropagationDistance;
-        const auto dim = s_maxLightPropagationDistance * 2 + 1;
-        __shared__ __align__(4) LightingBlockCache blocksCache[dim][dim][dim];
+        for (std::uint32_t lightIndex = blockIdx.x; lightIndex < sourceCount; lightIndex += gridDim.x) {
+            const uchar3& light = lightSources[lightIndex];
 
-        const auto blockAt = [blocks, &params](int x, int y, int z) -> BlockInfo& {
-            return blocks[x + params.width * (y + params.height * z)];
-        };
+            const auto center = s_maxLightPropagationDistance;
+            const auto dim = s_maxLightPropagationDistance * 2 + 1;
+            __shared__ __align__(4) LightingBlockCache blocksCache[dim][dim][dim];
 
-        const int totalElements = dim * dim * dim;
-        for (int i = threadIdx.x; i < totalElements; i += blockDim.x) {
-            const int x = i % dim;
-            const int y = (i / dim) % dim;
-            const int z = i / (dim * dim);
+            const auto blockAt = [blocks, &params](int x, int y, int z) -> BlockInfo& {
+                return blocks[x + params.width * (y + params.height * z)];
+            };
 
-            const int worldX = light.x + x - center;
-            const int worldY = light.y + y - center;
-            const int worldZ = light.z + z - center;
+            const std::uint32_t totalElements = dim * dim * dim;
+            for (std::uint32_t i = threadIdx.x; i < totalElements; i += blockDim.x) {
+                const int x = i % dim;
+                const int y = (i / dim) % dim;
+                const int z = i / (dim * dim);
 
-            const bool isOutOfBounds = worldX < 0 || worldY < 0 || worldZ < 0 || worldX >= params.width
-                || worldY >= params.height || worldZ >= params.depth;
+                const int worldX = light.x + x - center;
+                const int worldY = light.y + y - center;
+                const int worldZ = light.z + z - center;
 
-            const bool isSolid = isOutOfBounds || isOpaqueBlock(blockAt(worldX, worldY, worldZ).blockType);
-            blocksCache[x][y][z].init(isSolid);
-        }
+                const bool isOutOfBounds = worldX < 0 || worldY < 0 || worldZ < 0 || worldX >= params.width
+                    || worldY >= params.height || worldZ >= params.depth;
 
-        __shared__ uchar3 queue1[s_maxLightComputeQueueLength];
-        __shared__ uchar3 queue2[s_maxLightComputeQueueLength];
-
-        __shared__ int curQueueLength;
-        __shared__ int newQueueLength;
-        __shared__ uchar3* curQueue;
-        __shared__ uchar3* newQueue;
-
-        if (threadIdx.x == 0) {
-            curQueue = queue1;
-            newQueue = queue2;
-            newQueue[0]
-                = { s_maxLightPropagationDistance, s_maxLightPropagationDistance, s_maxLightPropagationDistance };
-            newQueueLength = 1;
-            blocksCache[center][center][center].setLight(15);
-        }
-
-        const auto updateLight = [](int x, int y, int z, std::uint8_t light) {
-            if (blocksCache[x][y][z].isSolid())
-                return;
-
-            if (blocksCache[x][y][z].atomicSetLightIfGreater(light)) {
-                int index = atomicAdd(&newQueueLength, 1);
-                newQueue[index] = make_uchar3(x, y, z);
+                const bool isSolid = isOutOfBounds || isOpaqueBlock(blockAt(worldX, worldY, worldZ).blockType);
+                blocksCache[x][y][z].init(isSolid);
             }
-        };
 
-        const std::int32_t queueIndex = threadIdx.x;
-        for (int iter = 0; iter < s_maxLightPropagationDistance; ++iter) {
-            __syncthreads();
+            __shared__ uchar3 queue1[s_maxLightComputeQueueLength];
+            __shared__ uchar3 queue2[s_maxLightComputeQueueLength];
+
+            __shared__ int curQueueLength;
+            __shared__ int newQueueLength;
+            __shared__ uchar3* curQueue;
+            __shared__ uchar3* newQueue;
+
             if (threadIdx.x == 0) {
-                const auto tmp = curQueue;
-                curQueue = newQueue;
-                newQueue = tmp;
-
-                curQueueLength = newQueueLength;
-                newQueueLength = 0;
+                curQueue = queue1;
+                newQueue = queue2;
+                newQueue[0]
+                    = { s_maxLightPropagationDistance, s_maxLightPropagationDistance, s_maxLightPropagationDistance };
+                newQueueLength = 1;
+                blocksCache[center][center][center].setLight(15);
             }
-            __syncthreads();
 
-            if (!curQueueLength)
-                break;
+            const auto updateLight = [](int x, int y, int z, std::uint8_t light) {
+                if (blocksCache[x][y][z].isSolid())
+                    return;
 
-            if (curQueueLength <= queueIndex)
-                continue;
+                if (blocksCache[x][y][z].atomicSetLightIfGreater(light)) {
+                    int index = atomicAdd(&newQueueLength, 1);
+                    newQueue[index] = make_uchar3(x, y, z);
+                }
+            };
 
-            const uchar3 pos = curQueue[queueIndex];
-            std::uint8_t light = blocksCache[pos.x][pos.y][pos.z].light();
-            if (light > 0) {
-                --light;
-                updateLight(pos.x - 1, pos.y, pos.z, light);
-                updateLight(pos.x + 1, pos.y, pos.z, light);
-                updateLight(pos.x, pos.y - 1, pos.z, light);
-                updateLight(pos.x, pos.y + 1, pos.z, light);
-                updateLight(pos.x, pos.y, pos.z - 1, light);
-                updateLight(pos.x, pos.y, pos.z + 1, light);
+            const std::int32_t queueIndex = threadIdx.x;
+            for (int iter = 0; iter < s_maxLightPropagationDistance; ++iter) {
+                __syncthreads();
+                if (threadIdx.x == 0) {
+                    const auto tmp = curQueue;
+                    curQueue = newQueue;
+                    newQueue = tmp;
+
+                    curQueueLength = newQueueLength;
+                    newQueueLength = 0;
+                }
+                __syncthreads();
+
+                if (!curQueueLength)
+                    break;
+
+                if (curQueueLength <= queueIndex)
+                    continue;
+
+                const uchar3 pos = curQueue[queueIndex];
+                std::uint8_t light = blocksCache[pos.x][pos.y][pos.z].light();
+                if (light > 0) {
+                    --light;
+                    updateLight(pos.x - 1, pos.y, pos.z, light);
+                    updateLight(pos.x + 1, pos.y, pos.z, light);
+                    updateLight(pos.x, pos.y - 1, pos.z, light);
+                    updateLight(pos.x, pos.y + 1, pos.z, light);
+                    updateLight(pos.x, pos.y, pos.z - 1, light);
+                    updateLight(pos.x, pos.y, pos.z + 1, light);
+                }
             }
-        }
 
-        for (int i = threadIdx.x; i < totalElements; i += blockDim.x) {
-            const int x = i % dim;
-            const int y = (i / dim) % dim;
-            const int z = i / (dim * dim);
+            for (int i = threadIdx.x; i < totalElements; i += blockDim.x) {
+                const int x = i % dim;
+                const int y = (i / dim) % dim;
+                const int z = i / (dim * dim);
 
-            const int worldX = light.x + x - center;
-            const int worldY = light.y + y - center;
-            const int worldZ = light.z + z - center;
+                const int worldX = light.x + x - center;
+                const int worldY = light.y + y - center;
+                const int worldZ = light.z + z - center;
 
-            const bool isOutOfBounds = worldX < 0 || worldY < 0 || worldZ < 0 || worldX >= params.width
-                || worldY >= params.height || worldZ >= params.depth;
-            if (isOutOfBounds)
-                continue;
+                const bool isOutOfBounds = worldX < 0 || worldY < 0 || worldZ < 0 || worldX >= params.width
+                    || worldY >= params.height || worldZ >= params.depth;
+                if (isOutOfBounds)
+                    continue;
 
-            auto& blockLight = blockAt(worldX, worldY, worldZ).blockLight;
-            if (blockLight < blocksCache[x][y][z].light())
-                atomicMax(&blockLight, blocksCache[x][y][z].light());
+                auto& blockLight = blockAt(worldX, worldY, worldZ).blockLight;
+                if (blockLight < blocksCache[x][y][z].light())
+                    atomicMax(&blockLight, blocksCache[x][y][z].light());
+            }
         }
     }
 
@@ -465,16 +473,19 @@ namespace {
 class WorldGenerator::Impl {
 public:
     Impl()
+        : m_lightSourcesCapacity(s_lightSourcesInitialCapacity)
     {
         cudaCheck(cudaStreamCreateWithFlags(&m_stream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags");
 
         cudaCheck(cudaMalloc(&m_voxelCountDevice, sizeof(*m_voxelCountDevice)), "cudaMalloc voxelCount");
         cudaCheck(cudaMallocHost(&m_voxelCountHost, sizeof(*m_voxelCountHost)), "cudaMallocHost voxelCount");
 
-        cudaCheck(cudaMalloc(&m_lightSourcesDevice, sizeof(*m_lightSourcesDevice) * s_maxLightSourcesPerGeneration),
-            "cudaMalloc lightSource");
+        allocLightSources();
         cudaCheck(
             cudaMalloc(&m_lightSourceCountDevice, sizeof(*m_lightSourceCountDevice)), "cudaMalloc lightSourceCount");
+        cudaCheck(cudaMallocHost(&m_lightSourceCountHost, sizeof(*m_lightSourceCountHost)),
+            "cudaMallocHost lightSourceCount");
+        *m_lightSourceCountHost = 0;
     }
 
     ~Impl()
@@ -491,6 +502,7 @@ public:
 
         cudaFree(m_lightSourcesDevice);
         cudaFree(m_lightSourceCountDevice);
+        cudaFreeHost(m_lightSourceCountHost);
 
         cudaStreamDestroy(m_stream);
     }
@@ -499,6 +511,14 @@ public:
     CudaFuture<WorldGenerationOutput> generate(const WorldGenerationInput&, WorldGenerationBuffers&&);
 
 private:
+    static constexpr std::uint32_t s_lightSourcesInitialCapacity = 64;
+
+    void allocLightSources()
+    {
+        cudaCheck(cudaMalloc(&m_lightSourcesDevice, sizeof(*m_lightSourcesDevice) * m_lightSourcesCapacity),
+            "cudaMalloc lightSource");
+    }
+
     PageLockedVector<CudaOverride> m_packedOverrides;
     CudaOverride* m_overridesDevice = nullptr;
     std::uint32_t m_overridesCapacity = 0;
@@ -512,8 +532,10 @@ private:
     HeightMapValueT* m_heightMapDevice = nullptr;
     std::uint32_t m_heightMapCapacity = 0;
 
+    std::uint32_t m_lightSourcesCapacity;
     uchar3* m_lightSourcesDevice = nullptr;
     std::uint32_t* m_lightSourceCountDevice = nullptr;
+    std::uint32_t* m_lightSourceCountHost = nullptr;
 
     cudaStream_t m_stream = nullptr;
 
@@ -565,6 +587,16 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
             cudaMalloc(&m_heightMapDevice, sizeof(*m_heightMapDevice) * m_heightMapCapacity), "cudaMalloc heightMap");
     }
 
+    // m_lightSourceCountHost is copied from the previous generation at the end of the CUDA stream. If that generation
+    // discovered more sources than fit into the buffer, this generation grows the buffer before launching new work.
+    if (*m_lightSourceCountHost > m_lightSourcesCapacity) {
+        while (m_lightSourcesCapacity < *m_lightSourceCountHost)
+            m_lightSourcesCapacity *= 2;
+
+        cudaFree(m_lightSourcesDevice);
+        allocLightSources();
+    }
+
     PageLockedVector<CudaOverride>& packedOverrides = m_packedOverrides;
     packedOverrides.clear();
     packedOverrides.reserve(input.overrides.size());
@@ -607,7 +639,7 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
         .originZ = input.origin.z,
         .overrideCount = static_cast<std::int32_t>(packedOverrides.size()),
         .maxVoxels = buffers.terrain.maxVoxels,
-        .maxLightSources = s_maxLightSourcesPerGeneration,
+        .maxLightSources = m_lightSourcesCapacity,
     };
 
     // 1. build a dense block cache
@@ -619,8 +651,10 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
     }
     // 2. compute block lighting
     {
-        constexpr std::int32_t threadCount = s_maxLightComputeQueueLength;
-        computeBlockLights<<<s_maxLightSourcesPerGeneration, threadCount, 0, m_stream>>>(
+        constexpr std::uint32_t maxBlockCount = 512;
+        constexpr std::uint32_t kernelThreadCount = s_maxLightComputeQueueLength;
+        const std::int32_t kernelBlockCount = std::min(m_lightSourcesCapacity, maxBlockCount);
+        computeBlockLights<<<kernelBlockCount, kernelThreadCount, 0, m_stream>>>(
             params, m_lightSourcesDevice, m_lightSourceCountDevice, m_blockCacheDevice);
         cudaCheck(cudaGetLastError(), "computeBlockLightsKernel");
     }
@@ -638,6 +672,10 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
             params, buffers.terrain.voxels, m_voxelCountDevice, m_blockCacheDevice);
         cudaCheck(cudaGetLastError(), "buildTerrainKernel");
     }
+
+    cudaCheck(cudaMemcpyAsync(m_lightSourceCountHost, m_lightSourceCountDevice, sizeof(*m_lightSourceCountHost),
+                  cudaMemcpyDeviceToHost, m_stream),
+        "cudaMemcpyAsync lightSourceCount");
 
     cudaCheck(cudaMemcpyAsync(
                   m_voxelCountHost, m_voxelCountDevice, sizeof(*m_voxelCountHost), cudaMemcpyDeviceToHost, m_stream),
