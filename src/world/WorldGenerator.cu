@@ -217,36 +217,35 @@ namespace {
         if (block == Block::Air)
             return;
 
+        const auto blockAt = [&params, blocks](int x, int y, int z) -> BlockInfo {
+            if (x < 0 || y < 0 || z < 0 || x >= params.width || y >= params.height || z >= params.depth) {
+                // TODO: Revisit unloaded-neighbor semantics when terrain is generated as multiple resident chunks.
+                // Returning air renders boundary faces, which is useful for chunk seams, but creates currently
+                // hidden extra faces while the generated region moves with the player.
+                return {
+                    .blockType = Block::Air,
+                    .blockLight = 0,
+                    .skyLight = 0,
+                };
+            }
+            return blocks[x + params.width * (y + params.height * z)];
+        };
+
+        const BlockInfo& leftBlock = blockAt(localX - 1, localY, localZ);
+        const BlockInfo& rightBlock = blockAt(localX + 1, localY, localZ);
+        const BlockInfo& topBlock = blockAt(localX, localY + 1, localZ);
+        const BlockInfo& bottomBlock = blockAt(localX, localY - 1, localZ);
+        const BlockInfo& frontBlock = blockAt(localX, localY, localZ + 1);
+        const BlockInfo& backBlock = blockAt(localX, localY, localZ - 1);
+
         std::uint8_t visibleFaces = 0;
         VoxelLighting blockLight;
-        const VoxelLighting skyLight = {};
 
         if (block == Block::Torch) {
             visibleFaces
                 = VisibleFace::Right | VisibleFace::Left | VisibleFace::Top | VisibleFace::Front | VisibleFace::Back;
             std::memset(blockLight, 15, sizeof(blockLight));
         } else {
-            const auto blockAt = [&params, blocks](int x, int y, int z) -> BlockInfo {
-                if (x < 0 || y < 0 || z < 0 || x >= params.width || y >= params.height || z >= params.depth) {
-                    // TODO: Revisit unloaded-neighbor semantics when terrain is generated as multiple resident chunks.
-                    // Returning air renders boundary faces, which is useful for chunk seams, but creates currently
-                    // hidden extra faces while the generated region moves with the player.
-                    return {
-                        .blockType = Block::Air,
-                        .blockLight = 0,
-                        .skyLight = 0,
-                    };
-                }
-                return blocks[x + params.width * (y + params.height * z)];
-            };
-
-            const BlockInfo& leftBlock = blockAt(localX - 1, localY, localZ);
-            const BlockInfo& rightBlock = blockAt(localX + 1, localY, localZ);
-            const BlockInfo& topBlock = blockAt(localX, localY + 1, localZ);
-            const BlockInfo& bottomBlock = blockAt(localX, localY - 1, localZ);
-            const BlockInfo& frontBlock = blockAt(localX, localY, localZ + 1);
-            const BlockInfo& backBlock = blockAt(localX, localY, localZ - 1);
-
             if (isOpaqueBlock(rightBlock) && isOpaqueBlock(leftBlock) && isOpaqueBlock(topBlock)
                 && isOpaqueBlock(bottomBlock) && isOpaqueBlock(frontBlock) && isOpaqueBlock(backBlock))
                 return;
@@ -265,6 +264,16 @@ namespace {
             blockLight[4] = frontBlock.blockLight;
             blockLight[5] = backBlock.blockLight;
         }
+
+        const VoxelLighting skyLight {
+            // TODO get rid of static_casts
+            static_cast<std::uint8_t>(leftBlock.skyLight),
+            static_cast<std::uint8_t>(rightBlock.skyLight),
+            static_cast<std::uint8_t>(topBlock.skyLight),
+            static_cast<std::uint8_t>(bottomBlock.skyLight),
+            static_cast<std::uint8_t>(frontBlock.skyLight),
+            static_cast<std::uint8_t>(backBlock.skyLight),
+        };
 
         const std::uint32_t voxelIndex = atomicAdd(voxelCount, 1);
         if (voxelIndex >= params.maxVoxels)
@@ -430,8 +439,25 @@ namespace {
             if (isOutOfBounds)
                 continue;
 
-            atomicMax(&blockAt(worldX, worldY, worldZ).blockLight, blocksCache[x][y][z].light());
+            auto& blockLight = blockAt(worldX, worldY, worldZ).blockLight;
+            if (blockLight < blocksCache[x][y][z].light())
+                atomicMax(&blockLight, blocksCache[x][y][z].light());
         }
+    }
+
+    __global__ void computeSkyLights(CudaBuildParams params, BlockInfo* blocks, HeightMapValueT* heightMap)
+    {
+        const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
+        const std::uint32_t totalElements = params.width * params.height * params.depth;
+        if (index >= totalElements)
+            return;
+
+        const std::uint32_t localX = index % params.width;
+        const std::uint32_t localY = (index / params.width) % params.height;
+        const std::uint32_t localZ = index / (params.width * params.height);
+
+        std::int32_t y = static_cast<std::int32_t>(localY) + params.originY;
+        blocks[index].skyLight = y > heightMap[localX + localZ * params.width] ? 15 : 0;
     }
 
 } // namespace
@@ -591,14 +617,21 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
             m_heightMapDevice);
         cudaCheck(cudaGetLastError(), "buildBlockCacheKernel");
     }
-    // 2. compute lighting
+    // 2. compute block lighting
     {
         constexpr std::int32_t threadCount = s_maxLightComputeQueueLength;
         computeBlockLights<<<s_maxLightSourcesPerGeneration, threadCount, 0, m_stream>>>(
             params, m_lightSourcesDevice, m_lightSourceCountDevice, m_blockCacheDevice);
         cudaCheck(cudaGetLastError(), "computeBlockLightsKernel");
     }
-    // 3. build a terrain for rendering
+    // 3. compute sky lighting
+    {
+        constexpr std::int32_t threadCount = 256;
+        computeSkyLights<<<(blockCount + threadCount - 1) / threadCount, threadCount, 0, m_stream>>>(
+            params, m_blockCacheDevice, m_heightMapDevice);
+        cudaCheck(cudaGetLastError(), "computeSkyLightsKernel");
+    }
+    // 4. build a terrain for rendering
     {
         constexpr std::int32_t threadCount = 256;
         buildTerrainKernel<<<(blockCount + threadCount - 1) / threadCount, threadCount, 0, m_stream>>>(

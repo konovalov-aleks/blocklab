@@ -3,7 +3,7 @@ struct VertexOutput {
     float4 color : TEXCOORD0;
     float3 worldPosition : TEXCOORD1;
     float light : TEXCOORD2;
-    float fog : TEXCOORD3;
+    float4 fog : TEXCOORD3;
     float3 uvMaterial : TEXCOORD4;
     uint layer : SV_RenderTargetArrayIndex;
 };

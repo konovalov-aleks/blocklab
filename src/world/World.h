@@ -3,6 +3,7 @@
 #include "Block.h"
 #include "OverrideCluster.h"
 #include "WorldGenerator.h"
+#include "WorldTime.h"
 
 #include <blocklab/gpu/cuda/CudaSharedFuture.h>
 #include <blocklab/utility/Math.h>
@@ -53,7 +54,9 @@ public:
 
     std::uint32_t seed() const { return m_seed; }
     std::uint64_t version() const { return m_version; }
+
     std::uint64_t logicalTimeMs() const { return m_logicalTimeMs; }
+    WorldTime dayTime() const { return (m_logicalTimeMs / s_tickPeriodMs + m_dayTimeShiftTicks) % s_ticksPerGameDay; }
 
     std::size_t overrideCount() const { return m_overrideCount; }
 
@@ -109,10 +112,12 @@ private:
     void updateCharacters(float dt, Vec3 threatPosition);
     void spawnTestPigs();
 
-    std::uint32_t m_seed = 0;
+    std::size_t m_overrideCount = 0;
     std::uint64_t m_version = 1;
     std::uint64_t m_logicalTimeMs = 0;
-    std::size_t m_overrideCount = 0;
+    std::uint32_t m_seed = 0;
+    WorldTime m_dayTimeShiftTicks = 0;
+
     EntityId m_nextEntityId = 1;
     QuadTree<OverrideClusterColumn> m_overrideColumns;
     std::vector<std::unique_ptr<NPC>> m_characters;

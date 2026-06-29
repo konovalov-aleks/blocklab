@@ -122,6 +122,7 @@ void World::resetSeed(std::uint32_t seed)
     m_overrideColumns.clear();
     m_overrideCount = 0;
     m_blockCache.clear();
+    m_dayTimeShiftTicks = hash(seed) % s_ticksPerGameDay;
     ++m_version;
 }
 

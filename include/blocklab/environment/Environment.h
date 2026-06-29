@@ -26,7 +26,7 @@ struct StepResult {
 
 class Environment {
 public:
-    Environment(Renderer&, std::uint32_t numEnvs);
+    Environment(Renderer&, std::uint32_t numEnvs, std::uint32_t maxSteps = 0);
     ~Environment();
 
     // TODO implement per-batch reset
@@ -38,19 +38,19 @@ public:
     std::uint32_t batchSize() const { return m_batchSize; }
 
 private:
-    static constexpr float s_fixedDt = 1.0f / 60.0f;
-    static constexpr std::int32_t s_maxSteps = 60 * 60 * 5;
+    const Observation& updateObservation();
 
-    std::uint32_t m_batchSize = 0;
+    static constexpr float s_fixedDt = 1.0f / 60.0f;
+
     std::unique_ptr<World[]> m_worlds;
     std::unique_ptr<Agent[]> m_agents;
     const Observation* m_observation = nullptr;
     Renderer& m_renderer;
-    std::unique_ptr<std::int32_t[]> m_stepCounts;
+    std::unique_ptr<std::uint32_t[]> m_stepCounts;
     std::unique_ptr<StepResult[]> m_stepResults;
     std::unique_ptr<AgentState[]> m_renderAgents;
-
-    const Observation& updateObservation();
+    const std::uint32_t m_batchSize;
+    const std::uint32_t m_maxSteps;
 
     friend class test::EnvironmentInternalAccessTestHelper;
     friend class EnvironmentInternalAccessBenchmarkHelper;

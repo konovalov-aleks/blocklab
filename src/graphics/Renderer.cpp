@@ -9,6 +9,7 @@
 #include <characters/meshes/PigMesh.h>
 #include <environment/CudaObservation.h>
 #include <gpu/vulkan/Memory.h>
+#include <world/Lighting.h>
 #include <world/World.h>
 #include <world/WorldGenerator.h>
 
@@ -280,7 +281,7 @@ namespace {
         const vk::AttachmentDescription colorAttachment {
             .format = state.colorFormat,
             .samples = vk::SampleCountFlagBits::e1,
-            .loadOp = vk::AttachmentLoadOp::eClear,
+            .loadOp = vk::AttachmentLoadOp::eDontCare,
             .storeOp = vk::AttachmentStoreOp::eStore,
             .stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
             .stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
@@ -747,6 +748,7 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, cons
     // TODO is it practically possible for logicalTimeMs to exceed std::int32_t max? If so, we should probably wrap it
     // instead of clamping to max.
     assert(world.logicalTimeMs() <= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()));
+    const auto [skyColor, skyLightFactor] = skyColorAndLightFactorAtTime(world.dayTime());
     return {
         .origin = { origin.x, origin.y, origin.z, 0.0f },
         .forward = { forward.x, forward.y, forward.z, 0.0f },
@@ -754,8 +756,19 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, cons
         .up = { up.x, up.y, up.z, 0.0f },
         .worldOriginAndWidth = { 0, 0, 0, static_cast<std::int32_t>(m_state->renderExtent.width) },
         .regionAndHeight = { 0, 0, 0, static_cast<std::int32_t>(m_state->renderExtent.height) },
-        .frameInfo = { .animationTimeMs = static_cast<std::int32_t>(world.logicalTimeMs()) },
-        .tuning = { 48.0f, Pi / 2.25f, 10.0f, 28.0f },
+        .frameInfo = {
+            .animationTimeMs = static_cast<std::int32_t>(world.logicalTimeMs()),
+        },
+        .projectionInfo = {
+            .farPlane = 48.0f,
+            .fovRadians = Pi / 2.25f,
+            .fogStart = 10.0f,
+            .fogEnd = 28.0f,
+        },
+        .skyInfo = {
+            .skyColor = skyColor,
+            .skyLightFactor = skyLightFactor,
+        },
     };
 }
 
@@ -810,7 +823,7 @@ void Renderer::drawFrame()
     const vk::CommandBufferBeginInfo beginInfo;
     vkCheck(commandBuffer.begin(beginInfo), "VkCommandBuffer::begin");
     const vk::ClearValue clearValues[] {
-        vk::ClearColorValue(std::array<float, 4> { 0.42f, 0.64f, 0.86f, 1.0f }),
+        {}, // color unused, loadOp = DontCare (will be cleared per env later)
         vk::ClearDepthStencilValue(1.0f, 0),
     };
     const vk::Rect2D renderArea {
@@ -833,6 +846,30 @@ void Renderer::drawFrame()
         commandBuffer.pushConstants<DrawPushConstants>(
             *m_state->pipelineLayout, vk::ShaderStageFlagBits::eVertex, 0, pushConstants);
     };
+
+    for (std::uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex) {
+        const auto& skyColor = m_renderParams[envIndex].skyInfo.skyColor;
+        const vk::ClearAttachment clearAttachment {
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .colorAttachment = 0,
+            .clearValue = vk::ClearColorValue(std::array<float, 4> {
+                skyColor.r,
+                skyColor.g,
+                skyColor.b,
+                1.0f,
+            }),
+        };
+
+        const vk::ClearRect clearRect {
+            .rect = {
+                .offset = { 0, 0 },
+                .extent = m_state->renderExtent,
+            },
+            .baseArrayLayer = envIndex,
+            .layerCount = 1,
+        };
+        commandBuffer.clearAttachments(clearAttachment, clearRect);
+    }
 
     bool pipelineBound = false;
     for (std::uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex) {

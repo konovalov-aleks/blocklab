@@ -8,6 +8,9 @@ from torch import nn
 import blocklab
 
 
+MAX_STEPS = 60 * 60 * 80  # 4 game days.
+
+
 class TinyPolicy(nn.Module):
     def __init__(self, num_actions: int) -> None:
         super().__init__()
@@ -32,7 +35,13 @@ def main() -> None:
     parser.add_argument("--device", default=None)
     args = parser.parse_args()
 
-    env = blocklab.make(num_envs=args.num_envs, width=args.width, height=args.height, device=args.device)
+    env = blocklab.make(
+        num_envs=args.num_envs,
+        width=args.width,
+        height=args.height,
+        device=args.device,
+        max_steps=MAX_STEPS,
+    )
     obs, _ = env.reset()
     obs = torch.from_dlpack(obs)
     policy = TinyPolicy(env.single_action_space_n).to(obs.device)

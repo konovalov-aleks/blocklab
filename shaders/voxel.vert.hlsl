@@ -134,9 +134,12 @@ VertexOutput voxelVertexMain(uint vertexId : SV_VertexID)
     float viewZ = dot(relative, params.forward.xyz);
 
     float nearPlane = 0.05;
-    float farPlane = params.tuning.x;
-    float tanHalfFov = tan(params.tuning.y * 0.5);
+    float farPlane = params.projectionInfo.farPlane;
+    float tanHalfFov = tan(params.projectionInfo.fovRadians * 0.5);
     float aspect = float(params.worldOriginAndWidth.w) / float(params.regionAndHeight.w);
+
+    float fogIntensity = saturate(
+        (viewZ - params.projectionInfo.fogStart) / max(params.projectionInfo.fogEnd - params.projectionInfo.fogStart, 0.001));
 
     VertexOutput output;
     output.position.x = viewX / (aspect * tanHalfFov);
@@ -145,12 +148,10 @@ VertexOutput voxelVertexMain(uint vertexId : SV_VertexID)
     output.position.w = viewZ;
     output.color = float4(1.0, 0.0, 1.0, 1.0); // color is not used for voxels, but we set pink color for debugging purposes
     output.worldPosition = worldPosition;
-    // TODO temporary hack not to show a blackscreen if the scene has no light sources
-    // !!! need to remove it if the sky light is implemented !!!
-    // correct form: output.light = (max(skyLight, blockLight)) / 15.0;
-    output.light = (1 + max(skyLight, blockLight)) / 16.0;
+    float currentSkyLight = float(skyLight) * params.skyInfo.skyLightFactor / 15.0;
+    output.light = max(currentSkyLight, blockLight / 15.0);
     output.uvMaterial = float3(CUBE_UV[vertexInVoxelIndex], FACE_MATERIALS[blockType][faceIndex]);
-    output.fog = saturate((viewZ - params.tuning.z) / max(params.tuning.w - params.tuning.z, 0.001));
+    output.fog = float4(params.skyInfo.skyColor, fogIntensity);
     output.layer = pushConstants.layerIndex;
     return output;
 }

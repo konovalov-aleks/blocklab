@@ -66,7 +66,7 @@ namespace {
 
     class NativeEnvironment {
     public:
-        NativeEnvironment(std::uint32_t numEnvs, std::uint32_t width, std::uint32_t height, std::uint32_t seed)
+        NativeEnvironment(std::uint32_t numEnvs, std::uint32_t width, std::uint32_t height, std::uint32_t seed, std::uint32_t maxSteps)
             : m_numEnvs(numEnvs)
             , m_width(width)
             , m_height(height)
@@ -81,7 +81,7 @@ namespace {
                       .height = static_cast<std::int32_t>(height),
                       .batchSize = numEnvs,
                   })
-            , m_environment(m_renderer, numEnvs)
+            , m_environment(m_renderer, numEnvs, maxSteps)
         {
             if (numEnvs == 0U) [[unlikely]]
                 fatalError("num_envs must be positive");
@@ -271,8 +271,8 @@ PYBIND11_MODULE(_native, module)
         .def_readonly("truncated", &blocklab::StepResult::truncated);
 
     py::class_<blocklab::NativeEnvironment>(module, "NativeEnvironment")
-        .def(py::init<std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t>(), py::arg("num_envs") = 1,
-            py::arg("width") = 160, py::arg("height") = 90, py::arg("seed") = 1)
+        .def(py::init<std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t>(), py::arg("num_envs") = 1,
+            py::arg("width") = 160, py::arg("height") = 90, py::arg("seed") = 1, py::arg("max_steps") = 0)
         .def("reset", &blocklab::NativeEnvironment::reset, py::arg("seed") = 1)
         .def("step", &blocklab::NativeEnvironment::step, py::arg("actions"))
         .def("observe", &blocklab::NativeEnvironment::observe)

@@ -111,6 +111,7 @@ add_library(blocklab_env
     src/characters/PigCharacter.cpp
     src/environment/Agent.cpp
     src/environment/Environment.cpp
+    src/world/Lighting.cpp
     src/world/OverrideCluster.cpp
     src/world/World.cpp
 )

@@ -9,6 +9,9 @@ import torch
 import blocklab
 
 
+DEFAULT_MAX_STEPS = 60 * 60 * 80  # 4 game days.
+
+
 class RandomAgent:
     def __init__(self, *, min_action_steps: int, max_action_steps: int) -> None:
         self._min_action_steps = min_action_steps
@@ -62,10 +65,18 @@ def main() -> None:
     parser.add_argument("--report-interval", type=float, default=1.0)
     parser.add_argument("--action-steps", type=parse_action_steps, default=(20, 160))
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS)
     parser.add_argument("--materialize-observation", action="store_true")
     args = parser.parse_args()
 
-    env = blocklab.make(num_envs=args.num_envs, width=args.width, height=args.height, device=args.device, seed=args.seed)
+    env = blocklab.make(
+        num_envs=args.num_envs,
+        width=args.width,
+        height=args.height,
+        device=args.device,
+        seed=args.seed,
+        max_steps=args.max_steps,
+    )
     rng = random.Random(args.seed)
     random_agents = [
         RandomAgent(min_action_steps=args.action_steps[0], max_action_steps=args.action_steps[1])

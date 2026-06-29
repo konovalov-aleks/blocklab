@@ -42,6 +42,17 @@ public:
     struct RenderParams {
         struct alignas(16) FrameInfo {
             std::int32_t animationTimeMs = 0;
+            std::int32_t padding[3] = {};
+        };
+        struct alignas(16) ProjectionInfo {
+            float farPlane;
+            float fovRadians;
+            float fogStart;
+            float fogEnd;
+        };
+        struct alignas(16) SkyInfo {
+            Vec3 skyColor;
+            float skyLightFactor;
         };
 
         Vec4 origin;
@@ -51,7 +62,8 @@ public:
         IVec4 worldOriginAndWidth;
         IVec4 regionAndHeight;
         FrameInfo frameInfo;
-        Vec4 tuning;
+        ProjectionInfo projectionInfo;
+        SkyInfo skyInfo;
     };
     struct EntityInstance {
         Vec4 positionAndYaw;
@@ -64,6 +76,8 @@ public:
         std::uint32_t padding1 = 0;
     };
     static_assert(sizeof(RenderParams::FrameInfo) == sizeof(IVec4));
+    static_assert(sizeof(RenderParams::ProjectionInfo) == sizeof(Vec4));
+    static_assert(sizeof(RenderParams::SkyInfo) == sizeof(Vec4));
 
     struct RenderSlot;
     struct VulkanState;

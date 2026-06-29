@@ -54,9 +54,12 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
     float viewZ = dot(relative, params.forward.xyz);
 
     float nearPlane = 0.05;
-    float farPlane = params.tuning.x;
-    float tanHalfFov = tan(params.tuning.y * 0.5);
+    float farPlane = params.projectionInfo.farPlane;
+    float tanHalfFov = tan(params.projectionInfo.fovRadians * 0.5);
     float aspect = float(params.worldOriginAndWidth.w) / float(params.regionAndHeight.w);
+
+    float fogIntensity = saturate(
+        (viewZ - params.projectionInfo.fogStart) / max(params.projectionInfo.fogEnd - params.projectionInfo.fogStart, 0.001));
 
     VertexOutput output;
     output.position.x = viewX / (aspect * tanHalfFov);
@@ -67,7 +70,7 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
     output.worldPosition = worldPosition;
     output.light = vertex.colorAndLight.a;
     output.uvMaterial = vertex.uvMaterial.xyz;
-    output.fog = saturate((viewZ - params.tuning.z) / max(params.tuning.w - params.tuning.z, 0.001));
+    output.fog = float4(params.skyInfo.skyColor, fogIntensity);
     output.layer = pushConstants.layerIndex;
     return output;
 }
