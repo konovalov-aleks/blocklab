@@ -1,5 +1,6 @@
 #include "WorldGenerator.h"
 
+#include "LightSourceBuffer.h"
 #include <blocklab/gpu/cuda/CudaHelpers.h>
 #include <gpu/cuda/PageLockedVector.h>
 #include <utility/Hash.h>
@@ -85,8 +86,9 @@ namespace {
         std::int32_t originZ;
         std::int32_t overrideCount;
         std::uint32_t maxVoxels;
-        std::uint32_t maxLightSources;
     };
+
+    using LightSourcesDevice = worldgen::LightSourceBuffer::DeviceData;
 
     std::int64_t packKeyHost(std::int32_t x, std::int32_t y, std::int32_t z)
     {
@@ -157,7 +159,7 @@ namespace {
     }
 
     __global__ void buildBlockCacheKernel(CudaBuildParams params, const CudaOverride* overrides, TerrainHeader* header,
-        uchar3* lightSources, std::uint32_t* lightSourceCount, BlockInfo* blocks, HeightMapValueT* heightMap)
+        LightSourcesDevice lightSources, BlockInfo* blocks, HeightMapValueT* heightMap)
     {
         if (blockIdx.x == 0 && blockIdx.y == 0 && threadIdx.x == 0) {
             header->originX = params.originX;
@@ -181,14 +183,14 @@ namespace {
         blocks[index].skyLight = 0;
 
         if (block == Block::Torch) {
-            const std::uint32_t lightSourceIndex = atomicAdd(lightSourceCount, 1);
-            if (lightSourceIndex < params.maxLightSources) {
+            const std::uint32_t lightSourceIndex = atomicAdd(lightSources.size, 1);
+            if (lightSourceIndex < lightSources.capacity) {
                 // If the buffer is not large enough, we simply skip this light source and increase
                 // the buffer size only for the next frame.
                 //
                 // Lighting is an eventually consistent visual/sensory field.
                 // So, it's not a critical problem if some lights will be activated with one frame delay.
-                lightSources[lightSourceIndex] = make_uchar3(localX, localY, localZ);
+                lightSources.data[lightSourceIndex] = make_uchar3(localX, localY, localZ);
             }
         }
 
@@ -337,16 +339,24 @@ namespace {
         std::uint8_t data;
     };
 
-    __global__ void computeBlockLights(
-        CudaBuildParams params, uchar3* lightSources, const std::uint32_t* lightSourceCount, BlockInfo* blocks)
+    struct BlockLightAdapter {
+        static __device__ auto& light(BlockInfo& block) { return block.blockLight; }
+    };
+
+    struct SkyLightAdapter {
+        static __device__ auto& light(BlockInfo& block) { return block.skyLight; }
+    };
+
+    template <typename Adapter>
+    __global__ void propagateLights(CudaBuildParams params, LightSourcesDevice lightSources, BlockInfo* blocks)
     {
         // lightSourceCount is the actual number of light sources found in the current scene. It may be larger than
         // the currently allocated lightSources buffer: overflowed sources are skipped for this frame and capacity
         // grows before the next one.
-        const std::uint32_t sourceCount = min(*lightSourceCount, params.maxLightSources);
+        const std::uint32_t sourceCount = min(*lightSources.size, lightSources.capacity);
 
         for (std::uint32_t lightIndex = blockIdx.x; lightIndex < sourceCount; lightIndex += gridDim.x) {
-            const uchar3& light = lightSources[lightIndex];
+            const uchar3& light = lightSources.data[lightIndex];
 
             const auto center = s_maxLightPropagationDistance;
             const auto dim = s_maxLightPropagationDistance * 2 + 1;
@@ -446,14 +456,15 @@ namespace {
                 if (isOutOfBounds)
                     continue;
 
-                auto& blockLight = blockAt(worldX, worldY, worldZ).blockLight;
-                if (blockLight < blocksCache[x][y][z].light())
-                    atomicMax(&blockLight, blocksCache[x][y][z].light());
+                auto& light = Adapter::light(blockAt(worldX, worldY, worldZ));
+                if (light < blocksCache[x][y][z].light())
+                    atomicMax(&light, blocksCache[x][y][z].light());
             }
         }
     }
 
-    __global__ void computeSkyLights(CudaBuildParams params, BlockInfo* blocks, HeightMapValueT* heightMap)
+    __global__ void computeSkyLightsInitialVertical(
+        CudaBuildParams params, BlockInfo* blocks, HeightMapValueT* heightMap)
     {
         const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
         const std::uint32_t totalElements = params.width * params.height * params.depth;
@@ -468,24 +479,100 @@ namespace {
         blocks[index].skyLight = y > heightMap[localX + localZ * params.width] ? 15 : 0;
     }
 
+    __global__ void initSkyLightsPropagation(
+        CudaBuildParams params, LightSourcesDevice lightSources, BlockInfo* blocks, HeightMapValueT* heightMap)
+    {
+        static constexpr int2 s_directions[] = {
+            { 1, 0 },
+            { -1, 0 },
+            { 0, 1 },
+            { 0, -1 },
+        };
+
+        // true if the block is a start point for sky light propagation
+        // (e.g. cave entrance)
+        extern __shared__ bool blocksToAddY[];
+        __shared__ int minHeightToAdd;
+        __shared__ int maxHeightToAdd;
+        if (threadIdx.x == 0) {
+            std::memset(blocksToAddY, 0, sizeof(bool) * params.height);
+            minHeightToAdd = INT32_MAX;
+            maxHeightToAdd = INT32_MIN;
+        }
+        __syncthreads();
+
+        const int localX = blockIdx.x;
+        const int localZ = blockIdx.y;
+
+        const unsigned direction = threadIdx.x;
+        const int neighborLocalX = localX + s_directions[direction].x;
+        const int neighborLocalZ = localZ + s_directions[direction].y;
+
+        // TODO implement inter-chunk light propagation
+        if (neighborLocalX >= 0 && neighborLocalX < params.width && neighborLocalZ >= 0
+            && neighborLocalZ < params.depth) {
+
+            const auto blockAt = [blocks, &params](std::int32_t x, std::int32_t y, std::int32_t z) -> BlockInfo& {
+                return blocks[x + params.width * (y + params.height * z)];
+            };
+
+            const HeightMapValueT curHeight = heightMap[localX + params.width * localZ];
+            const HeightMapValueT neighborHeight = heightMap[neighborLocalX + params.width * neighborLocalZ];
+
+            const int curHeightLocal = curHeight - params.originY;
+            const int neighborHeightLocal = neighborHeight - params.originY;
+
+            assert(curHeightLocal >= -1 && curHeightLocal < params.height);
+            assert(neighborHeightLocal >= -1 && neighborHeightLocal < params.height);
+
+            assert(curHeightLocal < 0 || isOpaqueBlock(blockAt(localX, curHeightLocal, localZ).blockType));
+            assert(curHeightLocal < 0 || blockAt(localX, curHeightLocal, localZ).skyLight == 0);
+            assert(!isOpaqueBlock(blockAt(localX, curHeightLocal + 1, localZ).blockType));
+            assert(blockAt(localX, curHeightLocal + 1, localZ).skyLight == 15);
+
+            for (int y = curHeightLocal + 1; y < neighborHeightLocal; ++y) {
+                const BlockInfo& neighborBlock = blockAt(neighborLocalX, y, neighborLocalZ);
+                if (!isOpaqueBlock(neighborBlock.blockType)) {
+                    blocksToAddY[y] = true;
+                    if (minHeightToAdd > y)
+                        atomicMin(&minHeightToAdd, y);
+                    if (maxHeightToAdd < y)
+                        atomicMax(&maxHeightToAdd, y);
+                }
+            }
+        }
+
+        __syncthreads();
+        if (threadIdx.x != 0)
+            return;
+
+        for (std::int32_t y = minHeightToAdd; y <= maxHeightToAdd; ++y) {
+            if (blocksToAddY[y]) {
+                const std::uint32_t lightSourceIndex = atomicAdd(lightSources.size, 1U);
+                if (lightSourceIndex < lightSources.capacity) {
+                    // If the buffer is not large enough, we simply skip this light source and increase
+                    // the buffer size only for the next frame.
+                    //
+                    // Lighting is an eventually consistent visual/sensory field.
+                    // So, it's not a critical problem if some lights will be activated with one frame delay.
+                    lightSources.data[lightSourceIndex] = make_uchar3(localX, y, localZ);
+                }
+            }
+        }
+    }
+
 } // namespace
 
 class WorldGenerator::Impl {
 public:
     Impl()
-        : m_lightSourcesCapacity(s_lightSourcesInitialCapacity)
+        : m_blockLightBuffer(s_blockLightSourcesInitialCapacity)
+        , m_skyLightBuffer(s_skyLightSourcesInitialCapacity)
     {
         cudaCheck(cudaStreamCreateWithFlags(&m_stream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags");
 
         cudaCheck(cudaMalloc(&m_voxelCountDevice, sizeof(*m_voxelCountDevice)), "cudaMalloc voxelCount");
         cudaCheck(cudaMallocHost(&m_voxelCountHost, sizeof(*m_voxelCountHost)), "cudaMallocHost voxelCount");
-
-        allocLightSources();
-        cudaCheck(
-            cudaMalloc(&m_lightSourceCountDevice, sizeof(*m_lightSourceCountDevice)), "cudaMalloc lightSourceCount");
-        cudaCheck(cudaMallocHost(&m_lightSourceCountHost, sizeof(*m_lightSourceCountHost)),
-            "cudaMallocHost lightSourceCount");
-        *m_lightSourceCountHost = 0;
     }
 
     ~Impl()
@@ -500,10 +587,6 @@ public:
         cudaFree(m_blockCacheDevice);
         cudaFree(m_heightMapDevice);
 
-        cudaFree(m_lightSourcesDevice);
-        cudaFree(m_lightSourceCountDevice);
-        cudaFreeHost(m_lightSourceCountHost);
-
         cudaStreamDestroy(m_stream);
     }
 
@@ -511,13 +594,11 @@ public:
     CudaFuture<WorldGenerationOutput> generate(const WorldGenerationInput&, WorldGenerationBuffers&&);
 
 private:
-    static constexpr std::uint32_t s_lightSourcesInitialCapacity = 64;
+    static constexpr std::uint32_t s_blockLightSourcesInitialCapacity = 32;
+    static constexpr std::uint32_t s_skyLightSourcesInitialCapacity = 64;
 
-    void allocLightSources()
-    {
-        cudaCheck(cudaMalloc(&m_lightSourcesDevice, sizeof(*m_lightSourcesDevice) * m_lightSourcesCapacity),
-            "cudaMalloc lightSource");
-    }
+    template <typename Adapter>
+    void enqueueLightPropagation(cudaStream_t, const CudaBuildParams&, worldgen::LightSourceBuffer&);
 
     PageLockedVector<CudaOverride> m_packedOverrides;
     CudaOverride* m_overridesDevice = nullptr;
@@ -532,10 +613,8 @@ private:
     HeightMapValueT* m_heightMapDevice = nullptr;
     std::uint32_t m_heightMapCapacity = 0;
 
-    std::uint32_t m_lightSourcesCapacity;
-    uchar3* m_lightSourcesDevice = nullptr;
-    std::uint32_t* m_lightSourceCountDevice = nullptr;
-    std::uint32_t* m_lightSourceCountHost = nullptr;
+    worldgen::LightSourceBuffer m_blockLightBuffer;
+    worldgen::LightSourceBuffer m_skyLightBuffer;
 
     cudaStream_t m_stream = nullptr;
 
@@ -587,15 +666,13 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
             cudaMalloc(&m_heightMapDevice, sizeof(*m_heightMapDevice) * m_heightMapCapacity), "cudaMalloc heightMap");
     }
 
-    // m_lightSourceCountHost is copied from the previous generation at the end of the CUDA stream. If that generation
-    // discovered more sources than fit into the buffer, this generation grows the buffer before launching new work.
-    if (*m_lightSourceCountHost > m_lightSourcesCapacity) {
-        while (m_lightSourcesCapacity < *m_lightSourceCountHost)
-            m_lightSourcesCapacity *= 2;
-
-        cudaFree(m_lightSourcesDevice);
-        allocLightSources();
-    }
+    // buffer.size() is a number of light sources from the previous generation.
+    // If that generation discovered more sources than fit into the buffer, this generation
+    // grows the buffer before launching new work.
+    if (m_blockLightBuffer.size() > m_blockLightBuffer.capacity())
+        m_blockLightBuffer.reserve(m_blockLightBuffer.size());
+    if (m_skyLightBuffer.size() > m_skyLightBuffer.capacity())
+        m_skyLightBuffer.reserve(m_skyLightBuffer.size());
 
     PageLockedVector<CudaOverride>& packedOverrides = m_packedOverrides;
     packedOverrides.clear();
@@ -623,8 +700,9 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
 
     cudaCheck(
         cudaMemsetAsync(m_voxelCountDevice, 0, sizeof(*m_voxelCountDevice), m_stream), "cudaMemsetAsync voxelCount");
-    cudaCheck(cudaMemsetAsync(m_lightSourceCountDevice, 0, sizeof(*m_lightSourceCountDevice), m_stream),
-        "cudaMemsetAsync lightSourceCount");
+
+    m_blockLightBuffer.enqueueClear(m_stream);
+    m_skyLightBuffer.enqueueClear(m_stream);
 
     const CudaBuildParams params {
         .seed = input.seed,
@@ -639,31 +717,30 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
         .originZ = input.origin.z,
         .overrideCount = static_cast<std::int32_t>(packedOverrides.size()),
         .maxVoxels = buffers.terrain.maxVoxels,
-        .maxLightSources = m_lightSourcesCapacity,
     };
 
     // 1. build a dense block cache
     {
         buildBlockCacheKernel<<<{ params.width, params.depth }, params.height, 0, m_stream>>>(params, m_overridesDevice,
-            buffers.terrain.header, m_lightSourcesDevice, m_lightSourceCountDevice, m_blockCacheDevice,
-            m_heightMapDevice);
+            buffers.terrain.header, m_blockLightBuffer.deviceData(), m_blockCacheDevice, m_heightMapDevice);
         cudaCheck(cudaGetLastError(), "buildBlockCacheKernel");
     }
     // 2. compute block lighting
-    {
-        constexpr std::uint32_t maxBlockCount = 512;
-        constexpr std::uint32_t kernelThreadCount = s_maxLightComputeQueueLength;
-        const std::int32_t kernelBlockCount = std::min(m_lightSourcesCapacity, maxBlockCount);
-        computeBlockLights<<<kernelBlockCount, kernelThreadCount, 0, m_stream>>>(
-            params, m_lightSourcesDevice, m_lightSourceCountDevice, m_blockCacheDevice);
-        cudaCheck(cudaGetLastError(), "computeBlockLightsKernel");
-    }
+    enqueueLightPropagation<BlockLightAdapter>(m_stream, params, m_blockLightBuffer);
+
     // 3. compute sky lighting
     {
         constexpr std::int32_t threadCount = 256;
-        computeSkyLights<<<(blockCount + threadCount - 1) / threadCount, threadCount, 0, m_stream>>>(
+        computeSkyLightsInitialVertical<<<(blockCount + threadCount - 1) / threadCount, threadCount, 0, m_stream>>>(
             params, m_blockCacheDevice, m_heightMapDevice);
-        cudaCheck(cudaGetLastError(), "computeSkyLightsKernel");
+        cudaCheck(cudaGetLastError(), "computeSkyLightsInitialVerticalKernel");
+
+        const std::int32_t sharedMemSize = sizeof(bool) * params.height;
+        initSkyLightsPropagation<<<{ params.width, params.depth }, 4, sharedMemSize, m_stream>>>(
+            params, m_skyLightBuffer.deviceData(), m_blockCacheDevice, m_heightMapDevice);
+        cudaCheck(cudaGetLastError(), "initSkyLightsPropagationKernel");
+
+        enqueueLightPropagation<SkyLightAdapter>(m_stream, params, m_skyLightBuffer);
     }
     // 4. build a terrain for rendering
     {
@@ -673,9 +750,8 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
         cudaCheck(cudaGetLastError(), "buildTerrainKernel");
     }
 
-    cudaCheck(cudaMemcpyAsync(m_lightSourceCountHost, m_lightSourceCountDevice, sizeof(*m_lightSourceCountHost),
-                  cudaMemcpyDeviceToHost, m_stream),
-        "cudaMemcpyAsync lightSourceCount");
+    m_blockLightBuffer.enqueueUploadSize(m_stream);
+    m_skyLightBuffer.enqueueUploadSize(m_stream);
 
     cudaCheck(cudaMemcpyAsync(
                   m_voxelCountHost, m_voxelCountDevice, sizeof(*m_voxelCountHost), cudaMemcpyDeviceToHost, m_stream),
@@ -705,6 +781,21 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
         outputStorage->voxelCount = std::min(*m_voxelCountHost, outputStorage->buffers.terrain.maxVoxels);
         return std::move(*outputStorage);
     });
+}
+
+template <typename Adapter>
+void WorldGenerator::Impl::enqueueLightPropagation(
+    cudaStream_t stream, const CudaBuildParams& params, worldgen::LightSourceBuffer& buffer)
+{
+    constexpr std::uint32_t maxBlockCount = 512;
+    constexpr std::uint32_t kernelThreadCount = s_maxLightComputeQueueLength;
+    // we can't use exact size here, because it's unknown right here, it will be computed asynchronously on GPU side
+    const std::int32_t kernelBlockCount = std::min(buffer.capacity(), maxBlockCount);
+    if (kernelBlockCount) [[likely]] {
+        propagateLights<Adapter>
+            <<<kernelBlockCount, kernelThreadCount, 0, stream>>>(params, buffer.deviceData(), m_blockCacheDevice);
+        cudaCheck(cudaGetLastError(), "propagateLightsKernel");
+    }
 }
 
 } // namespace blocklab

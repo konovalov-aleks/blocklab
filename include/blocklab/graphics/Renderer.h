@@ -52,7 +52,8 @@ public:
         };
         struct alignas(16) SkyInfo {
             Vec3 skyColor;
-            float skyLightFactor;
+            // currentLight = max(0, block.skyLight - skyLightDimming)
+            std::uint32_t skyLightDimming;
         };
 
         Vec4 origin;

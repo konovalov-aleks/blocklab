@@ -14,7 +14,7 @@ struct RenderProjectionInfo {
 
 struct RenderSkyInfo {
     float3 skyColor;
-    float skyLightFactor;
+    uint skyLightDimming;
 };
 
 struct RenderParams {

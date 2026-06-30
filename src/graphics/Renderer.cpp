@@ -748,7 +748,9 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, cons
     // TODO is it practically possible for logicalTimeMs to exceed std::int32_t max? If so, we should probably wrap it
     // instead of clamping to max.
     assert(world.logicalTimeMs() <= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()));
-    const auto [skyColor, skyLightFactor] = skyColorAndLightFactorAtTime(world.dayTime());
+    const Vec3 skyColor = skyColorAtTime(world.dayTime());
+    const std::uint8_t skyLight = skyLightAtTime(world.dayTime());
+    assert(skyLight >= 0 && skyLight <= 15);
     return {
         .origin = { origin.x, origin.y, origin.z, 0.0f },
         .forward = { forward.x, forward.y, forward.z, 0.0f },
@@ -767,7 +769,7 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, cons
         },
         .skyInfo = {
             .skyColor = skyColor,
-            .skyLightFactor = skyLightFactor,
+            .skyLightDimming = 15U - skyLight,
         },
     };
 }
