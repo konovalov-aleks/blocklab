@@ -6,7 +6,6 @@
 #include <utility/Hash.h>
 
 #include <cuda_runtime.h>
-#include <thrust/optional.h>
 
 #include <algorithm>
 #include <cassert>
@@ -28,8 +27,13 @@ class Voxel {
 public:
     __device__ Voxel(uint3 pos, Block blockType, std::uint8_t visibleFaces, const VoxelLighting& blockLight,
         const VoxelLighting& skyLight)
-        : m_data(static_cast<std::uint8_t>(blockType) | (visibleFaces << 5) | (pos.z << 11) | (pos.y << 17)
-              | (pos.x << 26))
+        : m_data(
+            static_cast<std::uint8_t>(blockType)
+            | (visibleFaces << 5)
+            | (pos.z << 11)
+            | (pos.y << 17)
+            | (pos.x << 26)
+        )
         , m_blockLight(packLighting(blockLight))
         , m_skyLight(packLighting(skyLight))
     {
@@ -93,13 +97,15 @@ namespace {
     std::int64_t packKeyHost(std::int32_t x, std::int32_t y, std::int32_t z)
     {
         return ((std::int64_t { x + CoordBias } & CoordMask) << 42)
-            | ((std::int64_t { y + CoordBias } & CoordMask) << 21) | (std::int64_t { z + CoordBias } & CoordMask);
+             | ((std::int64_t { y + CoordBias } & CoordMask) << 21)
+             | (std::int64_t { z + CoordBias } & CoordMask);
     }
 
-    __device__ std::int64_t packKeyDevice(std::int32_t x, std::int32_t y, std::int32_t z)
+    __device__ std::int64_t packKeyDevice(int3 pos)
     {
-        return ((std::int64_t { x + CoordBias } & CoordMask) << 42)
-            | ((std::int64_t { y + CoordBias } & CoordMask) << 21) | (std::int64_t { z + CoordBias } & CoordMask);
+        return ((std::int64_t { pos.x + CoordBias } & CoordMask) << 42)
+              | ((std::int64_t { pos.y + CoordBias } & CoordMask) << 21)
+              | (std::int64_t { pos.z + CoordBias } & CoordMask);
     }
 
     __device__ float valueNoise(std::uint32_t seed, std::int32_t x, std::int32_t z)
@@ -119,43 +125,46 @@ namespace {
         return 9.0f + low + high + diagonal + rough;
     }
 
-    __device__ Block generatedBlock(std::uint32_t seed, std::int32_t x, std::int32_t y, std::int32_t z)
+    __device__ Block generatedBlock(std::uint32_t seed, int3 pos)
     {
-        std::int32_t height = static_cast<std::int32_t>(terrainHeight(seed, x, z));
-        if (y > height)
+        const std::int32_t height =
+            static_cast<std::int32_t>(terrainHeight(seed, pos.x, pos.z));
+        if (pos.y > height)
             return Block::Air;
-        if (y == height)
+        if (pos.y == height)
             return Block::Grass;
-        if (y > height - 4)
+        if (pos.y > height - 4)
             return Block::Dirt;
         return Block::Stone;
     }
 
-    __device__ thrust::optional<Block> overriddenBlock(
-        const CudaOverride* overrides, std::int32_t count, std::int32_t x, std::int32_t y, std::int32_t z)
+    __device__ bool overriddenBlock(Block& result, const CudaOverride* overrides, std::int32_t count, int3 pos)
     {
-        const std::int64_t key = packKeyDevice(x, y, z);
+        const std::int64_t key = packKeyDevice(pos);
         std::int32_t left = 0;
         std::int32_t right = count - 1;
         while (left <= right) {
             const std::int32_t mid = left + (right - left) / 2;
             const std::int64_t midKey = overrides[mid].key;
-            if (midKey == key)
-                return overrides[mid].block;
+            if (midKey == key) {
+                result = overrides[mid].block;
+                return true;
+            }
             if (midKey < key)
                 left = mid + 1;
             else
                 right = mid - 1;
         }
-        return thrust::nullopt;
+        return false;
     }
 
     __device__ Block blockAt(
-        const CudaBuildParams params, const CudaOverride* overrides, std::int32_t x, std::int32_t y, std::int32_t z)
+        const CudaBuildParams params, const CudaOverride* overrides, int3 pos)
     {
-        if (thrust::optional<Block> overrideBlock = overriddenBlock(overrides, params.overrideCount, x, y, z))
-            return *overrideBlock;
-        return generatedBlock(params.seed, x, y, z);
+        Block result;
+        if (!overriddenBlock(result, overrides, params.overrideCount, pos))
+            result = generatedBlock(params.seed, pos);
+        return result;
     }
 
     __global__ void buildBlockCacheKernel(CudaBuildParams params, const CudaOverride* overrides, TerrainHeader* header,
@@ -172,11 +181,12 @@ namespace {
         const std::int32_t localZ = blockIdx.y;
         const std::int32_t index = localX + params.width * (localY + params.height * localZ);
 
-        const std::int32_t x = params.originX + localX;
-        const std::int32_t y = params.originY + localY;
-        const std::int32_t z = params.originZ + localZ;
-
-        const Block block = blockAt(params, overrides, x, y, z);
+        const int3 pos = {
+            params.originX + localX,
+            params.originY + localY,
+            params.originZ + localZ,
+        };
+        const Block block = blockAt(params, overrides, pos);
 
         blocks[index].blockType = block;
         blocks[index].blockLight = 0;
@@ -199,8 +209,8 @@ namespace {
             maxHeight = params.originY - 1;
         __syncthreads();
 
-        if (maxHeight < y && isSolidBlock(block))
-            atomicMax(&maxHeight, y);
+        if (maxHeight < pos.y && isSolidBlock(block))
+            atomicMax(&maxHeight, pos.y);
         __syncthreads();
 
         if (threadIdx.x == 0)
