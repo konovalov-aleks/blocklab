@@ -12,29 +12,35 @@ namespace {
         return static_cast<float>(static_cast<std::uint32_t>(material));
     }
 
-    void appendMeshFace(MeshVertex*& vertices, Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, Vec3 color, float shade,
-        Material material, float animationPhase)
+    void appendMeshFace(
+        MeshVertex*& vertices, Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, Vec3 color, Material material, float animationPhase)
     {
-        const Vec4 packedColor { color, shade };
+        const Vec4 normal { glm::normalize(glm::cross(p1 - p0, p2 - p0)), 0.0f };
         const float materialId = meshMaterialId(material);
         vertices[0] = { .position = { p0, animationPhase },
-            .colorAndLight = packedColor,
-            .uvMaterial = { 0.0f, 0.0f, materialId, 0.0f } };
+            .normal = normal,
+            .uvMaterial = { 0.0f, 0.0f, materialId, 0.0f },
+            .color = color };
         vertices[1] = { .position = { p1, animationPhase },
-            .colorAndLight = packedColor,
-            .uvMaterial = { 1.0f, 0.0f, materialId, 0.0f } };
+            .normal = normal,
+            .uvMaterial = { 1.0f, 0.0f, materialId, 0.0f },
+            .color = color };
         vertices[2] = { .position = { p2, animationPhase },
-            .colorAndLight = packedColor,
-            .uvMaterial = { 1.0f, 1.0f, materialId, 0.0f } };
+            .normal = normal,
+            .uvMaterial = { 1.0f, 1.0f, materialId, 0.0f },
+            .color = color };
         vertices[3] = { .position = { p0, animationPhase },
-            .colorAndLight = packedColor,
-            .uvMaterial = { 0.0f, 0.0f, materialId, 0.0f } };
+            .normal = normal,
+            .uvMaterial = { 0.0f, 0.0f, materialId, 0.0f },
+            .color = color };
         vertices[4] = { .position = { p2, animationPhase },
-            .colorAndLight = packedColor,
-            .uvMaterial = { 1.0f, 1.0f, materialId, 0.0f } };
+            .normal = normal,
+            .uvMaterial = { 1.0f, 1.0f, materialId, 0.0f },
+            .color = color };
         vertices[5] = { .position = { p3, animationPhase },
-            .colorAndLight = packedColor,
-            .uvMaterial = { 0.0f, 1.0f, materialId, 0.0f } };
+            .normal = normal,
+            .uvMaterial = { 0.0f, 1.0f, materialId, 0.0f },
+            .color = color };
         vertices += 6;
     }
 
@@ -49,18 +55,18 @@ namespace {
         const Vec3 p011 { min.x, max.y, max.z };
         const Vec3 p111 { max.x, max.y, max.z };
         const Material material = color.g > 0.6f ? Material::PigSnout : Material::PigSkin;
-        appendMeshFace(vertices, p010, p011, p111, p110, color, 1.0f, material, animationPhase);
-        appendMeshFace(vertices, p000, p100, p101, p001, color, 0.48f, material, animationPhase);
-        appendMeshFace(vertices, p100, p110, p111, p101, color, 0.78f, material, animationPhase);
-        appendMeshFace(vertices, p000, p001, p011, p010, color, 0.78f, material, animationPhase);
-        appendMeshFace(vertices, p001, p101, p111, p011, color, 0.68f, material, animationPhase);
-        appendMeshFace(vertices, p000, p010, p110, p100, color, 0.68f, material, animationPhase);
+        appendMeshFace(vertices, p010, p011, p111, p110, color, material, animationPhase);
+        appendMeshFace(vertices, p000, p100, p101, p001, color, material, animationPhase);
+        appendMeshFace(vertices, p100, p110, p111, p101, color, material, animationPhase);
+        appendMeshFace(vertices, p000, p001, p011, p010, color, material, animationPhase);
+        appendMeshFace(vertices, p001, p101, p111, p011, color, material, animationPhase);
+        appendMeshFace(vertices, p000, p010, p110, p100, color, material, animationPhase);
     }
 
     void appendMeshPatch(MeshVertex*& vertices, Vec3 min, Vec3 max, float z, Vec3 color)
     {
         appendMeshFace(vertices, { min.x, min.y, z }, { max.x, min.y, z }, { max.x, max.y, z }, { min.x, max.y, z },
-            color, 1.0f, Material::VertexColor, 0.0f);
+            color, Material::VertexColor, 0.0f);
     }
 
 } // namespace

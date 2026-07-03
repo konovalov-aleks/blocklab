@@ -41,8 +41,8 @@ public:
 
     struct RenderParams {
         struct alignas(16) FrameInfo {
-            std::int32_t animationTimeMs = 0;
-            std::int32_t padding[3] = {};
+            std::uint32_t animationTimeMs = 0;
+            std::uint32_t padding[3] = {};
         };
         struct alignas(16) ProjectionInfo {
             float farPlane;
@@ -54,6 +54,8 @@ public:
             Vec3 skyColor;
             // currentLight = max(0, block.skyLight - skyLightDimming)
             std::uint32_t skyLightDimming;
+            Vec3 skyLightDirection;
+            float padding;
         };
 
         Vec4 origin;
@@ -81,7 +83,7 @@ public:
     };
     static_assert(sizeof(RenderParams::FrameInfo) == sizeof(IVec4));
     static_assert(sizeof(RenderParams::ProjectionInfo) == sizeof(Vec4));
-    static_assert(sizeof(RenderParams::SkyInfo) == sizeof(Vec4));
+    static_assert(sizeof(RenderParams::SkyInfo) == sizeof(Vec4) * 2);
 
     struct RenderSlot;
     struct VulkanState;

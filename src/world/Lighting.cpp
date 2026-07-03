@@ -85,4 +85,31 @@ std::pair<Vec3, float> skyColorAndLightFactorAtTime(WorldTime t)
     return { skyColorAtTime(t, lightFactor), lightFactor };
 }
 
+Vec3 skyLightDirectionAtTime(WorldTime time)
+{
+    assert(time >= 0 && time < s_ticksPerGameDay);
+
+    constexpr std::int32_t halfDay = s_ticksPerGameDay / 2;
+
+    std::int32_t offset =
+        static_cast<std::int32_t>(time) - static_cast<std::int32_t>(s_dayNoon);
+    if (offset < -halfDay)
+        offset += s_ticksPerGameDay;
+    else if (offset >= halfDay)
+        offset -= s_ticksPerGameDay;
+
+    const float angle = 2.0f * Pi * static_cast<float>(offset) / static_cast<float>(s_ticksPerGameDay);
+
+    Vec3 sunDirection {
+        -std::sin(angle),
+        std::cos(angle),
+        0.3f,
+    };
+
+    if (sunDirection.y < 0.0f)
+        sunDirection = -sunDirection;
+
+    return glm::normalize(sunDirection);
+}
+
 } // namespace blocklab

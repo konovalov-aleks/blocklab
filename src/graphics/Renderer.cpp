@@ -746,12 +746,10 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, cons
     const Vec3 forward = cameraForward(agent.yaw, agent.pitch);
     const Vec3 right = glm::normalize(Vec3 { std::cos(agent.yaw), 0.0f, -std::sin(agent.yaw) });
     const Vec3 up = glm::normalize(glm::cross(forward, right));
-    // TODO is it practically possible for logicalTimeMs to exceed std::int32_t max? If so, we should probably wrap it
-    // instead of clamping to max.
-    assert(world.logicalTimeMs() <= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()));
     const Vec3 skyColor = skyColorAtTime(world.dayTime());
     const std::uint8_t skyLight = skyLightAtTime(world.dayTime());
     assert(skyLight >= 0 && skyLight <= 15);
+
     return {
         .origin = { origin.x, origin.y, origin.z, 0.0f },
         .forward = { forward.x, forward.y, forward.z, 0.0f },
@@ -760,7 +758,7 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, cons
         .worldOriginAndWidth = { 0, 0, 0, static_cast<std::int32_t>(m_state->renderExtent.width) },
         .regionAndHeight = { 0, 0, 0, static_cast<std::int32_t>(m_state->renderExtent.height) },
         .frameInfo = {
-            .animationTimeMs = static_cast<std::int32_t>(world.logicalTimeMs()),
+            .animationTimeMs = static_cast<std::uint32_t>(world.logicalTimeMs()),
         },
         .projectionInfo = {
             .farPlane = 48.0f,
@@ -771,6 +769,7 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, cons
         .skyInfo = {
             .skyColor = skyColor,
             .skyLightDimming = 15U - skyLight,
+            .skyLightDirection = skyLightDirectionAtTime(world.dayTime()),
         },
     };
 }
