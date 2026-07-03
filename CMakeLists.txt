@@ -22,6 +22,28 @@ find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 find_package(pybind11 CONFIG QUIET)
 
 find_program(GLSLC_EXECUTABLE glslc REQUIRED)
+find_program(CLANG_FORMAT_EXECUTABLE clang-format)
+
+file(GLOB_RECURSE BLOCKLAB_FORMAT_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cuh
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/*.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.h
+)
+
+if(CLANG_FORMAT_EXECUTABLE)
+    add_custom_target(format
+        COMMAND ${CLANG_FORMAT_EXECUTABLE} --sort-includes -i ${BLOCKLAB_FORMAT_SOURCES}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Format C++ and CUDA sources"
+        VERBATIM
+    )
+else()
+    message(STATUS "clang-format not found; format target will not be available")
+endif()
 
 set(BLOCKLAB_SHADER_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 file(GLOB BLOCKLAB_SHADER_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.hlsl)
@@ -89,6 +111,8 @@ add_library(blocklab_env
     src/characters/PigCharacter.cpp
     src/environment/Agent.cpp
     src/environment/Environment.cpp
+    src/world/Lighting.cpp
+    src/world/OverrideCluster.cpp
     src/world/World.cpp
 )
 
@@ -180,59 +204,22 @@ target_include_directories(_native PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 enable_testing()
 
-add_executable(blocklab_smoke_test
-    tests/blocklab_smoke_test.cpp
+add_executable(blocklab_tests
+    tests/CudaFuture.cpp
+    tests/Hash.cpp
+    tests/PageLockedVector.cpp
+    tests/QuadTree.cpp
+    tests/SmokeTest.cpp
+    tests/WorldLighting.cpp
+    tests/WorldTestUtils.cpp
 )
 
-target_include_directories(blocklab_smoke_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(blocklab_smoke_test PRIVATE blocklab_render Catch2::Catch2WithMain)
+target_include_directories(blocklab_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(blocklab_tests PRIVATE blocklab_render Catch2::Catch2WithMain)
 
-blocklab_enable_strict_warnings(blocklab_smoke_test)
+blocklab_enable_strict_warnings(blocklab_tests)
 
-add_test(NAME blocklab_smoke_test COMMAND blocklab_smoke_test)
-
-add_executable(blocklab_quad_tree_test
-    tests/blocklab_quad_tree_test.cpp
-)
-
-target_include_directories(blocklab_quad_tree_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(blocklab_quad_tree_test PRIVATE blocklab_env Catch2::Catch2WithMain)
-
-blocklab_enable_strict_warnings(blocklab_quad_tree_test)
-
-add_test(NAME blocklab_quad_tree_test COMMAND blocklab_quad_tree_test)
-
-add_executable(blocklab_page_locked_vector_test
-    tests/page_locked_vector_test.cpp
-)
-
-target_include_directories(blocklab_page_locked_vector_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(blocklab_page_locked_vector_test PRIVATE blocklab_env Catch2::Catch2WithMain)
-
-blocklab_enable_strict_warnings(blocklab_page_locked_vector_test)
-
-add_test(NAME blocklab_page_locked_vector_test COMMAND blocklab_page_locked_vector_test)
-
-add_executable(blocklab_cuda_future_test
-    tests/cuda_future_test.cpp
-)
-
-target_link_libraries(blocklab_cuda_future_test PRIVATE blocklab_env Catch2::Catch2WithMain)
-
-blocklab_enable_strict_warnings(blocklab_cuda_future_test)
-
-add_test(NAME blocklab_cuda_future_test COMMAND blocklab_cuda_future_test)
-
-add_executable(blocklab_hash_test
-    tests/hash_test.cpp
-)
-
-target_include_directories(blocklab_hash_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(blocklab_hash_test PRIVATE blocklab_env Catch2::Catch2WithMain)
-
-blocklab_enable_strict_warnings(blocklab_hash_test)
-
-add_test(NAME blocklab_hash_test COMMAND blocklab_hash_test)
+add_test(NAME blocklab_tests COMMAND blocklab_tests)
 
 set(BLOCKLAB_PYTHON_TEST_EXECUTABLE ${CMAKE_CURRENT_SOURCE_DIR}/.venv/bin/python)
 set(BLOCKLAB_VULKAN_VALIDATION_RUNNER ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_vulkan_validation.py)

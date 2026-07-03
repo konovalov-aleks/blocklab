@@ -1,7 +1,9 @@
 #pragma once
 
 #include "Block.h"
+#include "OverrideCluster.h"
 #include "WorldGenerator.h"
+#include "WorldTime.h"
 
 #include <blocklab/gpu/cuda/CudaSharedFuture.h>
 #include <blocklab/utility/Math.h>
@@ -9,121 +11,23 @@
 #include <containers/QuadTree.h>
 #include <gpu/cuda/PageLockedVector.h>
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <map>
 #include <memory>
-#include <optional>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace blocklab {
 
-class OverrideCluster {
-public:
-    using Mask = std::uint64_t;
-
-    static constexpr std::int32_t Edge = 4;
-    static constexpr std::int32_t Volume = Edge * Edge * Edge;
-    static constexpr std::uint8_t NoOverride = BlockId::NoOverride;
-
-    OverrideCluster();
-    std::optional<Block> get(std::size_t index) const;
-    bool set(std::size_t index, Block block);
-    bool clear(std::size_t index);
-    bool hasOverride(std::size_t index) const;
-    bool hasSolidOverride(std::size_t index) const;
-    bool hasOverrideInMask(Mask mask) const { return (m_overrideMask & mask) != 0; }
-    bool hasSolidOverrideInMask(Mask mask) const { return (m_solidMask & mask) != 0; }
-    std::uint16_t count() const { return m_count; }
-    bool isEmpty() const { return m_count == 0; }
-    Mask overrideMask() const { return m_overrideMask; }
-    Mask solidMask() const { return m_solidMask; }
-
-private:
-    static Mask bitFor(std::size_t index);
-
-    std::uint16_t m_count = 0;
-    Mask m_overrideMask = 0;
-    Mask m_solidMask = 0;
-    std::array<std::uint8_t, Volume> m_blocks;
-};
-
-static_assert(OverrideCluster::Volume <= std::numeric_limits<OverrideCluster::Mask>::digits);
-static_assert(sizeof(Block) == sizeof(std::uint8_t),
-    "OverrideCluster stores dense std::uint8_t block ids. If Block becomes heavier, consider storing compact ids or "
-    "pointers.");
-static_assert(BlockId::Air != OverrideCluster::NoOverride);
-static_assert(BlockId::Grass != OverrideCluster::NoOverride);
-static_assert(BlockId::Dirt != OverrideCluster::NoOverride);
-static_assert(BlockId::Stone != OverrideCluster::NoOverride);
-
-struct OverrideClusterColumn {
-    std::map<std::int32_t, OverrideCluster> clusters;
-
-    bool isEmpty() const { return clusters.empty(); }
-};
-
 class World {
 public:
-    struct BlocksCache {
-        enum class State : std::uint8_t {
-            Empty,
-            Ready,
-            Borrowed,
-            Pending,
-        };
-
-        BlocksCache() = default;
-        ~BlocksCache() { waitIfPending(); }
-
-        BlocksCache(const BlocksCache&) = delete;
-        BlocksCache& operator=(const BlocksCache&) = delete;
-
-        BlocksCache(BlocksCache&& other) noexcept
-            : origin(other.origin)
-            , size(other.size)
-            , blocks(std::move(other.blocks))
-            , pendingFuture(std::move(other.pendingFuture))
-            , state(std::exchange(other.state, State::Ready))
-        {
-        }
-
-        BlocksCache& operator=(BlocksCache&& other) noexcept
-        {
-            if (this == &other)
-                return *this;
-
-            waitIfPending();
-            other.waitIfPending();
-            origin = other.origin;
-            size = other.size;
-            blocks = std::move(other.blocks);
-            pendingFuture = std::move(other.pendingFuture);
-            state = std::exchange(other.state, State::Ready);
-            return *this;
-        }
-
-        void clear()
-        {
-            waitIfPending();
-            origin = {};
-            size = {};
-            blocks.clear();
-            state = State::Empty;
-        }
-
-        void waitIfPending();
-
-        IVec3 origin {};
-        IVec3 size {};
-        PageLockedVector<std::uint8_t> blocks;
-        CudaSharedFuture<WorldGenerationOutput> pendingFuture;
-        State state = State::Empty;
-    };
+    static constexpr std::int32_t s_height = 32;
+    static constexpr std::int32_t s_minY = 0;
+    static constexpr std::int32_t s_maxY = s_minY + s_height - 1;
+    static_assert(std::numeric_limits<HeightMapValueT>::min() <= s_minY);
+    static_assert(std::numeric_limits<HeightMapValueT>::max() >= s_maxY);
 
     World() = default;
 
@@ -136,41 +40,95 @@ public:
     // note: the block cache must be initialized
     void resetCharacters();
 
-    Block getBlock(IVec3 pos) const;
+    // returns nullptr if requested block is out of loaded cache bounds
+    const BlockInfo* block(IVec3 pos) const;
+
+    // returns Air if the requested block is out of loaded cache bounds
+    Block blockType(IVec3 pos) const;
+
     void setBlock(IVec3 pos, Block block);
-    bool isSolid(IVec3 pos) const { return getBlock(pos) != Block::Air; }
+    bool isSolid(IVec3 pos) const { return isSolidBlock(blockType(pos)); }
     bool hasSolidBlockInArea(IVec3 min, IVec3 max) const;
-    float groundHeight(float x, float z) const;
+    std::int32_t terrainHeight(IVec2 xz) const { return m_blockCache.terrainHeight(xz); }
 
-    void collectOverridesInRegion(IVec3 origin, IVec3 size, std::vector<BlockOverride>& out) const;
+    bool isInsideLoadedCache(IVec3 pos) const { return !m_blockCache.empty() && m_blockCache.isInsideBounds(pos); }
 
-    PageLockedVector<std::uint8_t> borrowGenerationBuffers() const;
-    void updateGeneration(CudaSharedFuture<WorldGenerationOutput>) const;
+    void collectOverridesInRegion(IVec3 origin, UVec3 size, std::vector<BlockOverride>& out) const;
+
+    CPUCacheGenerationBuffers borrowGenerationBuffers() const { return m_blockCache.borrowGenerationBuffers(); }
+    void updateGeneration(CudaSharedFuture<WorldGenerationOutput> gen) const { m_blockCache.update(std::move(gen)); }
     void waitForGeneration() const;
 
     std::uint32_t seed() const { return m_seed; }
     std::uint64_t version() const { return m_version; }
+
     std::uint64_t logicalTimeMs() const { return m_logicalTimeMs; }
+    WorldTime dayTime() const { return (m_logicalTimeMs / s_tickPeriodMs + m_dayTimeShiftTicks) % s_ticksPerGameDay; }
 
     std::size_t overrideCount() const { return m_overrideCount; }
 
     const std::vector<std::unique_ptr<NPC>>& characters() const { return m_characters; }
 
+    static constexpr bool isValidHeight(std::int32_t y) { return y >= s_minY && y <= s_maxY; }
+
 private:
-    bool isInsideCacheBounds(IVec3) const;
-    bool cachedSolidBlockInArea(IVec3 min, IVec3 max) const;
+    using OverrideClusterColumn = std::map<std::int32_t, OverrideCluster>;
+
+    class BlockCache {
+    public:
+        enum class State : std::uint8_t {
+            Empty,
+            Ready,
+            Borrowed,
+            Pending,
+        };
+
+        BlockCache() = default;
+        ~BlockCache() { waitIfPending(); }
+
+        BlockCache(const BlockCache&) = delete;
+        BlockCache& operator=(const BlockCache&) = delete;
+
+        BlockInfo& operator[](IVec3);
+        std::int32_t terrainHeight(IVec2 xz);
+
+        IVec3 size() const { return m_size; }
+        IVec3 origin() const { return m_origin; }
+        bool isInsideBounds(IVec3) const;
+
+        bool empty() const { return m_state == State::Empty || m_blocks.empty(); }
+        void clear();
+        void waitIfPending();
+
+        CPUCacheGenerationBuffers borrowGenerationBuffers();
+        void update(CudaSharedFuture<WorldGenerationOutput>);
+
+    private:
+        std::size_t denseBlockIndex(IVec3 local) const;
+
+        IVec3 m_origin = {};
+        IVec3 m_size {};
+
+        PageLockedVector<BlockInfo> m_blocks;
+        PageLockedVector<HeightMapValueT> m_heightMap;
+
+        CudaSharedFuture<WorldGenerationOutput> m_pendingFuture;
+        State m_state = State::Empty;
+    };
+
     void updateCharacters(float dt, Vec3 threatPosition);
     void spawnTestPigs();
 
-    std::uint32_t m_seed = 0;
+    std::size_t m_overrideCount = 0;
     std::uint64_t m_version = 1;
     std::uint64_t m_logicalTimeMs = 0;
-    std::size_t m_overrideCount = 0;
+    std::uint32_t m_seed = 0;
+    WorldTime m_dayTimeShiftTicks = 0;
+
     EntityId m_nextEntityId = 1;
     QuadTree<OverrideClusterColumn> m_overrideColumns;
     std::vector<std::unique_ptr<NPC>> m_characters;
-
-    mutable BlocksCache m_blockCache;
+    mutable BlockCache m_blockCache;
 };
 
 } // namespace blocklab

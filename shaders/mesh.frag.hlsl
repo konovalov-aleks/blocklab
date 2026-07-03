@@ -1,12 +1,10 @@
 #include "material.hlsl"
 
-static const float3 SkyColor = float3(0.148302, 0.374624, 0.717623);
-
 struct FragmentInput {
     float4 color : TEXCOORD0;
     float3 worldPosition : TEXCOORD1;
-    float shade : TEXCOORD2;
-    float fog : TEXCOORD3;
+    float light : TEXCOORD2;
+    float4 fog : TEXCOORD3;
     float3 uvMaterial : TEXCOORD4;
 };
 
@@ -65,6 +63,13 @@ float3 texelColor(uint material, float2 uv, float3 worldPosition, float3 fallbac
         return palette(lerp(float3(0.86, 0.54, 0.63), float3(0.96, 0.66, 0.73), n));
     if (material == MaterialPigSnout)
         return palette(lerp(float3(0.90, 0.60, 0.68), float3(1.00, 0.72, 0.79), n));
+    if (material == MaterialTorchSide) {
+        float3 wood = lerp(float3(0.46, 0.25, 0.10), float3(0.58, 0.34, 0.16), n);
+        float3 ember = lerp(float3(1.00, 0.52, 0.08), float3(1.00, 0.88, 0.24), n);
+        return palette(lerp(wood, ember, step(0.72, uv.y)));
+    }
+    if (material == MaterialTorchTop)
+        return palette(lerp(float3(1.00, 0.52, 0.08), float3(1.00, 0.88, 0.24), n));
     return srgbToLinear(fallback);
 }
 
@@ -72,8 +77,6 @@ float4 meshFragmentMain(FragmentInput input) : SV_Target0
 {
     uint material = uint(input.uvMaterial.z + 0.5);
     float3 albedo = texelColor(material, input.uvMaterial.xy, input.worldPosition, input.color.rgb);
-    float2 edgeUv = abs(frac(input.uvMaterial.xy) - 0.5);
-    float edge = material == MaterialGrassTop ? 0.0 : step(0.485, max(edgeUv.x, edgeUv.y));
-    float3 lit = saturate(albedo * (input.shade + edge * -0.045));
-    return float4(lerp(lit, SkyColor, input.fog), 1.0);
+    float3 lit = saturate(albedo * input.light);
+    return float4(lerp(lit, input.fog.xyz, input.fog.w), 1.0);
 }

@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <random>
@@ -32,11 +33,14 @@ public:
 namespace {
 
     struct BenchmarkConfig {
+        static constexpr std::uint32_t s_defaultMaxSteps = 60 * 60 * 80; // 4 game days.
+
         std::uint64_t steps = 0;
         std::uint64_t warmupSteps = 128;
         double seconds = 10.0;
         double reportInterval = 1.0;
         std::uint32_t seed = 1;
+        std::uint32_t maxSteps = s_defaultMaxSteps;
         std::uint32_t batchSize = 16;
         bool visualize = false;
         std::int32_t minActionSteps = 20;
@@ -107,6 +111,7 @@ namespace {
             "  --batch-size N           Number of environments stepped and rendered per iteration, default 16.\n"
             "  --num-envs N             Alias for --batch-size.\n"
             "  --seed N                 RNG seed, default 1.\n"
+            "  --max-steps N            Episode step limit, default 288000 (4 game days), 0 disables.\n"
             "  --report-interval N      Progress report interval in seconds, default 1.\n"
             "  --visualize              Open a Vulkan window and render the environment visibly.\n"
             "  --action-steps A:B       Hold sampled movement/look for A..B steps, default 20:160.\n"
@@ -140,7 +145,8 @@ namespace {
                 const char* const optionName
                     = (arg == "--num-envs" || arg.starts_with("--num-envs=")) ? "--num-envs" : "--batch-size";
                 const auto batchSize = cli::parseInt<std::uint64_t>(cli::optionValue(i, argc, argv, arg, optionName));
-                if (!batchSize || *batchSize == 0 || *batchSize > static_cast<std::uint64_t>(UINT32_MAX)) [[unlikely]] {
+                if (!batchSize || *batchSize == 0 || *batchSize > std::numeric_limits<std::uint32_t>::max())
+                    [[unlikely]] {
                     std::fprintf(stderr, "Invalid %s value.\n", optionName);
                     std::exit(EXIT_FAILURE);
                 }
@@ -148,7 +154,14 @@ namespace {
             } else if (arg == "--seed" || arg.starts_with("--seed="))
                 config.seed = static_cast<std::uint32_t>(
                     cli::parseInt<std::uint64_t>(cli::optionValue(i, argc, argv, arg, "--seed")).value_or(config.seed));
-            else if (arg == "--report-interval" || arg.starts_with("--report-interval=")) {
+            else if (arg == "--max-steps" || arg.starts_with("--max-steps=")) {
+                const auto maxSteps = cli::parseInt<std::uint64_t>(cli::optionValue(i, argc, argv, arg, "--max-steps"));
+                if (!maxSteps || *maxSteps > std::numeric_limits<std::uint32_t>::max()) [[unlikely]] {
+                    std::fprintf(stderr, "Invalid --max-steps value.\n");
+                    std::exit(EXIT_FAILURE);
+                }
+                config.maxSteps = static_cast<std::uint32_t>(*maxSteps);
+            } else if (arg == "--report-interval" || arg.starts_with("--report-interval=")) {
                 const auto reportInterval = cli::parseDouble(cli::optionValue(i, argc, argv, arg, "--report-interval"));
                 if (!reportInterval || *reportInterval <= 0.0) [[unlikely]] {
                     std::fprintf(stderr, "Invalid --report-interval value.\n");
@@ -192,10 +205,9 @@ namespace {
              ++attempts) {
             const std::int32_t x = std::clamp(static_cast<std::int32_t>(std::lround(horizontal(rng))), -28, 28);
             const std::int32_t z = std::clamp(static_cast<std::int32_t>(std::lround(horizontal(rng))), -28, 28);
-            const std::int32_t surfaceY
-                = std::max(0, floorToInt32(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1);
-            const std::int32_t y = std::clamp(surfaceY + verticalOffset(rng), 0, Chunk::SizeY - 1);
-            const Block current = world.getBlock({ x, y, z });
+            const std::int32_t surfaceY = world.terrainHeight({ x, z });
+            const std::int32_t y = std::clamp(surfaceY + verticalOffset(rng), World::s_minY, World::s_maxY);
+            const Block current = world.blockType({ x, y, z });
             world.setBlock({ x, y, z }, current == Block::Air ? Block::Stone : Block::Air);
         }
         return static_cast<std::uint64_t>(world.overrideCount() - before);
@@ -239,7 +251,7 @@ int main(int argc, char** argv)
     if (display)
         display->initialize(vk);
     Renderer renderer(*vk, config.renderConfig);
-    Environment env(renderer, config.batchSize);
+    Environment env(renderer, config.batchSize, config.maxSteps);
 
     using Clock = std::chrono::steady_clock;
 

@@ -13,14 +13,15 @@ namespace blocklab {
 
 static constexpr Vec3 InitialAgentPosition { 0.5f, 14.0f, 0.5f };
 
-Environment::Environment(Renderer& renderer, std::uint32_t numEnvs)
-    : m_batchSize(numEnvs)
-    , m_worlds(std::make_unique<World[]>(numEnvs))
+Environment::Environment(Renderer& renderer, std::uint32_t numEnvs, std::uint32_t maxSteps)
+    : m_worlds(std::make_unique<World[]>(numEnvs))
     , m_agents(std::make_unique<Agent[]>(numEnvs))
     , m_renderer(renderer)
-    , m_stepCounts(std::make_unique<std::int32_t[]>(numEnvs))
+    , m_stepCounts(std::make_unique<std::uint32_t[]>(numEnvs))
     , m_stepResults(std::make_unique<StepResult[]>(numEnvs))
     , m_renderAgents(std::make_unique<AgentState[]>(numEnvs))
+    , m_batchSize(numEnvs)
+    , m_maxSteps(maxSteps)
 {
     if (numEnvs == 0) [[unlikely]]
         fatalError("Environment batch size must be positive");
@@ -43,7 +44,7 @@ void Environment::reset(std::uint32_t seed)
         World& world = m_worlds[i];
         m_stepCounts[i] = 0;
         world.resetCharacters();
-        const float spawnY = world.groundHeight(0.0f, 0.0f) + 0.05f;
+        const float spawnY = static_cast<float>(world.terrainHeight({ 0, 0 })) + 1.05f;
         m_agents[i].reset({ InitialAgentPosition.x, spawnY, InitialAgentPosition.z });
     }
 
@@ -72,11 +73,11 @@ std::span<const StepResult> Environment::step(std::span<const AgentAction> actio
         float reward = 0.01f + std::min(0.05f, std::sqrt(dx * dx + dz * dz) * 0.02f);
         reward += static_cast<float>(after.blocksCollected - before.blocksCollected) * 0.5f;
         reward += static_cast<float>(after.blocksPlaced - before.blocksPlaced) * 0.2f;
-        if (after.position.y < -8.0f)
+        if (after.position.y < World::s_minY)
             reward -= 5.0f;
         result.reward = reward;
-        result.terminated = after.position.y < -8.0f;
-        result.truncated = m_stepCounts[i] >= s_maxSteps;
+        result.terminated = after.position.y < World::s_minY;
+        result.truncated = m_maxSteps > 0 && m_stepCounts[i] >= m_maxSteps;
     }
 
     updateObservation();

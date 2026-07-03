@@ -4,4 +4,6 @@ static const uint MaterialStone = 2;
 static const uint MaterialGrassSide = 3;
 static const uint MaterialPigSkin = 4;
 static const uint MaterialPigSnout = 5;
+static const uint MaterialTorchSide = 6;
+static const uint MaterialTorchTop = 7;
 static const uint MaterialVertexColor = 8;

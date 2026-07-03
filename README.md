@@ -50,9 +50,13 @@ By default, the benchmark renders GPU observations offscreen without presenting 
 
 - `WASD` - move
 - `Space` - jump
-- Mouse - look around
+- Mouse or arrow keys - look around
 - `Q` - dig
 - `E` - place
+- `1` - select torch placement
+- `2` - select dirt placement
+- `3` - select stone placement
+- `Tab` - toggle the frame limiter
 - `R` - reset
 - `Esc` - quit
 

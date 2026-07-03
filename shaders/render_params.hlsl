@@ -1,5 +1,20 @@
 struct RenderFrameInfo {
     int animationTimeMs;
+    uint _padding1;
+    uint _padding2;
+    uint _padding3;
+};
+
+struct RenderProjectionInfo {
+    float farPlane;
+    float fovRadians;
+    float fogStart;
+    float fogEnd;
+};
+
+struct RenderSkyInfo {
+    float3 skyColor;
+    uint skyLightDimming;
 };
 
 struct RenderParams {
@@ -10,7 +25,8 @@ struct RenderParams {
     int4 worldOriginAndWidth;
     int4 regionAndHeight;
     RenderFrameInfo frameInfo;
-    float4 tuning;
+    RenderProjectionInfo projectionInfo;
+    RenderSkyInfo skyInfo;
 };
 
 struct DrawPushConstants {

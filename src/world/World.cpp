@@ -5,6 +5,7 @@
 #include <utility/Hash.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -31,107 +32,86 @@ namespace {
         return x + z * OverrideCluster::Edge + y * OverrideCluster::Edge * OverrideCluster::Edge;
     }
 
-    std::size_t denseBlockIndex(IVec3 local, IVec3 size)
-    {
-        return static_cast<std::size_t>(local.x) + static_cast<std::size_t>(local.y) * static_cast<std::size_t>(size.x)
-            + static_cast<std::size_t>(local.z) * static_cast<std::size_t>(size.x) * static_cast<std::size_t>(size.y);
-    }
-
 } // namespace
 
-Block Chunk::get(std::int32_t x, std::int32_t y, std::int32_t z) const
+BlockInfo& World::BlockCache::operator[](IVec3 pos)
 {
-    if (x < 0 || x >= SizeX || y < 0 || y >= SizeY || z < 0 || z >= SizeZ)
-        return Block::Air;
-    const std::int32_t index = (y * SizeZ + z) * SizeX + x;
-    return m_blocks[static_cast<std::size_t>(index)];
+    assert(!empty());
+    assert(m_state == State::Ready);
+    assert(m_blocks.size() == static_cast<std::size_t>(m_size.x) * m_size.y * m_size.z);
+    assert(isInsideBounds(pos));
+    return m_blocks[denseBlockIndex(pos - m_origin)];
 }
 
-void Chunk::set(std::int32_t x, std::int32_t y, std::int32_t z, Block block)
+std::int32_t World::BlockCache::terrainHeight(IVec2 xz)
 {
-    if (x < 0 || x >= SizeX || y < 0 || y >= SizeY || z < 0 || z >= SizeZ)
-        return;
-    const std::int32_t index = (y * SizeZ + z) * SizeX + x;
-    m_blocks[static_cast<std::size_t>(index)] = block;
+    waitIfPending();
+    assert(!empty());
+    assert(m_state == State::Ready);
+    assert(m_heightMap.size() == static_cast<std::size_t>(m_size.x) * m_size.z);
+
+    const std::int32_t localX = xz[0] - m_origin.x;
+    const std::int32_t localZ = xz[1] - m_origin.z;
+    assert(localX >= 0 && localX < m_size.x);
+    assert(localZ >= 0 && localZ < m_size.z);
+    return m_heightMap[localX + m_size.x * localZ];
 }
 
-OverrideCluster::OverrideCluster() { m_blocks.fill(NoOverride); }
-
-OverrideCluster::Mask OverrideCluster::bitFor(std::size_t index) { return Mask { 1 } << index; }
-
-bool OverrideCluster::hasOverride(std::size_t index) const { return (m_overrideMask & bitFor(index)) != 0; }
-
-bool OverrideCluster::hasSolidOverride(std::size_t index) const { return (m_solidMask & bitFor(index)) != 0; }
-
-std::optional<Block> OverrideCluster::get(std::size_t index) const
+bool World::BlockCache::isInsideBounds(IVec3 pos) const
 {
-    if (!hasOverride(index))
-        return std::nullopt;
-    const std::uint8_t stored = m_blocks[index];
-    return static_cast<Block>(stored);
+    return pos.x >= m_origin.x && pos.y >= m_origin.y && pos.z >= m_origin.z && pos.x < m_origin.x + m_size.x
+        && pos.y < m_origin.y + m_size.y && pos.z < m_origin.z + m_size.z;
 }
 
-bool OverrideCluster::set(std::size_t index, Block block)
+void World::BlockCache::clear()
 {
-    std::uint8_t& stored = m_blocks[index];
-    const Mask bit = bitFor(index);
-    const bool inserted = (m_overrideMask & bit) == 0;
-    if (inserted)
-        ++m_count;
-
-    m_overrideMask |= bit;
-    if (block == Block::Air)
-        m_solidMask &= ~bit;
-    else
-        m_solidMask |= bit;
-
-    stored = static_cast<std::uint8_t>(block);
-    return inserted;
+    waitIfPending();
+    m_origin = {};
+    m_size = {};
+    m_blocks.clear();
+    m_state = State::Empty;
 }
 
-bool OverrideCluster::clear(std::size_t index)
+void World::BlockCache::waitIfPending()
 {
-    const Mask bit = bitFor(index);
-    if ((m_overrideMask & bit) == 0)
-        return false;
-
-    m_blocks[index] = NoOverride;
-    m_overrideMask &= ~bit;
-    m_solidMask &= ~bit;
-    --m_count;
-    return true;
-}
-
-void World::BlocksCache::waitIfPending()
-{
-    if (state == State::Borrowed) [[unlikely]]
+    if (m_state == State::Borrowed) [[unlikely]]
         fatalError("World block cache is borrowed for generation");
 
-    if (!pendingFuture.valid())
+    if (!m_pendingFuture.valid())
         return;
 
-    WorldGenerationOutput& output = pendingFuture.get();
-    origin = output.origin;
-    size = output.size;
-    blocks = std::move(output.buffers.blocks);
-    pendingFuture = {};
-    state = State::Ready;
+    WorldGenerationOutput& output = m_pendingFuture.get();
+    m_origin = output.origin;
+    m_size = output.size;
+    m_blocks = std::move(output.buffers.cpuCache.blocks);
+    m_heightMap = std::move(output.buffers.cpuCache.heightMap);
+    m_pendingFuture = {};
+    m_state = State::Ready;
 }
 
-PageLockedVector<std::uint8_t> World::borrowGenerationBuffers() const
+CPUCacheGenerationBuffers World::BlockCache::borrowGenerationBuffers()
 {
-    m_blockCache.waitIfPending();
-    m_blockCache.state = BlocksCache::State::Borrowed;
-    return std::move(m_blockCache.blocks);
+    waitIfPending();
+    m_state = State::Borrowed;
+    return {
+        .blocks = std::move(m_blocks),
+        .heightMap = std::move(m_heightMap),
+    };
 }
 
-void World::updateGeneration(CudaSharedFuture<WorldGenerationOutput> generation) const
+void World::BlockCache::update(CudaSharedFuture<WorldGenerationOutput> gen)
 {
-    if (m_blockCache.state != BlocksCache::State::Borrowed) [[unlikely]]
+    if (m_state != State::Borrowed) [[unlikely]]
         fatalError("World generation buffers were not borrowed");
 
-    m_blockCache.pendingFuture = std::move(generation);
-    m_blockCache.state = BlocksCache::State::Pending;
+    m_pendingFuture = std::move(gen);
+    m_state = State::Pending;
+}
+
+std::size_t World::BlockCache::denseBlockIndex(IVec3 local) const
+{
+    assert(glm::all(glm::greaterThanEqual(local, IVec3(0, 0, 0))) && glm::all(glm::lessThan(local, m_size)));
+    return local.x + m_size.x * (local.y + m_size.y * local.z);
 }
 
 void World::waitForGeneration() const { m_blockCache.waitIfPending(); }
@@ -139,15 +119,19 @@ void World::waitForGeneration() const { m_blockCache.waitIfPending(); }
 void World::resetSeed(std::uint32_t seed)
 {
     m_seed = seed;
+    m_logicalTimeMs = 0;
     m_overrideColumns.clear();
     m_overrideCount = 0;
     m_blockCache.clear();
+    m_dayTimeShiftTicks = hash(seed) % s_ticksPerGameDay;
     ++m_version;
 }
 
 void World::resetCharacters()
 {
-    if (m_blockCache.state == BlocksCache::State::Empty) [[unlikely]]
+    m_blockCache.waitIfPending();
+
+    if (m_blockCache.empty()) [[unlikely]]
         fatalError("World generation cache is not ready");
 
     m_nextEntityId = 1;
@@ -155,38 +139,32 @@ void World::resetCharacters()
     spawnTestPigs();
 }
 
-bool World::isInsideCacheBounds(IVec3 pos) const
-{
-    return pos.x >= m_blockCache.origin.x && pos.y >= m_blockCache.origin.y && pos.z >= m_blockCache.origin.z
-        && pos.x < m_blockCache.origin.x + m_blockCache.size.x && pos.y < m_blockCache.origin.y + m_blockCache.size.y
-        && pos.z < m_blockCache.origin.z + m_blockCache.size.z;
-}
-
-Block World::getBlock(IVec3 pos) const
+const BlockInfo* World::block(IVec3 pos) const
 {
     m_blockCache.waitIfPending();
-
-    if (pos.y < 0 || pos.y >= Chunk::SizeY)
-        return Block::Air;
-
-    if (!isInsideCacheBounds(pos)) [[unlikely]]
-        fatalError(
-            "Requested block (", pos.x, ", ", pos.y, ", ", pos.z, ") is outside of the world generation cache bounds");
-
-    if (m_blockCache.blocks.empty()) [[unlikely]]
+    if (m_blockCache.empty()) [[unlikely]]
         fatalError("World generation cache blocks are not ready");
 
-    const IVec3 local = pos - m_blockCache.origin;
-    return static_cast<Block>(m_blockCache.blocks[denseBlockIndex(local, m_blockCache.size)]);
+    if (!m_blockCache.isInsideBounds(pos))
+        return nullptr;
+
+    return &m_blockCache[pos];
+}
+
+Block World::blockType(IVec3 pos) const
+{
+    const BlockInfo* bi = block(pos);
+    return bi ? bi->blockType : Block::Air;
 }
 
 void World::setBlock(IVec3 pos, Block block)
 {
     m_blockCache.waitIfPending();
-    if (pos.y < 0 || pos.y >= Chunk::SizeY)
+    if (!isValidHeight(pos.y))
         return;
 
-    if (getBlock(pos) == block)
+    const Block oldBlock = blockType(pos);
+    if (oldBlock == block)
         return;
 
     // add override
@@ -204,43 +182,38 @@ void World::setBlock(IVec3 pos, Block block)
         columnIt = m_overrideColumns.find(clusterX, clusterZ);
     }
 
-    OverrideCluster& cluster = columnIt->clusters[clusterY];
+    OverrideCluster& cluster = (*columnIt)[clusterY];
     if (cluster.set(localIndex, block))
         ++m_overrideCount;
 
-    // update the cache
-    if (isInsideCacheBounds(pos)) {
-        const IVec3 local = pos - m_blockCache.origin;
-        m_blockCache.blocks[denseBlockIndex(local, m_blockCache.size)] = static_cast<std::uint8_t>(block);
-    }
+    // TODO: Revisit cache patching when lighting becomes incremental. This keeps CPU collision data coherent, but does
+    // not update derived lighting data; GPU-side unlight/light should eventually handle that without full regeneration.
+    if (m_blockCache.isInsideBounds(pos))
+        m_blockCache[pos].blockType = block;
 
     ++m_version;
+
+    const IVec3 above = pos + IVec3 { 0, 1, 0 };
+    if (isSolidBlock(oldBlock) && !isSolidBlock(block) && blockType(above) == Block::Torch)
+        setBlock(above, Block::Air);
 }
 
 bool World::hasSolidBlockInArea(IVec3 min, IVec3 max) const
 {
     m_blockCache.waitIfPending();
 
-    if (m_blockCache.blocks.empty()) [[unlikely]]
-        fatalError("World generation cache blocks are not ready");
+    if (m_blockCache.empty()) [[unlikely]]
+        fatalError("World generation cache is not ready");
 
-    min = glm::max(min, m_blockCache.origin);
-    max = glm::min(max, m_blockCache.origin + m_blockCache.size - IVec3 { 1 });
+    min = glm::max(min, m_blockCache.origin());
+    max = glm::min(max, m_blockCache.origin() + m_blockCache.size() - IVec3 { 1 });
 
-    return cachedSolidBlockInArea(min, max);
-}
-
-bool World::cachedSolidBlockInArea(IVec3 min, IVec3 max) const
-{
-    const IVec3 localMin = min - m_blockCache.origin;
-    const IVec3 localMax = max - m_blockCache.origin;
-    for (std::int32_t y = localMin.y; y <= localMax.y; ++y) {
-        for (std::int32_t z = localMin.z; z <= localMax.z; ++z) {
-            for (std::int32_t x = localMin.x; x <= localMax.x; ++x) {
-                if (m_blockCache.blocks[denseBlockIndex({ x, y, z }, m_blockCache.size)]
-                    != static_cast<std::uint8_t>(Block::Air)) {
+    for (std::int32_t y = min.y; y <= max.y; ++y) {
+        for (std::int32_t z = min.z; z <= max.z; ++z) {
+            for (std::int32_t x = min.x; x <= max.x; ++x) {
+                const Block block = m_blockCache[{ x, y, z }].blockType;
+                if (isSolidBlock(block))
                     return true;
-                }
             }
         }
     }
@@ -262,22 +235,10 @@ void World::updateCharacters(float dt, Vec3 threatPosition)
     }
 }
 
-float World::groundHeight(float x, float z) const
-{
-    // TODO compute on GPU and cache
-    const std::int32_t wx = floorToInt32(x);
-    const std::int32_t wz = floorToInt32(z);
-    for (std::int32_t y = Chunk::SizeY - 1; y >= 0; --y) {
-        if (isSolid({ wx, y, wz }))
-            return static_cast<float>(y + 1);
-    }
-    return 0.0f;
-}
-
-void World::collectOverridesInRegion(IVec3 origin, IVec3 size, std::vector<BlockOverride>& out) const
+void World::collectOverridesInRegion(IVec3 origin, UVec3 size, std::vector<BlockOverride>& out) const
 {
     out.clear();
-    const IVec3 end = origin + size;
+    const IVec3 end = origin + static_cast<IVec3>(size);
     const std::int32_t startClusterX = floorDiv(origin.x, OverrideCluster::Edge);
     const std::int32_t startClusterY = floorDiv(origin.y, OverrideCluster::Edge);
     const std::int32_t startClusterZ = floorDiv(origin.z, OverrideCluster::Edge);
@@ -291,8 +252,8 @@ void World::collectOverridesInRegion(IVec3 origin, IVec3 size, std::vector<Block
             if (columnIt == m_overrideColumns.end())
                 continue;
 
-            const auto startYIt = columnIt->clusters.lower_bound(startClusterY);
-            const auto endYIt = columnIt->clusters.upper_bound(endClusterY);
+            const auto startYIt = columnIt->lower_bound(startClusterY);
+            const auto endYIt = columnIt->upper_bound(endClusterY);
             for (auto clusterIt = startYIt; clusterIt != endYIt; ++clusterIt) {
                 const std::int32_t clusterY = clusterIt->first;
                 const OverrideCluster& cluster = clusterIt->second;
@@ -345,11 +306,11 @@ void World::spawnTestPigs()
             = (static_cast<float>(i) + randomFloat01(hashCombine(m_seed, static_cast<std::uint32_t>(i), 0x85ebca6bU)))
             / static_cast<float>(PigCount);
         const float radius = MinAgentDistance + std::sqrt(t) * (SpawnRadius - MinAgentDistance);
-        const float x = 0.5f + std::cos(angle) * radius;
-        const float z = 0.5f + std::sin(angle) * radius;
+        const std::int32_t x = floorToInt32(0.5f + std::cos(angle) * radius);
+        const std::int32_t z = floorToInt32(0.5f + std::sin(angle) * radius);
         const Vec3 position {
             x,
-            groundHeight(x, z) + 0.05f,
+            static_cast<float>(terrainHeight({ x, z })) + 1.05f,
             z,
         };
         m_characters.push_back(std::make_unique<PigCharacter>(m_nextEntityId++, position));

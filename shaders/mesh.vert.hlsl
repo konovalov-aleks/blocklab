@@ -3,13 +3,15 @@
 
 struct MeshVertex {
     float4 position;
-    float4 colorAndShade;
+    float4 colorAndLight;
     float4 uvMaterial;
 };
 
 struct EntityInstance {
     float4 positionAndYaw;
     float4 velocityAndKind;
+    float blockLight;
+    float skyLight;
 };
 
 static const uint EntityKindNone = 0;
@@ -54,20 +56,25 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
     float viewZ = dot(relative, params.forward.xyz);
 
     float nearPlane = 0.05;
-    float farPlane = params.tuning.x;
-    float tanHalfFov = tan(params.tuning.y * 0.5);
+    float farPlane = params.projectionInfo.farPlane;
+    float tanHalfFov = tan(params.projectionInfo.fovRadians * 0.5);
     float aspect = float(params.worldOriginAndWidth.w) / float(params.regionAndHeight.w);
+
+    float fogIntensity = saturate(
+        (viewZ - params.projectionInfo.fogStart) / max(params.projectionInfo.fogEnd - params.projectionInfo.fogStart, 0.001));
+
+    float light = max(instance.skyLight - params.skyInfo.skyLightDimming / 15.0f, instance.blockLight);
 
     VertexOutput output;
     output.position.x = viewX / (aspect * tanHalfFov);
     output.position.y = -viewY / tanHalfFov;
     output.position.z = viewZ * farPlane / (farPlane - nearPlane) - farPlane * nearPlane / (farPlane - nearPlane);
     output.position.w = viewZ;
-    output.color = float4(vertex.colorAndShade.rgb, 1.0);
+    output.color = float4(vertex.colorAndLight.rgb, 1.0);
     output.worldPosition = worldPosition;
-    output.shade = vertex.colorAndShade.a;
+    output.light = vertex.colorAndLight.a * light;
     output.uvMaterial = vertex.uvMaterial.xyz;
-    output.fog = saturate((viewZ - params.tuning.z) / max(params.tuning.w - params.tuning.z, 0.001));
+    output.fog = float4(params.skyInfo.skyColor, fogIntensity);
     output.layer = pushConstants.layerIndex;
     return output;
 }

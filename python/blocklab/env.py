@@ -63,9 +63,15 @@ class NativeBlockLabBackend:
         height: int,
         device: str | torch.device,
         seed: int = 1,
+        max_steps: int | None = None,
     ) -> None:
         if num_envs <= 0:
             raise ValueError("num_envs must be positive")
+        resolved_max_steps = 0 if max_steps is None else max_steps
+        if resolved_max_steps < 0:
+            raise ValueError("max_steps must be non-negative")
+        if resolved_max_steps > 2**32 - 1:
+            raise ValueError("max_steps must fit into uint32_t")
         if _native is None:
             raise RuntimeError(
                 "blocklab._native is not built. Configure and build the CMake target `_native` first."
@@ -83,6 +89,7 @@ class NativeBlockLabBackend:
             width=width,
             height=height,
             seed=seed,
+            max_steps=resolved_max_steps,
         )
         self._rng = random.Random(seed)
 
@@ -144,6 +151,7 @@ class BlockLabEnv:
         height: int = 90,
         device: str | torch.device | None = None,
         seed: int = 1,
+        max_steps: int | None = None,
         backend: NativeBlockLabBackend | None = None,
     ) -> None:
         resolved_device = torch.device(device) if device is not None else torch.device("cuda")
@@ -153,6 +161,7 @@ class BlockLabEnv:
             height=height,
             device=resolved_device,
             seed=seed,
+            max_steps=max_steps,
         )
         self.num_envs = self.backend.num_envs
         self.single_action_space_n = 7

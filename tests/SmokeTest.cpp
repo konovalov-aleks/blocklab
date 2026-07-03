@@ -1,12 +1,12 @@
+#include "WorldTestUtils.h"
+
 #include <blocklab/environment/Environment.h>
-#include <blocklab/gpu/cuda/CudaHelpers.h>
 #include <blocklab/gpu/vulkan/Vulkan.h>
 #include <blocklab/graphics/Renderer.h>
+#include <environment/Agent.h>
 #include <world/World.h>
-#include <world/WorldGenerator.h>
 
 #include <catch2/catch_test_macros.hpp>
-#include <cuda_runtime.h>
 
 #include <algorithm>
 #include <cmath>
@@ -15,7 +15,7 @@
 #include <memory>
 #include <vector>
 
-namespace blocklab {
+namespace blocklab::test {
 
 class EnvironmentInternalAccessTestHelper {
 public:
@@ -24,37 +24,6 @@ public:
 };
 
 namespace {
-
-    constexpr std::int32_t TestGenerationHalfExtent = 32;
-    constexpr std::uint32_t TestGenerationExtent = TestGenerationHalfExtent * 2;
-    constexpr std::uint32_t TestMaxTerrainVoxels
-        = static_cast<std::uint32_t>(TestGenerationExtent * Chunk::SizeY * TestGenerationExtent);
-
-    void updateWorldCacheAt(const World& world, IVec3 center)
-    {
-        WorldGenerator generator({ .halfExtent = TestGenerationHalfExtent });
-        void* voxelMemory = nullptr;
-        cudaCheck(cudaMalloc(&voxelMemory, VoxelSize * TestMaxTerrainVoxels), "cudaMalloc test terrain voxels");
-        auto* const voxels = static_cast<Voxel*>(voxelMemory);
-        TerrainHeader* terrainHeader = nullptr;
-        cudaCheck(cudaMalloc(&terrainHeader, sizeof(TerrainHeader)), "cudaMalloc test terrain header");
-        AgentState agent;
-        agent.position = { static_cast<float>(center.x), static_cast<float>(center.y), static_cast<float>(center.z) };
-        CudaSharedFuture<WorldGenerationOutput> generation = generator
-                                                                 .generate(world, agent,
-                                                                     {
-                                                                         .header = terrainHeader,
-                                                                         .voxels = voxels,
-                                                                         .maxVoxelCount = TestMaxTerrainVoxels,
-                                                                         .blocks = world.borrowGenerationBuffers(),
-                                                                     })
-                                                                 .share();
-        world.updateGeneration(generation);
-        world.waitForGeneration();
-        cudaCheck(cudaFree(terrainHeader), "cudaFree test terrain header");
-        cudaCheck(cudaFree(voxels), "cudaFree test terrain voxels");
-    }
-
     struct TestRenderContext {
         explicit TestRenderContext(std::uint32_t batchSize = 1)
             : vkInstance(false)
@@ -129,7 +98,27 @@ TEST_CASE("Agent cannot place a block into its own body", "[environment]")
     placeIntoSelf.place = true;
     const AgentAction placeActions[] { placeIntoSelf };
     placeEnv.step(placeActions);
-    CHECK(world.getBlock({ occupiedX, occupiedY, occupiedZ }) == Block::Air);
+    CHECK(world.blockType({ occupiedX, occupiedY, occupiedZ }) == Block::Air);
+}
+
+TEST_CASE("Agent interaction ray can leave the world vertically", "[environment]")
+{
+    World world;
+    world.resetSeed(17);
+    updateWorldCacheAt(world, { 0, 0, 0 });
+
+    // Keep the downward interaction ray in air until it crosses below World::s_minY.
+    clearBlocks(world, { -1, World::s_minY, -1 }, { 3, 4, 3 });
+
+    Agent agent;
+    agent.reset({ 0.5f, 0.0f, 0.5f });
+
+    AgentAction action;
+    action.pitchDelta = -Pi;
+    action.dig = true;
+
+    agent.step(world, action, 0.0f);
+    CHECK(agent.state().blocksCollected == 0);
 }
 
 TEST_CASE("World collision queries respect air and solid override masks", "[world]")
@@ -139,26 +128,40 @@ TEST_CASE("World collision queries respect air and solid override masks", "[worl
     const std::int32_t x = 5;
     const std::int32_t z = -3;
     updateWorldCacheAt(world, { x, 0, z });
-    const std::int32_t groundY = floorToInt32(world.groundHeight(static_cast<float>(x), static_cast<float>(z))) - 1;
+    const std::int32_t groundY = world.terrainHeight({ x, z });
     const IVec3 groundBlock { x, groundY, z };
-    REQUIRE(world.getBlock({ x, groundY, z }) != Block::Air);
+    REQUIRE(world.blockType({ x, groundY, z }) != Block::Air);
     CHECK(world.hasSolidBlockInArea(groundBlock, groundBlock));
 
     world.setBlock({ x, groundY, z }, Block::Air);
     CHECK(!world.hasSolidBlockInArea(groundBlock, groundBlock));
     updateWorldCacheAt(world, { x, 0, z });
-    CHECK(world.getBlock(groundBlock) == Block::Air);
+    CHECK(world.blockType(groundBlock) == Block::Air);
     CHECK(!world.hasSolidBlockInArea(groundBlock, groundBlock));
 
-    const IVec3 airBlock { x, Chunk::SizeY - 1, z };
-    REQUIRE(world.getBlock(airBlock) == Block::Air);
+    const IVec3 airBlock { x, World::s_maxY, z };
+    REQUIRE(world.blockType(airBlock) == Block::Air);
     CHECK(!world.hasSolidBlockInArea(airBlock, airBlock));
 
     world.setBlock(airBlock, Block::Stone);
     CHECK(world.hasSolidBlockInArea(airBlock, airBlock));
     updateWorldCacheAt(world, { x, 0, z });
-    CHECK(world.getBlock(airBlock) == Block::Stone);
+    CHECK(world.blockType(airBlock) == Block::Stone);
     CHECK(world.hasSolidBlockInArea(airBlock, airBlock));
+}
+
+TEST_CASE("World can remove a solid block at the top height", "[world]")
+{
+    World world;
+    world.resetSeed(17);
+    const IVec3 topBlock { 5, World::s_maxY, -3 };
+    updateWorldCacheAt(world, { topBlock.x, 0, topBlock.z });
+
+    world.setBlock(topBlock, Block::Stone);
+    REQUIRE(world.blockType(topBlock) == Block::Stone);
+
+    world.setBlock(topBlock, Block::Air);
+    CHECK(world.blockType(topBlock) == Block::Air);
 }
 
 TEST_CASE("World block cache follows the requested agent-centered region", "[world]")
@@ -168,10 +171,10 @@ TEST_CASE("World block cache follows the requested agent-centered region", "[wor
     const IVec3 firstCenter { 0, 0, 0 };
     const IVec3 secondCenter { 48, 0, -48 };
     updateWorldCacheAt(world, firstCenter);
-    CHECK(world.getBlock({ 0, 0, 0 }) != Block::Air);
+    CHECK(world.blockType({ 0, 0, 0 }) != Block::Air);
 
     updateWorldCacheAt(world, secondCenter);
-    CHECK(world.getBlock({ 48, 0, -48 }) != Block::Air);
+    CHECK(world.blockType({ 48, 0, -48 }) != Block::Air);
 }
 
 TEST_CASE("OverrideCluster keeps count consistent with stored blocks", "[world]")
@@ -350,4 +353,4 @@ TEST_CASE("Pig panics when threat is close", "[world][characters]")
     CHECK(world.characters().front()->stateKind() == CharacterStateKind::Panic);
 }
 
-} // namespace blocklab
+} // namespace blocklab::test

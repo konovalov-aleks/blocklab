@@ -9,6 +9,7 @@
 #include <characters/meshes/PigMesh.h>
 #include <environment/CudaObservation.h>
 #include <gpu/vulkan/Memory.h>
+#include <world/Lighting.h>
 #include <world/World.h>
 #include <world/WorldGenerator.h>
 
@@ -25,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -37,8 +39,7 @@ namespace {
     constexpr std::uint32_t MaxEntityInstances = 256;
     constexpr std::int32_t TerrainMeshHalfExtent = 32;
     constexpr std::uint32_t TerrainMeshExtent = TerrainMeshHalfExtent * 2;
-    constexpr std::size_t MaxTerrainVoxels
-        = static_cast<std::size_t>(TerrainMeshExtent * Chunk::SizeY * TerrainMeshExtent);
+    constexpr std::uint32_t s_maxTerrainVoxels = TerrainMeshExtent * World::s_height * TerrainMeshExtent;
 
     float renderEntityKindId(CharacterKind characterKind)
     {
@@ -281,7 +282,7 @@ namespace {
         const vk::AttachmentDescription colorAttachment {
             .format = state.colorFormat,
             .samples = vk::SampleCountFlagBits::e1,
-            .loadOp = vk::AttachmentLoadOp::eClear,
+            .loadOp = vk::AttachmentLoadOp::eDontCare,
             .storeOp = vk::AttachmentStoreOp::eStore,
             .stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
             .stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
@@ -565,7 +566,7 @@ namespace {
             = VulkanCudaInteropBuffer(vk, terrainHeadersSizeBytes, vk::BufferUsageFlagBits::eStorageBuffer);
 
         state.terrainVoxelBufferCapacityBytes
-            = static_cast<vk::DeviceSize>(MaxTerrainVoxels) * state.batchSize * VoxelSize;
+            = static_cast<vk::DeviceSize>(s_maxTerrainVoxels) * state.batchSize * VoxelSize;
         state.terrainVoxelBuffer = VulkanCudaInteropBuffer(
             vk, state.terrainVoxelBufferCapacityBytes, vk::BufferUsageFlagBits::eStorageBuffer);
         state.pigVertexBuffer
@@ -733,7 +734,7 @@ void Renderer::initializeBatchData()
     }
     for (std::uint32_t i = 0; i < m_batchSize; ++i) {
         RenderSlot& slot = m_slots[i];
-        slot.terrainVoxelOffset = i * MaxTerrainVoxels;
+        slot.terrainVoxelOffset = i * s_maxTerrainVoxels;
         slot.pigVertexCount = m_pigMeshVertexCount;
         slot.instanceOffset = i * MaxEntityInstances;
     }
@@ -748,6 +749,9 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, cons
     // TODO is it practically possible for logicalTimeMs to exceed std::int32_t max? If so, we should probably wrap it
     // instead of clamping to max.
     assert(world.logicalTimeMs() <= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()));
+    const Vec3 skyColor = skyColorAtTime(world.dayTime());
+    const std::uint8_t skyLight = skyLightAtTime(world.dayTime());
+    assert(skyLight >= 0 && skyLight <= 15);
     return {
         .origin = { origin.x, origin.y, origin.z, 0.0f },
         .forward = { forward.x, forward.y, forward.z, 0.0f },
@@ -755,10 +759,90 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, cons
         .up = { up.x, up.y, up.z, 0.0f },
         .worldOriginAndWidth = { 0, 0, 0, static_cast<std::int32_t>(m_state->renderExtent.width) },
         .regionAndHeight = { 0, 0, 0, static_cast<std::int32_t>(m_state->renderExtent.height) },
-        .frameInfo = { .animationTimeMs = static_cast<std::int32_t>(world.logicalTimeMs()) },
-        .tuning = { 48.0f, Pi / 2.25f, 10.0f, 28.0f },
+        .frameInfo = {
+            .animationTimeMs = static_cast<std::int32_t>(world.logicalTimeMs()),
+        },
+        .projectionInfo = {
+            .farPlane = 48.0f,
+            .fovRadians = Pi / 2.25f,
+            .fogStart = 10.0f,
+            .fogEnd = 28.0f,
+        },
+        .skyInfo = {
+            .skyColor = skyColor,
+            .skyLightDimming = 15U - skyLight,
+        },
     };
 }
+
+namespace {
+
+struct BlockLightAdapter {
+    static float light(const BlockInfo& b) { return b.blockLight / 15.0f; }
+};
+
+struct SkyLightAdapter {
+    static float light(const BlockInfo& b) { return b.skyLight / 15.0f; }
+};
+
+template <typename Adapter>
+float lightAtPoint(Vec3 pos, const World& world)
+{
+    const Vec3 p0f = glm::floor(pos);
+    const Vec3 delta = pos - p0f;
+    const IVec3 p0 = p0f;
+
+    if (!world.isInsideLoadedCache(p0) || !world.isInsideLoadedCache(p0 + IVec3(1, 1, 1))) [[unlikely]]
+        return 0.0f;
+
+    const auto airLight = [&world](IVec3 pos) -> std::optional<float> {
+        const BlockInfo* b = world.block(pos);
+        if (!b || isSolidBlock(b->blockType))
+            return std::nullopt;
+        return Adapter::light(*b);
+    };
+
+    const auto mix = [](std::optional<float> x, std::optional<float> y, float a) -> std::optional<float> {
+        if (x) {
+            if (y)
+                return glm::mix(*x, *y, a);
+            return *x;
+        }
+        if (y)
+            return *y;
+        return std::nullopt;
+    };
+
+    const std::optional<float> l000 = airLight(p0);
+    const std::optional<float> l100 = airLight({ p0.x + 1, p0.y, p0.z });
+    const std::optional<float> l010 = airLight({ p0.x, p0.y + 1, p0.z });
+    const std::optional<float> l110 = airLight({ p0.x + 1, p0.y + 1, p0.z });
+    const std::optional<float> l001 = airLight({ p0.x, p0.y, p0.z + 1 });
+    const std::optional<float> l101 = airLight({ p0.x + 1, p0.y, p0.z + 1 });
+    const std::optional<float> l011 = airLight({ p0.x, p0.y + 1, p0.z + 1 });
+    const std::optional<float> l111 = airLight({ p0.x + 1, p0.y + 1, p0.z + 1 });
+
+    // interpolate along X axis
+
+    // front 4 corners
+    const std::optional<float> x00 = mix(l000, l100, delta.x);
+    const std::optional<float> x10 = mix(l010, l110, delta.x);
+
+    // back 4 corners
+    const std::optional<float> x01 = mix(l001, l101, delta.x);
+    const std::optional<float> x11 = mix(l011, l111, delta.x);
+
+    // interpolate along Y axis
+    const std::optional<float> y0 = mix(x00, x10, delta.y);
+    const std::optional<float> y1 = mix(x01, x11, delta.y);
+
+    // interpolate along Z axis
+    std::optional<float> result = mix(y0, y1, delta.z);
+
+    return result ? *result : 0.0f;
+}
+
+} // namespace
 
 void Renderer::uploadInstances(std::size_t slotIndex, const World& world)
 {
@@ -773,9 +857,13 @@ void Renderer::uploadInstances(std::size_t slotIndex, const World& world)
         const Vec3 velocity = character->velocity();
         const Vec3 direction = character->direction();
         const float yaw = std::atan2(direction.x, direction.z);
+        const float blockLight = lightAtPoint<BlockLightAdapter>(position, world);
+        const float skyLight = lightAtPoint<SkyLightAdapter>(position, world);
         m_instances.push_back({
             .positionAndYaw = { position.x, position.y, position.z, yaw },
             .velocityAndKind = { velocity.x, velocity.y, velocity.z, renderEntityKindId(character->kind()) },
+            .blockLight = blockLight,
+            .skyLight = skyLight,
         });
         if (m_instances.size() >= MaxEntityInstances)
             break;
@@ -811,7 +899,7 @@ void Renderer::drawFrame()
     const vk::CommandBufferBeginInfo beginInfo;
     vkCheck(commandBuffer.begin(beginInfo), "VkCommandBuffer::begin");
     const vk::ClearValue clearValues[] {
-        vk::ClearColorValue(std::array<float, 4> { 0.42f, 0.64f, 0.86f, 1.0f }),
+        {}, // color unused, loadOp = DontCare (will be cleared per env later)
         vk::ClearDepthStencilValue(1.0f, 0),
     };
     const vk::Rect2D renderArea {
@@ -834,6 +922,30 @@ void Renderer::drawFrame()
         commandBuffer.pushConstants<DrawPushConstants>(
             *m_state->pipelineLayout, vk::ShaderStageFlagBits::eVertex, 0, pushConstants);
     };
+
+    for (std::uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex) {
+        const auto& skyColor = m_renderParams[envIndex].skyInfo.skyColor;
+        const vk::ClearAttachment clearAttachment {
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .colorAttachment = 0,
+            .clearValue = vk::ClearColorValue(std::array<float, 4> {
+                skyColor.r,
+                skyColor.g,
+                skyColor.b,
+                1.0f,
+            }),
+        };
+
+        const vk::ClearRect clearRect {
+            .rect = {
+                .offset = { 0, 0 },
+                .extent = m_state->renderExtent,
+            },
+            .baseArrayLayer = envIndex,
+            .layerCount = 1,
+        };
+        commandBuffer.clearAttachments(clearAttachment, clearRect);
+    }
 
     bool pipelineBound = false;
     for (std::uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex) {
@@ -938,8 +1050,7 @@ const Observation& Renderer::renderObservations(std::span<const World> worlds, s
 
 void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, const AgentState& agent)
 {
-    const IVec3 agentBlock { floorToInt32(agent.position.x), floorToInt32(agent.position.y),
-        floorToInt32(agent.position.z) };
+    const IVec3 agentBlock = floorToInt32(agent.position);
     constexpr std::int32_t MeshCacheStride = 12;
     RenderSlot& slot = m_slots[slotIndex];
     const IVec3 meshDelta = glm::abs(agentBlock - slot.lastMeshCenter);
@@ -954,11 +1065,11 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
         }
 
         WorldGenerationBuffers buffers;
-        buffers.header = &m_state->terrainHeaderBuffer.cudaPtr<TerrainHeader>()[slotIndex];
-        buffers.maxVoxelCount = MaxTerrainVoxels;
-        buffers.voxels = reinterpret_cast<Voxel*>(
+        buffers.terrain.header = &m_state->terrainHeaderBuffer.cudaPtr<TerrainHeader>()[slotIndex];
+        buffers.terrain.maxVoxels = s_maxTerrainVoxels;
+        buffers.terrain.voxels = reinterpret_cast<Voxel*>(
             m_state->terrainVoxelBuffer.cudaPtr<std::byte>() + slot.terrainVoxelOffset * VoxelSize);
-        buffers.blocks = world.borrowGenerationBuffers();
+        buffers.cpuCache = world.borrowGenerationBuffers();
 
         CudaSharedFuture<WorldGenerationOutput> generation
             = m_worldGenerator->generate(world, agent, std::move(buffers)).share();

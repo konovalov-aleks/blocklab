@@ -4,6 +4,7 @@
 
 struct TerrainHeader {
     int originX;
+    int originY;
     int originZ;
 };
 
@@ -14,9 +15,13 @@ struct Voxel {
     // visibleFacesMask: 6
     // blockType: 5
     uint data;
+
+    uint blockLight;
+    uint skyLight;
 };
 
 static const int N_VERTICES_PER_VOXEL = 36;
+static const uint BlockTorch = 4;
 
 // this should correspond to VisibleFace in Voxel.h
 static const uint FACE_MASKS[] = {
@@ -39,15 +44,8 @@ static const uint FACE_MATERIALS[][6] = {
     { MaterialDirt, MaterialDirt, MaterialDirt, MaterialDirt, MaterialDirt, MaterialDirt },
     // 3 - Stone
     { MaterialStone, MaterialStone, MaterialStone, MaterialStone, MaterialStone, MaterialStone },
-};
-
-static const float FACE_SHADES[6] = {
-    0.78, // left
-    0.78, // right
-    1.0, // top
-    0.48, // bottom
-    0.68, // front
-    0.68, // back
+    // 4 - Torch
+    { MaterialTorchSide, MaterialTorchSide, MaterialTorchTop, MaterialTorchSide, MaterialTorchSide, MaterialTorchSide },
 };
 
 static const float3 CUBE_VERTICES[36] = {
@@ -80,6 +78,14 @@ static const float2 CUBE_UV[36] = {
     float2(0,0), float2(0,1), float2(1,1), float2(0,0), float2(1,1), float2(1,0),
 };
 
+float3 blockVertex(uint blockType, uint vertexInVoxelIndex)
+{
+    float3 vertex = CUBE_VERTICES[vertexInVoxelIndex];
+    if (blockType == BlockTorch)
+        return float3(0.4375 + vertex.x * 0.125, vertex.y * 0.65, 0.4375 + vertex.z * 0.125);
+    return vertex;
+}
+
 StructuredBuffer<TerrainHeader> terrainHeaders : register(t0, space0);
 StructuredBuffer<Voxel> voxels : register(t1, space0);
 StructuredBuffer<RenderParams> paramsBuffer : register(t2, space0);
@@ -108,13 +114,18 @@ VertexOutput voxelVertexMain(uint vertexId : SV_VertexID)
     const int localPosY = (voxel.data >> 17) & ((1 << 9) - 1);
     const int localPosX = (voxel.data >> 26) & ((1 << 6) - 1);
     const int posZ = localPosZ + terrainHeaders[pushConstants.envIndex].originZ;
+    const int posY = localPosY + terrainHeaders[pushConstants.envIndex].originY;
     const int posX = localPosX + terrainHeaders[pushConstants.envIndex].originX;
-    const int3 blockPos = int3(posX, localPosY, posZ);
+    const int3 blockPos = int3(posX, posY, posZ);
+
+    // unpack light
+    const uint blockLight = (voxel.blockLight >> (faceIndex * 4)) & 0xF;
+    const uint skyLight = (voxel.skyLight >> (faceIndex * 4)) & 0xF;
 
     // use a degenerate triangle for invisible faces, so we don't have to discard anything in the pixel shader
     float multiplier = (visibleFaces & FACE_MASKS[faceIndex]) ? 1.0 : 0.0;
 
-    float3 vertexOffset = CUBE_VERTICES[vertexInVoxelIndex];
+    float3 vertexOffset = blockVertex(blockType, vertexInVoxelIndex);
     float3 worldPosition = multiplier * (blockPos + vertexOffset);
     float3 relative = worldPosition - params.origin.xyz;
 
@@ -123,9 +134,12 @@ VertexOutput voxelVertexMain(uint vertexId : SV_VertexID)
     float viewZ = dot(relative, params.forward.xyz);
 
     float nearPlane = 0.05;
-    float farPlane = params.tuning.x;
-    float tanHalfFov = tan(params.tuning.y * 0.5);
+    float farPlane = params.projectionInfo.farPlane;
+    float tanHalfFov = tan(params.projectionInfo.fovRadians * 0.5);
     float aspect = float(params.worldOriginAndWidth.w) / float(params.regionAndHeight.w);
+
+    float fogIntensity = saturate(
+        (viewZ - params.projectionInfo.fogStart) / max(params.projectionInfo.fogEnd - params.projectionInfo.fogStart, 0.001));
 
     VertexOutput output;
     output.position.x = viewX / (aspect * tanHalfFov);
@@ -134,9 +148,10 @@ VertexOutput voxelVertexMain(uint vertexId : SV_VertexID)
     output.position.w = viewZ;
     output.color = float4(1.0, 0.0, 1.0, 1.0); // color is not used for voxels, but we set pink color for debugging purposes
     output.worldPosition = worldPosition;
-    output.shade = FACE_SHADES[faceIndex];
+    uint currentSkyLight = skyLight - min(skyLight, params.skyInfo.skyLightDimming);
+    output.light = max(currentSkyLight, blockLight) / 15.0;
     output.uvMaterial = float3(CUBE_UV[vertexInVoxelIndex], FACE_MATERIALS[blockType][faceIndex]);
-    output.fog = saturate((viewZ - params.tuning.z) / max(params.tuning.w - params.tuning.z, 0.001));
+    output.fog = float4(params.skyInfo.skyColor, fogIntensity);
     output.layer = pushConstants.layerIndex;
     return output;
 }
