@@ -26,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -774,6 +775,75 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, cons
     };
 }
 
+namespace {
+
+struct BlockLightAdapter {
+    static float light(const BlockInfo& b) { return b.blockLight / 15.0f; }
+};
+
+struct SkyLightAdapter {
+    static float light(const BlockInfo& b) { return b.skyLight / 15.0f; }
+};
+
+template <typename Adapter>
+float lightAtPoint(Vec3 pos, const World& world)
+{
+    const Vec3 p0f = glm::floor(pos);
+    const Vec3 delta = pos - p0f;
+    const IVec3 p0 = p0f;
+
+    if (!world.isInsideLoadedCache(p0) || !world.isInsideLoadedCache(p0 + IVec3(1, 1, 1))) [[unlikely]]
+        return 0.0f;
+
+    const auto airLight = [&world](IVec3 pos) -> std::optional<float> {
+        const BlockInfo* b = world.block(pos);
+        if (!b || isSolidBlock(b->blockType))
+            return std::nullopt;
+        return Adapter::light(*b);
+    };
+
+    const auto mix = [](std::optional<float> x, std::optional<float> y, float a) -> std::optional<float> {
+        if (x) {
+            if (y)
+                return glm::mix(*x, *y, a);
+            return *x;
+        }
+        if (y)
+            return *y;
+        return std::nullopt;
+    };
+
+    const std::optional<float> l000 = airLight(p0);
+    const std::optional<float> l100 = airLight({ p0.x + 1, p0.y, p0.z });
+    const std::optional<float> l010 = airLight({ p0.x, p0.y + 1, p0.z });
+    const std::optional<float> l110 = airLight({ p0.x + 1, p0.y + 1, p0.z });
+    const std::optional<float> l001 = airLight({ p0.x, p0.y, p0.z + 1 });
+    const std::optional<float> l101 = airLight({ p0.x + 1, p0.y, p0.z + 1 });
+    const std::optional<float> l011 = airLight({ p0.x, p0.y + 1, p0.z + 1 });
+    const std::optional<float> l111 = airLight({ p0.x + 1, p0.y + 1, p0.z + 1 });
+
+    // interpolate along X axis
+
+    // front 4 corners
+    const std::optional<float> x00 = mix(l000, l100, delta.x);
+    const std::optional<float> x10 = mix(l010, l110, delta.x);
+
+    // back 4 corners
+    const std::optional<float> x01 = mix(l001, l101, delta.x);
+    const std::optional<float> x11 = mix(l011, l111, delta.x);
+
+    // interpolate along Y axis
+    const std::optional<float> y0 = mix(x00, x10, delta.y);
+    const std::optional<float> y1 = mix(x01, x11, delta.y);
+
+    // interpolate along Z axis
+    std::optional<float> result = mix(y0, y1, delta.z);
+
+    return result ? *result : 0.0f;
+}
+
+} // namespace
+
 void Renderer::uploadInstances(std::size_t slotIndex, const World& world)
 {
     RenderSlot& slot = m_slots[slotIndex];
@@ -787,9 +857,13 @@ void Renderer::uploadInstances(std::size_t slotIndex, const World& world)
         const Vec3 velocity = character->velocity();
         const Vec3 direction = character->direction();
         const float yaw = std::atan2(direction.x, direction.z);
+        const float blockLight = lightAtPoint<BlockLightAdapter>(position, world);
+        const float skyLight = lightAtPoint<SkyLightAdapter>(position, world);
         m_instances.push_back({
             .positionAndYaw = { position.x, position.y, position.z, yaw },
             .velocityAndKind = { velocity.x, velocity.y, velocity.z, renderEntityKindId(character->kind()) },
+            .blockLight = blockLight,
+            .skyLight = skyLight,
         });
         if (m_instances.size() >= MaxEntityInstances)
             break;
@@ -976,8 +1050,7 @@ const Observation& Renderer::renderObservations(std::span<const World> worlds, s
 
 void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, const AgentState& agent)
 {
-    const IVec3 agentBlock { floorToInt32(agent.position.x), floorToInt32(agent.position.y),
-        floorToInt32(agent.position.z) };
+    const IVec3 agentBlock = floorToInt32(agent.position);
     constexpr std::int32_t MeshCacheStride = 12;
     RenderSlot& slot = m_slots[slotIndex];
     const IVec3 meshDelta = glm::abs(agentBlock - slot.lastMeshCenter);

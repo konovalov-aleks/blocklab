@@ -69,6 +69,9 @@ public:
     struct EntityInstance {
         Vec4 positionAndYaw;
         Vec4 velocityAndKind;
+
+        float blockLight;
+        float skyLight;
     };
     struct DrawPushConstants {
         std::uint32_t envIndex = 0;

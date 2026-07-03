@@ -10,6 +10,8 @@ struct MeshVertex {
 struct EntityInstance {
     float4 positionAndYaw;
     float4 velocityAndKind;
+    float blockLight;
+    float skyLight;
 };
 
 static const uint EntityKindNone = 0;
@@ -61,6 +63,8 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
     float fogIntensity = saturate(
         (viewZ - params.projectionInfo.fogStart) / max(params.projectionInfo.fogEnd - params.projectionInfo.fogStart, 0.001));
 
+    float light = max(instance.skyLight - params.skyInfo.skyLightDimming / 15.0f, instance.blockLight);
+
     VertexOutput output;
     output.position.x = viewX / (aspect * tanHalfFov);
     output.position.y = -viewY / tanHalfFov;
@@ -68,7 +72,7 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
     output.position.w = viewZ;
     output.color = float4(vertex.colorAndLight.rgb, 1.0);
     output.worldPosition = worldPosition;
-    output.light = vertex.colorAndLight.a;
+    output.light = vertex.colorAndLight.a * light;
     output.uvMaterial = vertex.uvMaterial.xyz;
     output.fog = float4(params.skyInfo.skyColor, fogIntensity);
     output.layer = pushConstants.layerIndex;

@@ -139,22 +139,22 @@ void World::resetCharacters()
     spawnTestPigs();
 }
 
-Block World::getBlock(IVec3 pos) const
+const BlockInfo* World::block(IVec3 pos) const
 {
     m_blockCache.waitIfPending();
-
-    if (!isValidHeight(pos.y))
-        return Block::Air;
-
-    if (!m_blockCache.isInsideBounds(pos)) [[unlikely]] {
-        fatalError(
-            "Requested block (", pos.x, ", ", pos.y, ", ", pos.z, ") is outside of the world generation cache bounds");
-    }
-
     if (m_blockCache.empty()) [[unlikely]]
         fatalError("World generation cache blocks are not ready");
 
-    return m_blockCache[pos].blockType;
+    if (!m_blockCache.isInsideBounds(pos))
+        return nullptr;
+
+    return &m_blockCache[pos];
+}
+
+Block World::blockType(IVec3 pos) const
+{
+    const BlockInfo* bi = block(pos);
+    return bi ? bi->blockType : Block::Air;
 }
 
 void World::setBlock(IVec3 pos, Block block)
@@ -163,7 +163,7 @@ void World::setBlock(IVec3 pos, Block block)
     if (!isValidHeight(pos.y))
         return;
 
-    const Block oldBlock = getBlock(pos);
+    const Block oldBlock = blockType(pos);
     if (oldBlock == block)
         return;
 
@@ -194,7 +194,7 @@ void World::setBlock(IVec3 pos, Block block)
     ++m_version;
 
     const IVec3 above = pos + IVec3 { 0, 1, 0 };
-    if (isSolidBlock(oldBlock) && !isSolidBlock(block) && getBlock(above) == Block::Torch)
+    if (isSolidBlock(oldBlock) && !isSolidBlock(block) && blockType(above) == Block::Torch)
         setBlock(above, Block::Air);
 }
 

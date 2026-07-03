@@ -18,7 +18,19 @@ using UVec3 = glm::uvec3;
 
 inline static constexpr float Pi = std::numbers::pi_v<float>;
 
-inline constexpr std::int32_t floorToInt32(float value) { return static_cast<std::int32_t>(std::floor(value)); }
+inline constexpr std::int32_t floorToInt32(float value)
+{
+    return static_cast<std::int32_t>(std::floor(value));
+}
+
+inline constexpr IVec3 floorToInt32(Vec3 v)
+{
+    return {
+        floorToInt32(v.x),
+        floorToInt32(v.y),
+        floorToInt32(v.z),
+    };
+}
 
 inline float wrapAngle(float angle)
 {

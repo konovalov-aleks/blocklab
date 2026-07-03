@@ -207,7 +207,7 @@ namespace {
             const std::int32_t z = std::clamp(static_cast<std::int32_t>(std::lround(horizontal(rng))), -28, 28);
             const std::int32_t surfaceY = world.terrainHeight({ x, z });
             const std::int32_t y = std::clamp(surfaceY + verticalOffset(rng), World::s_minY, World::s_maxY);
-            const Block current = world.getBlock({ x, y, z });
+            const Block current = world.blockType({ x, y, z });
             world.setBlock({ x, y, z }, current == Block::Air ? Block::Stone : Block::Air);
         }
         return static_cast<std::uint64_t>(world.overrideCount() - before);

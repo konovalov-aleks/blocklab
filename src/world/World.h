@@ -40,11 +40,18 @@ public:
     // note: the block cache must be initialized
     void resetCharacters();
 
-    Block getBlock(IVec3 pos) const;
+    // returns nullptr if requested block is out of loaded cache bounds
+    const BlockInfo* block(IVec3 pos) const;
+
+    // returns Air if the requested block is out of loaded cache bounds
+    Block blockType(IVec3 pos) const;
+
     void setBlock(IVec3 pos, Block block);
-    bool isSolid(IVec3 pos) const { return isSolidBlock(getBlock(pos)); }
+    bool isSolid(IVec3 pos) const { return isSolidBlock(blockType(pos)); }
     bool hasSolidBlockInArea(IVec3 min, IVec3 max) const;
     std::int32_t terrainHeight(IVec2 xz) const { return m_blockCache.terrainHeight(xz); }
+
+    bool isInsideLoadedCache(IVec3 pos) const { return !m_blockCache.empty() && m_blockCache.isInsideBounds(pos); }
 
     void collectOverridesInRegion(IVec3 origin, UVec3 size, std::vector<BlockOverride>& out) const;
 

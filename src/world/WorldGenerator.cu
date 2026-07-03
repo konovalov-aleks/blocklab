@@ -416,6 +416,7 @@ namespace {
 
                 if (blocksCache[x][y][z].atomicSetLightIfGreater(light)) {
                     int index = atomicAdd(&newQueueLength, 1);
+                    assert(index < s_maxLightComputeQueueLength);
                     newQueue[index] = make_uchar3(x, y, z);
                 }
             };
@@ -532,13 +533,15 @@ namespace {
             const int curHeightLocal = curHeight - params.originY;
             const int neighborHeightLocal = neighborHeight - params.originY;
 
-            assert(curHeightLocal >= -1 && curHeightLocal < params.height);
-            assert(neighborHeightLocal >= -1 && neighborHeightLocal < params.height);
+            assert(curHeightLocal >= -1 && curHeightLocal < static_cast<int>(params.height));
+            assert(neighborHeightLocal >= -1 && neighborHeightLocal < static_cast<int>(params.height));
 
             assert(curHeightLocal < 0 || isOpaqueBlock(blockAt(localX, curHeightLocal, localZ).blockType));
             assert(curHeightLocal < 0 || blockAt(localX, curHeightLocal, localZ).skyLight == 0);
-            assert(!isOpaqueBlock(blockAt(localX, curHeightLocal + 1, localZ).blockType));
-            assert(blockAt(localX, curHeightLocal + 1, localZ).skyLight == 15);
+            assert(curHeightLocal + 1 >= static_cast<int>(params.height)
+                || !isOpaqueBlock(blockAt(localX, curHeightLocal + 1, localZ).blockType));
+            assert(curHeightLocal + 1 >= static_cast<int>(params.height)
+                || blockAt(localX, curHeightLocal + 1, localZ).skyLight == 15);
 
             for (int y = curHeightLocal + 1; y < neighborHeightLocal; ++y) {
                 const BlockInfo& neighborBlock = blockAt(neighborLocalX, y, neighborLocalZ);

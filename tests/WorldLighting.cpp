@@ -710,7 +710,7 @@ TEST_CASE("Generated terrain lighting follows torch state transitions", "[world]
 
     // Destroying the support block removes the torch above and its remaining light contribution.
     world.setBlock(leftTorchSupport, Block::Air);
-    CHECK(world.getBlock(leftTorch) == Block::Air);
+    CHECK(world.blockType(leftTorch) == Block::Air);
     {
         const GeneratedVoxels generated = generateVoxelsAt(world, Center);
         checkBlockLight(generated, sliceOrigin, sliceSize,

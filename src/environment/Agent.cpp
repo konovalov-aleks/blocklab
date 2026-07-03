@@ -88,11 +88,11 @@ void Agent::interact(World& world, const AgentAction& action)
     const Vec3 eye = m_character.position() + Vec3 { 0.0f, s_eyeHeight, 0.0f };
     const Vec3 forward = forwardFromAngles(m_state.yaw, m_state.pitch);
 
-    IVec3 previousAir { floorToInt32(eye.x), floorToInt32(eye.y), floorToInt32(eye.z) };
+    IVec3 previousAir = floorToInt32(eye);
     for (float distance = 0.5f; distance <= 4.0f; distance += 0.2f) {
         const Vec3 sample = eye + forward * distance;
-        const IVec3 blockPos { floorToInt32(sample.x), floorToInt32(sample.y), floorToInt32(sample.z) };
-        const Block hitBlock = world.getBlock(blockPos);
+        const IVec3 blockPos = floorToInt32(sample);
+        const Block hitBlock = world.blockType(blockPos);
         if (hitBlock != Block::Air) {
             if (action.dig) {
                 world.setBlock(blockPos, Block::Air);

@@ -36,16 +36,14 @@ Character::Character(EntityId id, CharacterKind kind, Vec3 position, HitBox hitb
 {
 }
 
-void Character::moveToward(World& world, Vec3 target, float speed, float dt)
+void Character::moveToward(World&, Vec3 target, float speed, float dt)
 {
-    (void)world;
     const Vec3 direction = normalized2D(target - m_position);
     setHorizontalMovement(direction, speed, CharacterAcceleration, dt);
 }
 
-void Character::fleeFrom(World& world, Vec3 threatPosition, float speed, float dt)
+void Character::fleeFrom(World&, Vec3 threatPosition, float speed, float dt)
 {
-    (void)world;
     const Vec3 direction = normalized2D(m_position - threatPosition);
     setHorizontalMovement(direction, speed, CharacterAcceleration, dt);
 }
