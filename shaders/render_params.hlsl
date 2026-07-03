@@ -1,5 +1,8 @@
+#ifndef RENDER_PARAMS_HLSL
+#define RENDER_PARAMS_HLSL
+
 struct RenderFrameInfo {
-    int animationTimeMs;
+    uint animationTimeMs;
     uint _padding1;
     uint _padding2;
     uint _padding3;
@@ -15,6 +18,8 @@ struct RenderProjectionInfo {
 struct RenderSkyInfo {
     float3 skyColor;
     uint skyLightDimming;
+    float3 skyLightDirection;
+    float _padding;
 };
 
 struct RenderParams {
@@ -35,3 +40,5 @@ struct DrawPushConstants {
     uint _padding0;
     uint _padding1;
 };
+
+#endif // RENDER_PARAMS_HLSL

@@ -1,10 +1,13 @@
+#include "lighting.hlsl"
 #include "render_params.hlsl"
 #include "vertex_output.hlsl"
 
 struct MeshVertex {
     float4 position;
-    float4 colorAndLight;
+    float4 normal;
     float4 uvMaterial;
+    float3 color;
+    float _padding;
 };
 
 struct EntityInstance {
@@ -31,14 +34,19 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
     RenderParams params = paramsBuffer[pushConstants.envIndex];
     MeshVertex vertex = vertices[vertexId];
     float3 worldPosition = vertex.position.xyz;
+    float3 worldNormal = vertex.normal.xyz;
     EntityInstance instance = instances[instanceId];
     uint entityKind = uint(instance.velocityAndKind.w + 0.5);
     if (entityKind != EntityKindNone) {
         float yaw = instance.positionAndYaw.w;
         float3 entityRight = float3(cos(yaw), 0.0, -sin(yaw));
         float3 entityForward = float3(sin(yaw), 0.0, cos(yaw));
+
         worldPosition = instance.positionAndYaw.xyz + entityRight * vertex.position.x
             + float3(0.0, vertex.position.y, 0.0) + entityForward * vertex.position.z;
+        worldNormal = entityRight * vertex.normal.x
+            + float3(0.0, vertex.normal.y, 0.0) + entityForward * vertex.normal.z;
+
         // Pig mesh uses position.w as a leg animation marker: 0 disables it, sign selects the stride phase.
         float legPhaseMarker = vertex.position.w;
         float stridePhase = legPhaseMarker > 0.0 ? 0.0 : 3.14159265;
@@ -63,16 +71,17 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
     float fogIntensity = saturate(
         (viewZ - params.projectionInfo.fogStart) / max(params.projectionInfo.fogEnd - params.projectionInfo.fogStart, 0.001));
 
-    float light = max(instance.skyLight - params.skyInfo.skyLightDimming / 15.0f, instance.blockLight);
+    float faceSkyLightFactor = faceSkyLight(normalize(worldNormal), params);
+    float light = max(faceSkyLightFactor * (instance.skyLight - params.skyInfo.skyLightDimming / 15.0f), instance.blockLight);
 
     VertexOutput output;
     output.position.x = viewX / (aspect * tanHalfFov);
     output.position.y = -viewY / tanHalfFov;
     output.position.z = viewZ * farPlane / (farPlane - nearPlane) - farPlane * nearPlane / (farPlane - nearPlane);
     output.position.w = viewZ;
-    output.color = float4(vertex.colorAndLight.rgb, 1.0);
+    output.color = float4(vertex.color, 1.0);
     output.worldPosition = worldPosition;
-    output.light = vertex.colorAndLight.a * light;
+    output.light = 1.0 * light;
     output.uvMaterial = vertex.uvMaterial.xyz;
     output.fog = float4(params.skyInfo.skyColor, fogIntensity);
     output.layer = pushConstants.layerIndex;

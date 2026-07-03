@@ -18,4 +18,6 @@ Vec3 skyColorAtTime(WorldTime);
 
 std::pair<Vec3, float> skyColorAndLightFactorAtTime(WorldTime);
 
+Vec3 skyLightDirectionAtTime(WorldTime);
+
 } // namespace blocklab

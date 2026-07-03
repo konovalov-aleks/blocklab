@@ -22,8 +22,10 @@ enum class Material : std::uint8_t {
 
 struct MeshVertex {
     Vec4 position;
-    Vec4 colorAndLight;
+    Vec4 normal;
     Vec4 uvMaterial;
+    Vec3 color;
+    float padding;
 };
 
 } // namespace blocklab

@@ -1,3 +1,4 @@
+#include "lighting.hlsl"
 #include "material.hlsl"
 #include "render_params.hlsl"
 #include "vertex_output.hlsl"
@@ -46,6 +47,15 @@ static const uint FACE_MATERIALS[][6] = {
     { MaterialStone, MaterialStone, MaterialStone, MaterialStone, MaterialStone, MaterialStone },
     // 4 - Torch
     { MaterialTorchSide, MaterialTorchSide, MaterialTorchTop, MaterialTorchSide, MaterialTorchSide, MaterialTorchSide },
+};
+
+static const float3 FACE_NORMALS[6] = {
+    float3(-1.0,  0.0,  0.0), // left
+    float3( 1.0,  0.0,  0.0), // right
+    float3( 0.0,  1.0,  0.0), // top
+    float3( 0.0, -1.0,  0.0), // bottom
+    float3( 0.0,  0.0,  1.0), // front
+    float3( 0.0,  0.0, -1.0), // back
 };
 
 static const float3 CUBE_VERTICES[36] = {
@@ -141,6 +151,8 @@ VertexOutput voxelVertexMain(uint vertexId : SV_VertexID)
     float fogIntensity = saturate(
         (viewZ - params.projectionInfo.fogStart) / max(params.projectionInfo.fogEnd - params.projectionInfo.fogStart, 0.001));
 
+    float faceSkyLightFactor = faceSkyLight(FACE_NORMALS[faceIndex], params);
+
     VertexOutput output;
     output.position.x = viewX / (aspect * tanHalfFov);
     output.position.y = -viewY / tanHalfFov;
@@ -149,7 +161,7 @@ VertexOutput voxelVertexMain(uint vertexId : SV_VertexID)
     output.color = float4(1.0, 0.0, 1.0, 1.0); // color is not used for voxels, but we set pink color for debugging purposes
     output.worldPosition = worldPosition;
     uint currentSkyLight = skyLight - min(skyLight, params.skyInfo.skyLightDimming);
-    output.light = max(currentSkyLight, blockLight) / 15.0;
+    output.light = max(float(currentSkyLight) * faceSkyLightFactor, float(blockLight)) / 15.0;
     output.uvMaterial = float3(CUBE_UV[vertexInVoxelIndex], FACE_MATERIALS[blockType][faceIndex]);
     output.fog = float4(params.skyInfo.skyColor, fogIntensity);
     output.layer = pushConstants.layerIndex;
