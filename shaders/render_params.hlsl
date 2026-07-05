@@ -23,12 +23,18 @@ struct RenderSkyInfo {
 };
 
 struct RenderParams {
-    float4 origin;
-    float4 forward;
-    float4 right;
-    float4 up;
-    int4 worldOriginAndWidth;
-    int4 regionAndHeight;
+    float3 origin;
+    float _padding1;
+    float3 forward;
+    float _padding2;
+    float3 right;
+    float _padding3;
+    float3 up;
+    float _padding4;
+    int3 worldOrigin;
+    int viewportWidth;
+    int3 regionOrigin;
+    int viewportHeight;
     RenderFrameInfo frameInfo;
     RenderProjectionInfo projectionInfo;
     RenderSkyInfo skyInfo;

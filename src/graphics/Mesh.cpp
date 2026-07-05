@@ -43,34 +43,46 @@ void MeshBuilder::appendMeshFace(Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3,
     if (m_data + 6 > m_end) [[unlikely]]
         fatalError("MeshBuilder: the destination buffer is too small");
 
-    const Vec4 normal { glm::normalize(glm::cross(p1 - p0, p2 - p0)), 0.0f };
+    const Vec3 normal = glm::normalize(glm::cross(p1 - p0, p2 - p0));
     const std::uint32_t materialId = static_cast<std::uint32_t>(material);
-    *(m_data++) = { .position = { p0, animationPhase },
+    *(m_data++) = {
+        .position = p0,
+        .animationPhase = animationPhase,
         .normal = normal,
         .uv = { 0.0f, 0.0f },
         .material = materialId,
         .color = color };
-    *(m_data++) = { .position = { p1, animationPhase },
+    *(m_data++) = {
+        .position = p1,
+        .animationPhase = animationPhase,
         .normal = normal,
         .uv = { 1.0f, 0.0f },
         .material = materialId,
         .color = color };
-    *(m_data++) = { .position = { p2, animationPhase },
+    *(m_data++) = {
+        .position = p2,
+        .animationPhase = animationPhase,
         .normal = normal,
         .uv = { 1.0f, 1.0f },
         .material = materialId,
         .color = color };
-    *(m_data++) = { .position = { p0, animationPhase },
+    *(m_data++) = {
+        .position = p0,
+        .animationPhase = animationPhase,
         .normal = normal,
         .uv = { 0.0f, 0.0f },
         .material = materialId,
         .color = color };
-    *(m_data++) = { .position = { p2, animationPhase },
+    *(m_data++) = {
+        .position = p2,
+        .animationPhase = animationPhase,
         .normal = normal,
         .uv = { 1.0f, 1.0f },
         .material = materialId,
         .color = color };
-    *(m_data++) = { .position = { p3, animationPhase },
+    *(m_data++) = {
+        .position = p3,
+        .animationPhase = animationPhase,
         .normal = normal,
         .uv = { 0.0f, 1.0f },
         .material = materialId,

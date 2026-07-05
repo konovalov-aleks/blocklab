@@ -1,5 +1,7 @@
+#include "fog.hlsl"
 #include "lighting.hlsl"
 #include "material.hlsl"
+#include "projection.hlsl"
 #include "render_params.hlsl"
 #include "vertex_output.hlsl"
 
@@ -137,34 +139,19 @@ VertexOutput voxelVertexMain(uint vertexId : SV_VertexID)
 
     float3 vertexOffset = blockVertex(blockType, vertexInVoxelIndex);
     float3 worldPosition = multiplier * (blockPos + vertexOffset);
-    float3 relative = worldPosition - params.origin.xyz;
-
-    float viewX = dot(relative, params.right.xyz);
-    float viewY = dot(relative, params.up.xyz);
-    float viewZ = dot(relative, params.forward.xyz);
-
-    float nearPlane = 0.05;
-    float farPlane = params.projectionInfo.farPlane;
-    float tanHalfFov = tan(params.projectionInfo.fovRadians * 0.5);
-    float aspect = float(params.worldOriginAndWidth.w) / float(params.regionAndHeight.w);
-
-    float fogIntensity = saturate(
-        (viewZ - params.projectionInfo.fogStart) / max(params.projectionInfo.fogEnd - params.projectionInfo.fogStart, 0.001));
+    ViewPosition viewPosition = worldToView(worldPosition, params);
 
     float faceSkyLightFactor = faceSkyLight(FACE_NORMALS[faceIndex], params);
 
     VertexOutput output;
-    output.position.x = viewX / (aspect * tanHalfFov);
-    output.position.y = -viewY / tanHalfFov;
-    output.position.z = viewZ * farPlane / (farPlane - nearPlane) - farPlane * nearPlane / (farPlane - nearPlane);
-    output.position.w = viewZ;
+    output.position = projectViewPosition(viewPosition, params);
     output.color = float4(1.0, 0.0, 1.0, 1.0); // color is not used for voxels, but we set pink color for debugging purposes
     output.worldPosition = worldPosition;
     uint currentSkyLight = skyLight - min(skyLight, params.skyInfo.skyLightDimming);
     output.light = max(float(currentSkyLight) * faceSkyLightFactor, float(blockLight)) / 15.0;
     output.uv = CUBE_UV[vertexInVoxelIndex];
     output.material = FACE_MATERIALS[blockType][faceIndex];
-    output.fog = float4(params.skyInfo.skyColor, fogIntensity);
+    output.fog = float4(params.skyInfo.skyColor, fogIntensity(viewPosition.z, params));
     output.layer = pushConstants.layerIndex;
     return output;
 }

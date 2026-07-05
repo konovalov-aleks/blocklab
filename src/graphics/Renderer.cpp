@@ -787,12 +787,14 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, cons
     assert(skyLight >= 0 && skyLight <= 15);
 
     return {
-        .origin = { origin.x, origin.y, origin.z, 0.0f },
-        .forward = { forward.x, forward.y, forward.z, 0.0f },
-        .right = { right.x, right.y, right.z, 0.0f },
-        .up = { up.x, up.y, up.z, 0.0f },
-        .worldOriginAndWidth = { 0, 0, 0, static_cast<std::int32_t>(m_state->renderExtent.width) },
-        .regionAndHeight = { 0, 0, 0, static_cast<std::int32_t>(m_state->renderExtent.height) },
+        .origin = origin,
+        .forward = forward,
+        .right = right,
+        .up = up,
+        .worldOrigin = {},
+        .viewportWidth = static_cast<std::int32_t>(m_state->renderExtent.width),
+        .regionOrigin = {},
+        .viewportHeight = static_cast<std::int32_t>(m_state->renderExtent.height),
         .frameInfo = {
             .animationTimeMs = static_cast<std::uint32_t>(world.logicalTimeMs()),
         },

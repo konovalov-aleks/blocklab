@@ -1,16 +1,20 @@
+#include "fog.hlsl"
 #include "lighting.hlsl"
 #include "material.hlsl"
+#include "projection.hlsl"
 #include "render_params.hlsl"
 #include "vertex_output.hlsl"
 
 struct MeshVertex {
-    float4 position;
-    float4 normal;
+    float3 position;
+    float animationPhase;
+    float3 normal;
+    float _padding0;
     float2 uv;
     uint material;
-    uint _padding0;
+    uint _padding1;
     float3 color;
-    float _padding1;
+    float _padding2;
 };
 
 struct EntityInstance {
@@ -68,12 +72,12 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
 {
     RenderParams params = paramsBuffer[pushConstants.envIndex];
     MeshVertex vertex = vertices[vertexId];
-    float3 worldPosition = vertex.position.xyz;
-    float3 worldNormal = vertex.normal.xyz;
+    float3 worldPosition = vertex.position;
+    float3 worldNormal = vertex.normal;
     EntityInstance instance = instances[instanceId];
     uint entityKind = instance.kind;
     uint entityFamily = renderEntityFamily(entityKind);
-    float3 itemLocalPosition = vertex.position.xyz;
+    float3 itemLocalPosition = vertex.position;
     if (entityKind != EntityKindNone) {
         float3 localPosition = itemLocalPosition;
         float yaw = instance.yaw;
@@ -101,8 +105,8 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
         worldNormal = entityRight * vertex.normal.x
             + float3(0.0, vertex.normal.y, 0.0) + entityForward * vertex.normal.z;
 
-        // Pig mesh uses position.w as a leg animation marker: 0 disables it, sign selects the stride phase.
-        float legPhaseMarker = vertex.position.w;
+        // Pig mesh uses animationPhase as a leg animation marker: 0 disables it, sign selects the stride phase.
+        float legPhaseMarker = vertex.animationPhase;
         float stridePhase = legPhaseMarker > 0.0 ? 0.0 : 3.14159265;
         float stride = sin(animationTime * 9.0 + stridePhase);
         float horizontalSpeedSq = dot(instance.velocity.xz, instance.velocity.xz);
@@ -111,27 +115,13 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
             worldPosition.y += max(0.0, -stride) * 0.05;
         }
     }
-    float3 relative = worldPosition - params.origin.xyz;
-    float viewX = dot(relative, params.right.xyz);
-    float viewY = dot(relative, params.up.xyz);
-    float viewZ = dot(relative, params.forward.xyz);
-
-    float nearPlane = 0.05;
-    float farPlane = params.projectionInfo.farPlane;
-    float tanHalfFov = tan(params.projectionInfo.fovRadians * 0.5);
-    float aspect = float(params.worldOriginAndWidth.w) / float(params.regionAndHeight.w);
-
-    float fogIntensity = saturate(
-        (viewZ - params.projectionInfo.fogStart) / max(params.projectionInfo.fogEnd - params.projectionInfo.fogStart, 0.001));
+    ViewPosition viewPosition = worldToView(worldPosition, params);
 
     float faceSkyLightFactor = faceSkyLight(normalize(worldNormal), params);
     float light = max(faceSkyLightFactor * (instance.skyLight - params.skyInfo.skyLightDimming / 15.0f), instance.blockLight);
 
     VertexOutput output;
-    output.position.x = viewX / (aspect * tanHalfFov);
-    output.position.y = -viewY / tanHalfFov;
-    output.position.z = viewZ * farPlane / (farPlane - nearPlane) - farPlane * nearPlane / (farPlane - nearPlane);
-    output.position.w = viewZ;
+    output.position = projectViewPosition(viewPosition, params);
     output.color = float4(vertex.color, 1.0);
     output.worldPosition = worldPosition;
     output.light = 1.0 * light;
@@ -143,7 +133,7 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
         if (entityKind == EntityKindTorchDrop && material == MaterialTorchSide)
             output.uv.y = saturate((itemLocalPosition.y + 0.255) / 0.35);
     }
-    output.fog = float4(params.skyInfo.skyColor, fogIntensity);
+    output.fog = float4(params.skyInfo.skyColor, fogIntensity(viewPosition.z, params));
     output.layer = pushConstants.layerIndex;
     return output;
 }

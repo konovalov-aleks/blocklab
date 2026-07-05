@@ -61,7 +61,7 @@ public:
     struct RenderParams {
         struct alignas(16) FrameInfo {
             std::uint32_t animationTimeMs = 0;
-            std::uint32_t padding[3] = {};
+            std::uint32_t _padding[3];
         };
         struct alignas(16) ProjectionInfo {
             float farPlane;
@@ -74,15 +74,21 @@ public:
             // currentLight = max(0, block.skyLight - skyLightDimming)
             std::uint32_t skyLightDimming;
             Vec3 skyLightDirection;
-            float padding;
+            float _padding;
         };
 
-        Vec4 origin;
-        Vec4 forward;
-        Vec4 right;
-        Vec4 up;
-        IVec4 worldOriginAndWidth;
-        IVec4 regionAndHeight;
+        Vec3 origin;
+        float _padding1;
+        Vec3 forward;
+        float _padding2;
+        Vec3 right;
+        float _padding3;
+        Vec3 up;
+        float _padding4;
+        IVec3 worldOrigin;
+        std::int32_t viewportWidth;
+        IVec3 regionOrigin;
+        std::int32_t viewportHeight;
         FrameInfo frameInfo;
         ProjectionInfo projectionInfo;
         SkyInfo skyInfo;
@@ -95,7 +101,7 @@ public:
         std::uint32_t kind;
         float blockLight;
         float skyLight;
-        float padding;
+        float _padding;
     };
     struct DrawPushConstants {
         std::uint32_t envIndex = 0;

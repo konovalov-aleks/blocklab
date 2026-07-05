@@ -21,14 +21,17 @@ enum class Material : std::uint8_t {
 };
 
 struct MeshVertex {
-    Vec4 position;
-    Vec4 normal;
+    Vec3 position;
+    float animationPhase;
+    Vec3 normal;
+    float padding0;
     Vec2 uv;
     std::uint32_t material;
-    std::uint32_t padding0;
+    std::uint32_t padding1;
     Vec3 color;
-    float padding1;
+    float padding2;
 };
+static_assert(sizeof(MeshVertex) == sizeof(Vec4) * 4);
 
 class MeshBuilder {
 public:
