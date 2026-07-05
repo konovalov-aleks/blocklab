@@ -32,6 +32,25 @@ namespace {
         return x + z * OverrideCluster::Edge + y * OverrideCluster::Edge * OverrideCluster::Edge;
     }
 
+    std::optional<Item::Type> dropType(Block block)
+    {
+        switch (block) {
+        case Block::Air:
+            return std::nullopt;
+        case Block::Grass:
+        case Block::Dirt:
+            return Item::Type::Dirt;
+        case Block::Stone:
+            return Item::Type::Stone;
+        case Block::Torch:
+            return Item::Type::Torch;
+
+        case Block::COUNT:
+            break;
+        }
+        fatalError("corrupted Block value: ", static_cast<int>(block));
+    }
+
 } // namespace
 
 BlockInfo& World::BlockCache::operator[](IVec3 pos)
@@ -57,10 +76,17 @@ std::int32_t World::BlockCache::terrainHeight(IVec2 xz)
     return m_heightMap[localX + m_size.x * localZ];
 }
 
+void World::throwDrop(IVec3 pos, Item item)
+{
+    // TODO move out of solid blocks
+    // TODO merge identical drops
+    m_drops.emplace_back(logicalTimeMs(), pos, item);
+}
+
 bool World::BlockCache::isInsideBounds(IVec3 pos) const
 {
-    return pos.x >= m_origin.x && pos.y >= m_origin.y && pos.z >= m_origin.z && pos.x < m_origin.x + m_size.x
-        && pos.y < m_origin.y + m_size.y && pos.z < m_origin.z + m_size.z;
+    return pos.x >= m_origin.x && pos.y >= m_origin.y && pos.z >= m_origin.z
+        && pos.x < m_origin.x + m_size.x && pos.y < m_origin.y + m_size.y && pos.z < m_origin.z + m_size.z;
 }
 
 void World::BlockCache::clear()
@@ -124,6 +150,7 @@ void World::resetSeed(std::uint32_t seed)
     m_overrideCount = 0;
     m_blockCache.clear();
     m_dayTimeShiftTicks = hash(seed) % s_ticksPerGameDay;
+    m_drops.clear();
     ++m_version;
 }
 
@@ -157,15 +184,15 @@ Block World::blockType(IVec3 pos) const
     return bi ? bi->blockType : Block::Air;
 }
 
-void World::setBlock(IVec3 pos, Block block)
+bool World::setBlock(IVec3 pos, Block block, bool throwDrop)
 {
     m_blockCache.waitIfPending();
     if (!isValidHeight(pos.y))
-        return;
+        return false;
 
     const Block oldBlock = blockType(pos);
     if (oldBlock == block)
-        return;
+        return false;
 
     // add override
     const std::int32_t clusterX = floorDiv(pos.x, OverrideCluster::Edge);
@@ -195,7 +222,14 @@ void World::setBlock(IVec3 pos, Block block)
 
     const IVec3 above = pos + IVec3 { 0, 1, 0 };
     if (isSolidBlock(oldBlock) && !isSolidBlock(block) && blockType(above) == Block::Torch)
-        setBlock(above, Block::Air);
+        setBlock(above, Block::Air, throwDrop);
+
+    if (throwDrop) {
+        if (std::optional<Item::Type> itemType = dropType(oldBlock))
+            this->throwDrop(pos, Item(*itemType));
+    }
+
+    return true;
 }
 
 bool World::hasSolidBlockInArea(IVec3 min, IVec3 max) const
@@ -222,8 +256,16 @@ bool World::hasSolidBlockInArea(IVec3 min, IVec3 max) const
 
 void World::update(float dt, Vec3 threatPosition)
 {
-    updateCharacters(dt, threatPosition);
     m_logicalTimeMs += static_cast<std::uint64_t>(dt * 1000.0f);
+    updateDrops();
+    updateCharacters(dt, threatPosition);
+}
+
+void World::updateDrops()
+{
+    // remove expired drops (they are sorted by creation time => it's enough to handle the head)
+    while (!m_drops.empty() && (logicalTimeMs() - m_drops[0].creationTime()) > Drop::s_lifetimeMs)
+        m_drops.pop_front();
 }
 
 void World::updateCharacters(float dt, Vec3 threatPosition)

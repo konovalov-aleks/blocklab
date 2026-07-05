@@ -5,7 +5,8 @@ struct FragmentInput {
     float3 worldPosition : TEXCOORD1;
     float light : TEXCOORD2;
     float4 fog : TEXCOORD3;
-    float3 uvMaterial : TEXCOORD4;
+    float2 uv : TEXCOORD4;
+    nointerpolation uint material : TEXCOORD5;
 };
 
 float hash21(float2 p)
@@ -75,8 +76,7 @@ float3 texelColor(uint material, float2 uv, float3 worldPosition, float3 fallbac
 
 float4 meshFragmentMain(FragmentInput input) : SV_Target0
 {
-    uint material = uint(input.uvMaterial.z + 0.5);
-    float3 albedo = texelColor(material, input.uvMaterial.xy, input.worldPosition, input.color.rgb);
+    float3 albedo = texelColor(input.material, input.uv, input.worldPosition, input.color.rgb);
     float3 lit = saturate(albedo * input.light);
     return float4(lerp(lit, input.fog.xyz, input.fog.w), 1.0);
 }

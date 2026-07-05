@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Block.h"
+#include "Drop.h"
 #include "OverrideCluster.h"
 #include "WorldGenerator.h"
 #include "WorldTime.h"
@@ -13,6 +14,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <map>
 #include <memory>
@@ -46,10 +48,12 @@ public:
     // returns Air if the requested block is out of loaded cache bounds
     Block blockType(IVec3 pos) const;
 
-    void setBlock(IVec3 pos, Block block);
+    bool setBlock(IVec3 pos, Block, bool throwDrop = false);
     bool isSolid(IVec3 pos) const { return isSolidBlock(blockType(pos)); }
     bool hasSolidBlockInArea(IVec3 min, IVec3 max) const;
     std::int32_t terrainHeight(IVec2 xz) const { return m_blockCache.terrainHeight(xz); }
+
+    void throwDrop(IVec3 pos, Item);
 
     bool isInsideLoadedCache(IVec3 pos) const { return !m_blockCache.empty() && m_blockCache.isInsideBounds(pos); }
 
@@ -68,6 +72,7 @@ public:
     std::size_t overrideCount() const { return m_overrideCount; }
 
     const std::vector<std::unique_ptr<NPC>>& characters() const { return m_characters; }
+    const std::deque<Drop>& drops() const { return m_drops; }
 
     static constexpr bool isValidHeight(std::int32_t y) { return y >= s_minY && y <= s_maxY; }
 
@@ -116,6 +121,7 @@ private:
         State m_state = State::Empty;
     };
 
+    void updateDrops();
     void updateCharacters(float dt, Vec3 threatPosition);
     void spawnTestPigs();
 
@@ -128,6 +134,7 @@ private:
     EntityId m_nextEntityId = 1;
     QuadTree<OverrideClusterColumn> m_overrideColumns;
     std::vector<std::unique_ptr<NPC>> m_characters;
+    std::deque<Drop> m_drops;
     mutable BlockCache m_blockCache;
 };
 

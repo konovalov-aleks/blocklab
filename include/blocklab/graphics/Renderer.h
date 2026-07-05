@@ -17,9 +17,28 @@ class Vulkan;
 class World;
 class WorldGenerator;
 
+enum class RenderEntityFamily : std::uint32_t {
+    None = 0,
+    Character = 1,
+    Drop = 2,
+};
+
+inline constexpr std::uint32_t RenderEntityFamilyShift = 24;
+inline constexpr std::uint32_t RenderEntityLocalIdMask = (1U << RenderEntityFamilyShift) - 1U;
+
+consteval std::uint32_t renderEntityId(RenderEntityFamily family, std::uint32_t localId)
+{
+    return (static_cast<std::uint32_t>(family) << RenderEntityFamilyShift) | localId;
+}
+
 enum class RenderEntityKind : std::uint32_t {
     None = 0,
-    Pig = 1,
+
+    Pig = renderEntityId(RenderEntityFamily::Character, 1),
+
+    DirtDrop = renderEntityId(RenderEntityFamily::Drop, 1),
+    StoneDrop = renderEntityId(RenderEntityFamily::Drop, 2),
+    TorchDrop = renderEntityId(RenderEntityFamily::Drop, 3),
 };
 
 struct RenderConfig {
@@ -69,11 +88,14 @@ public:
         SkyInfo skyInfo;
     };
     struct EntityInstance {
-        Vec4 positionAndYaw;
-        Vec4 velocityAndKind;
+        Vec3 position;
+        float yaw;
+        Vec4 velocity;
 
+        std::uint32_t kind;
         float blockLight;
         float skyLight;
+        float padding;
     };
     struct DrawPushConstants {
         std::uint32_t envIndex = 0;
@@ -84,6 +106,7 @@ public:
     static_assert(sizeof(RenderParams::FrameInfo) == sizeof(IVec4));
     static_assert(sizeof(RenderParams::ProjectionInfo) == sizeof(Vec4));
     static_assert(sizeof(RenderParams::SkyInfo) == sizeof(Vec4) * 2);
+    static_assert(sizeof(EntityInstance) == sizeof(Vec4) * 3);
 
     struct RenderSlot;
     struct VulkanState;
@@ -108,8 +131,10 @@ private:
     std::unique_ptr<RenderParams[]> m_renderParams;
     std::uint32_t m_batchSize = 0;
     std::uint32_t m_pigMeshVertexCount = 0;
+    std::uint32_t m_dropMeshVertexOffset = 0;
+    std::uint32_t m_dropMeshVertexCount = 0;
     std::uint64_t m_observationVersion = 0;
-    bool m_pigMeshUploaded = false;
+    bool m_entityMeshesUploaded = false;
 
     friend class Environment;
 };

@@ -162,7 +162,8 @@ VertexOutput voxelVertexMain(uint vertexId : SV_VertexID)
     output.worldPosition = worldPosition;
     uint currentSkyLight = skyLight - min(skyLight, params.skyInfo.skyLightDimming);
     output.light = max(float(currentSkyLight) * faceSkyLightFactor, float(blockLight)) / 15.0;
-    output.uvMaterial = float3(CUBE_UV[vertexInVoxelIndex], FACE_MATERIALS[blockType][faceIndex]);
+    output.uv = CUBE_UV[vertexInVoxelIndex];
+    output.material = FACE_MATERIALS[blockType][faceIndex];
     output.fog = float4(params.skyInfo.skyColor, fogIntensity);
     output.layer = pushConstants.layerIndex;
     return output;

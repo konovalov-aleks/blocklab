@@ -1,6 +1,6 @@
 #pragma once
 
-#include <graphics/MeshTypes.h>
+#include <graphics/Mesh.h>
 
 #include <array>
 #include <cstdint>

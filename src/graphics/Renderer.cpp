@@ -1,14 +1,18 @@
 #include <blocklab/graphics/Renderer.h>
 
+#include "Mesh.h"
+
 #include <blocklab/gpu/cuda/CudaHelpers.h>
 #include <blocklab/gpu/interop/VulkanCudaInteropBuffer.h>
 #include <blocklab/gpu/interop/VulkanCudaInteropSemaphore.h>
 #include <blocklab/gpu/vulkan/Vulkan.h>
 #include <blocklab/gpu/vulkan/VulkanBuffer.h>
+#include <blocklab/inventory/Item.h>
 #include <blocklab/utility/Error.h>
 #include <characters/meshes/PigMesh.h>
 #include <environment/CudaObservation.h>
 #include <gpu/vulkan/Memory.h>
+#include <world/Drop.h>
 #include <world/Lighting.h>
 #include <world/World.h>
 #include <world/WorldGenerator.h>
@@ -41,16 +45,31 @@ namespace {
     constexpr std::uint32_t TerrainMeshExtent = TerrainMeshHalfExtent * 2;
     constexpr std::uint32_t s_maxTerrainVoxels = TerrainMeshExtent * World::s_height * TerrainMeshExtent;
 
-    float renderEntityKindId(CharacterKind characterKind)
+    std::uint32_t renderEntityKindId(CharacterKind characterKind)
     {
         switch (characterKind) {
         case CharacterKind::Pig:
-            return static_cast<float>(RenderEntityKind::Pig);
+            return static_cast<std::uint32_t>(RenderEntityKind::Pig);
         case CharacterKind::Agent:
             // the agent character is not intended for rendering
-            return static_cast<float>(RenderEntityKind::None);
+            return static_cast<std::uint32_t>(RenderEntityKind::None);
         }
         fatalError("corrupted CharacterKind value: ", static_cast<int>(characterKind));
+    }
+
+    std::uint32_t renderDropKindId(Item::Type itemType)
+    {
+        switch (itemType) {
+        case Item::Type::Dirt:
+            return static_cast<std::uint32_t>(RenderEntityKind::DirtDrop);
+        case Item::Type::Stone:
+            return static_cast<std::uint32_t>(RenderEntityKind::StoneDrop);
+        case Item::Type::Torch:
+            return static_cast<std::uint32_t>(RenderEntityKind::TorchDrop);
+        case Item::Type::COUNT:
+            break;
+        }
+        fatalError("corrupted Item::Type value: ", static_cast<int>(itemType));
     }
 
     Vec3 cameraForward(float yaw, float pitch)
@@ -128,9 +147,13 @@ struct Renderer::RenderSlot {
     std::uint32_t terrainVoxelCount = 0;
 
     std::uint32_t pigVertexCount = 0;
+    std::uint32_t dropVertexOffset = 0;
+    std::uint32_t dropVertexCount = 0;
 
     std::uint32_t instanceOffset = 0;
-    std::uint32_t instanceCount = 0;
+    std::uint32_t characterInstanceCount = 0;
+    std::uint32_t dropInstanceOffset = 0;
+    std::uint32_t dropInstanceCount = 0;
 
     CudaSharedFuture<WorldGenerationOutput> pendingGeneration;
     std::uint64_t lastWorldVersion = 0;
@@ -169,11 +192,11 @@ struct Renderer::VulkanState {
     // Descriptor sets are owned by the descriptor pool and are released when the pool is destroyed.
     vk::UniqueDescriptorPool descriptorPool;
     vk::DescriptorSet terrainDescriptorSet;
-    vk::DescriptorSet pigDescriptorSet;
+    vk::DescriptorSet staticMeshDescriptorSet;
 
     VulkanCudaInteropBuffer terrainHeaderBuffer;
     VulkanCudaInteropBuffer terrainVoxelBuffer;
-    VulkanDeviceBuffer pigVertexBuffer;
+    VulkanDeviceBuffer staticMeshVertexBuffer;
     VulkanHostBuffer instanceBuffer;
     VulkanHostBuffer paramsBuffer;
 
@@ -569,9 +592,9 @@ namespace {
             = static_cast<vk::DeviceSize>(s_maxTerrainVoxels) * state.batchSize * VoxelSize;
         state.terrainVoxelBuffer = VulkanCudaInteropBuffer(
             vk, state.terrainVoxelBufferCapacityBytes, vk::BufferUsageFlagBits::eStorageBuffer);
-        state.pigVertexBuffer
-            = VulkanDeviceBuffer(vk, static_cast<vk::DeviceSize>(PigMesh::verticesCount()) * sizeof(MeshVertex),
-                vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst);
+        state.staticMeshVertexBuffer = VulkanDeviceBuffer(vk,
+            static_cast<vk::DeviceSize>(PigMesh::verticesCount() + Drop::s_meshVertexCount) * sizeof(MeshVertex),
+            vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst);
         state.instanceBuffer
             = VulkanHostBuffer(vk, sizeof(Renderer::EntityInstance) * MaxEntityInstances * state.batchSize,
                 vk::BufferUsageFlagBits::eStorageBuffer);
@@ -609,11 +632,11 @@ namespace {
         };
         vkCheck(vk.device().allocateDescriptorSets(&allocInfo, descriptorSets), "VkDevice::allocateDescriptorSets");
         state.terrainDescriptorSet = descriptorSets[0];
-        state.pigDescriptorSet = descriptorSets[1];
+        state.staticMeshDescriptorSet = descriptorSets[1];
 
         const vk::DescriptorBufferInfo terrainHeaderInfo = state.terrainHeaderBuffer.info();
         const vk::DescriptorBufferInfo voxelInfo = state.terrainVoxelBuffer.info();
-        const vk::DescriptorBufferInfo pigVertexInfo = state.pigVertexBuffer.info();
+        const vk::DescriptorBufferInfo pigVertexInfo = state.staticMeshVertexBuffer.info();
         const vk::DescriptorBufferInfo instanceInfo = state.instanceBuffer.info();
         const vk::DescriptorBufferInfo paramsInfo = state.paramsBuffer.info();
 
@@ -643,21 +666,21 @@ namespace {
 
         const std::array<vk::WriteDescriptorSet, 3> pigWrites = {
             vk::WriteDescriptorSet {
-                .dstSet = state.pigDescriptorSet,
+                .dstSet = state.staticMeshDescriptorSet,
                 .dstBinding = 0,
                 .descriptorCount = 1,
                 .descriptorType = vk::DescriptorType::eStorageBuffer,
                 .pBufferInfo = &pigVertexInfo,
             },
             vk::WriteDescriptorSet {
-                .dstSet = state.pigDescriptorSet,
+                .dstSet = state.staticMeshDescriptorSet,
                 .dstBinding = 1,
                 .descriptorCount = 1,
                 .descriptorType = vk::DescriptorType::eStorageBuffer,
                 .pBufferInfo = &instanceInfo,
             },
             vk::WriteDescriptorSet {
-                .dstSet = state.pigDescriptorSet,
+                .dstSet = state.staticMeshDescriptorSet,
                 .dstBinding = 2,
                 .descriptorCount = 1,
                 .descriptorType = vk::DescriptorType::eStorageBuffer,
@@ -722,20 +745,33 @@ void Renderer::initializeBatchData()
     m_batchSize = m_state->batchSize;
     m_slots = std::make_unique<RenderSlot[]>(m_batchSize);
     m_renderParams = std::make_unique<RenderParams[]>(m_batchSize);
+    m_instances.reserve(MaxEntityInstances);
     m_observation.reset(m_state->renderExtent.width, m_state->renderExtent.height, m_batchSize);
     m_observation.setVersion(m_observationVersion);
-    if (!m_pigMeshUploaded) {
+    if (!m_entityMeshesUploaded) {
         PigMesh pigMeshGenerator;
         const std::span<MeshVertex> pigMesh = pigMeshGenerator.generate();
+        const std::array<MeshVertex, Drop::s_meshVertexCount> dropMesh = Drop::makeMesh();
+
         m_pigMeshVertexCount = static_cast<std::uint32_t>(pigMesh.size());
-        m_state->pigVertexBuffer.uploadSync(
-            m_vk, *m_state->commandPool, pigMesh.data(), sizeof(MeshVertex) * pigMesh.size());
-        m_pigMeshUploaded = true;
+        m_dropMeshVertexOffset = m_pigMeshVertexCount;
+        m_dropMeshVertexCount = static_cast<std::uint32_t>(dropMesh.size());
+
+        std::vector<MeshVertex> entityMesh;
+        entityMesh.reserve(pigMesh.size() + dropMesh.size());
+        entityMesh.insert(entityMesh.end(), pigMesh.begin(), pigMesh.end());
+        entityMesh.insert(entityMesh.end(), dropMesh.begin(), dropMesh.end());
+
+        m_state->staticMeshVertexBuffer.uploadSync(
+            m_vk, *m_state->commandPool, entityMesh.data(), sizeof(MeshVertex) * entityMesh.size());
+        m_entityMeshesUploaded = true;
     }
     for (std::uint32_t i = 0; i < m_batchSize; ++i) {
         RenderSlot& slot = m_slots[i];
         slot.terrainVoxelOffset = i * s_maxTerrainVoxels;
         slot.pigVertexCount = m_pigMeshVertexCount;
+        slot.dropVertexOffset = m_dropMeshVertexOffset;
+        slot.dropVertexCount = m_dropMeshVertexCount;
         slot.instanceOffset = i * MaxEntityInstances;
     }
 }
@@ -776,70 +812,70 @@ Renderer::RenderParams Renderer::buildRenderParams(const AgentState& agent, cons
 
 namespace {
 
-struct BlockLightAdapter {
-    static float light(const BlockInfo& b) { return b.blockLight / 15.0f; }
-};
-
-struct SkyLightAdapter {
-    static float light(const BlockInfo& b) { return b.skyLight / 15.0f; }
-};
-
-template <typename Adapter>
-float lightAtPoint(Vec3 pos, const World& world)
-{
-    const Vec3 p0f = glm::floor(pos);
-    const Vec3 delta = pos - p0f;
-    const IVec3 p0 = p0f;
-
-    if (!world.isInsideLoadedCache(p0) || !world.isInsideLoadedCache(p0 + IVec3(1, 1, 1))) [[unlikely]]
-        return 0.0f;
-
-    const auto airLight = [&world](IVec3 pos) -> std::optional<float> {
-        const BlockInfo* b = world.block(pos);
-        if (!b || isSolidBlock(b->blockType))
-            return std::nullopt;
-        return Adapter::light(*b);
+    struct BlockLightAdapter {
+        static float light(const BlockInfo& b) { return b.blockLight / 15.0f; }
     };
 
-    const auto mix = [](std::optional<float> x, std::optional<float> y, float a) -> std::optional<float> {
-        if (x) {
+    struct SkyLightAdapter {
+        static float light(const BlockInfo& b) { return b.skyLight / 15.0f; }
+    };
+
+    template <typename Adapter>
+    float lightAtPoint(Vec3 pos, const World& world)
+    {
+        const Vec3 p0f = glm::floor(pos);
+        const Vec3 delta = pos - p0f;
+        const IVec3 p0 = p0f;
+
+        if (!world.isInsideLoadedCache(p0) || !world.isInsideLoadedCache(p0 + IVec3(1, 1, 1))) [[unlikely]]
+            return 0.0f;
+
+        const auto airLight = [&world](IVec3 pos) -> std::optional<float> {
+            const BlockInfo* b = world.block(pos);
+            if (!b || isSolidBlock(b->blockType))
+                return std::nullopt;
+            return Adapter::light(*b);
+        };
+
+        const auto mix = [](std::optional<float> x, std::optional<float> y, float a) -> std::optional<float> {
+            if (x) {
+                if (y)
+                    return glm::mix(*x, *y, a);
+                return *x;
+            }
             if (y)
-                return glm::mix(*x, *y, a);
-            return *x;
-        }
-        if (y)
-            return *y;
-        return std::nullopt;
-    };
+                return *y;
+            return std::nullopt;
+        };
 
-    const std::optional<float> l000 = airLight(p0);
-    const std::optional<float> l100 = airLight({ p0.x + 1, p0.y, p0.z });
-    const std::optional<float> l010 = airLight({ p0.x, p0.y + 1, p0.z });
-    const std::optional<float> l110 = airLight({ p0.x + 1, p0.y + 1, p0.z });
-    const std::optional<float> l001 = airLight({ p0.x, p0.y, p0.z + 1 });
-    const std::optional<float> l101 = airLight({ p0.x + 1, p0.y, p0.z + 1 });
-    const std::optional<float> l011 = airLight({ p0.x, p0.y + 1, p0.z + 1 });
-    const std::optional<float> l111 = airLight({ p0.x + 1, p0.y + 1, p0.z + 1 });
+        const std::optional<float> l000 = airLight(p0);
+        const std::optional<float> l100 = airLight({ p0.x + 1, p0.y, p0.z });
+        const std::optional<float> l010 = airLight({ p0.x, p0.y + 1, p0.z });
+        const std::optional<float> l110 = airLight({ p0.x + 1, p0.y + 1, p0.z });
+        const std::optional<float> l001 = airLight({ p0.x, p0.y, p0.z + 1 });
+        const std::optional<float> l101 = airLight({ p0.x + 1, p0.y, p0.z + 1 });
+        const std::optional<float> l011 = airLight({ p0.x, p0.y + 1, p0.z + 1 });
+        const std::optional<float> l111 = airLight({ p0.x + 1, p0.y + 1, p0.z + 1 });
 
-    // interpolate along X axis
+        // interpolate along X axis
 
-    // front 4 corners
-    const std::optional<float> x00 = mix(l000, l100, delta.x);
-    const std::optional<float> x10 = mix(l010, l110, delta.x);
+        // front 4 corners
+        const std::optional<float> x00 = mix(l000, l100, delta.x);
+        const std::optional<float> x10 = mix(l010, l110, delta.x);
 
-    // back 4 corners
-    const std::optional<float> x01 = mix(l001, l101, delta.x);
-    const std::optional<float> x11 = mix(l011, l111, delta.x);
+        // back 4 corners
+        const std::optional<float> x01 = mix(l001, l101, delta.x);
+        const std::optional<float> x11 = mix(l011, l111, delta.x);
 
-    // interpolate along Y axis
-    const std::optional<float> y0 = mix(x00, x10, delta.y);
-    const std::optional<float> y1 = mix(x01, x11, delta.y);
+        // interpolate along Y axis
+        const std::optional<float> y0 = mix(x00, x10, delta.y);
+        const std::optional<float> y1 = mix(x01, x11, delta.y);
 
-    // interpolate along Z axis
-    std::optional<float> result = mix(y0, y1, delta.z);
+        // interpolate along Z axis
+        std::optional<float> result = mix(y0, y1, delta.z);
 
-    return result ? *result : 0.0f;
-}
+        return result ? *result : 0.0f;
+    }
 
 } // namespace
 
@@ -847,7 +883,6 @@ void Renderer::uploadInstances(std::size_t slotIndex, const World& world)
 {
     RenderSlot& slot = m_slots[slotIndex];
     m_instances.clear();
-    m_instances.reserve(world.characters().size() + 1U);
     m_instances.push_back({});
     for (const std::unique_ptr<NPC>& character : world.characters()) {
         if (!character->isAlive() || character->kind() == CharacterKind::Agent)
@@ -859,15 +894,42 @@ void Renderer::uploadInstances(std::size_t slotIndex, const World& world)
         const float blockLight = lightAtPoint<BlockLightAdapter>(position, world);
         const float skyLight = lightAtPoint<SkyLightAdapter>(position, world);
         m_instances.push_back({
-            .positionAndYaw = { position.x, position.y, position.z, yaw },
-            .velocityAndKind = { velocity.x, velocity.y, velocity.z, renderEntityKindId(character->kind()) },
+            .position = position,
+            .yaw = yaw,
+            .velocity = { velocity.x, velocity.y, velocity.z, 0.0f },
+            .kind = renderEntityKindId(character->kind()),
             .blockLight = blockLight,
             .skyLight = skyLight,
         });
         if (m_instances.size() >= MaxEntityInstances)
             break;
     }
-    slot.instanceCount = static_cast<std::uint32_t>(m_instances.size() - 1U);
+    slot.characterInstanceCount = static_cast<std::uint32_t>(m_instances.size() - 1U);
+
+    slot.dropInstanceOffset = static_cast<std::uint32_t>(m_instances.size());
+    for (const Drop& drop : world.drops()) {
+        if (m_instances.size() >= MaxEntityInstances)
+            break;
+
+        const IVec3 blockPosition = drop.position();
+        const Vec3 position {
+            static_cast<float>(blockPosition.x) + 0.5f,
+            static_cast<float>(blockPosition.y) + 0.35f,
+            static_cast<float>(blockPosition.z) + 0.5f,
+        };
+        const float blockLight = lightAtPoint<BlockLightAdapter>(position, world);
+        const float skyLight = lightAtPoint<SkyLightAdapter>(position, world);
+        const float animationPhase = static_cast<float>(drop.creationTime() % 10000U) * 0.001f;
+        m_instances.push_back({
+            .position = position,
+            .yaw = animationPhase,
+            .velocity = {},
+            .kind = renderDropKindId(drop.item().type()),
+            .blockLight = blockLight,
+            .skyLight = skyLight,
+        });
+    }
+    slot.dropInstanceCount = static_cast<std::uint32_t>(m_instances.size()) - slot.dropInstanceOffset;
 
     const vk::DeviceSize uploadBytes = sizeof(EntityInstance) * m_instances.size();
     const vk::DeviceSize uploadOffset = sizeof(EntityInstance) * slot.instanceOffset;
@@ -950,14 +1012,19 @@ void Renderer::drawFrame()
     for (std::uint32_t envIndex = 0; envIndex < m_batchSize; ++envIndex) {
         RenderSlot& slot = m_slots[envIndex];
         pushConstants(envIndex);
-        if (slot.pigVertexCount > 0 && slot.instanceCount > 0) {
+        if ((slot.pigVertexCount > 0 && slot.characterInstanceCount > 0)
+            || (slot.dropVertexCount > 0 && slot.dropInstanceCount > 0)) {
             if (!pipelineBound) {
                 commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *m_state->meshPipeline);
                 pipelineBound = true;
             }
             commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *m_state->pipelineLayout, 0, 1,
-                &m_state->pigDescriptorSet, 0, nullptr);
-            commandBuffer.draw(slot.pigVertexCount, slot.instanceCount, 0, slot.instanceOffset + 1U);
+                &m_state->staticMeshDescriptorSet, 0, nullptr);
+            if (slot.characterInstanceCount > 0)
+                commandBuffer.draw(slot.pigVertexCount, slot.characterInstanceCount, 0, slot.instanceOffset + 1U);
+            if (slot.dropInstanceCount > 0)
+                commandBuffer.draw(slot.dropVertexCount, slot.dropInstanceCount, slot.dropVertexOffset,
+                    slot.instanceOffset + slot.dropInstanceOffset);
         }
     }
 
@@ -1049,6 +1116,8 @@ const Observation& Renderer::renderObservations(std::span<const World> worlds, s
 
 void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, const AgentState& agent)
 {
+    uploadInstances(slotIndex, world);
+
     const IVec3 agentBlock = floorToInt32(agent.position);
     constexpr std::int32_t MeshCacheStride = 12;
     RenderSlot& slot = m_slots[slotIndex];
@@ -1077,7 +1146,6 @@ void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, 
         slot.lastWorldVersion = world.version();
         slot.lastMeshCenter = agentBlock;
     }
-    uploadInstances(slotIndex, world);
 }
 
 } // namespace blocklab

@@ -95,13 +95,13 @@ void Agent::interact(World& world, const AgentAction& action)
         const Block hitBlock = world.blockType(blockPos);
         if (hitBlock != Block::Air) {
             if (action.dig) {
-                world.setBlock(blockPos, Block::Air);
-                ++m_state.blocksCollected;
+                if (world.setBlock(blockPos, Block::Air, true))
+                    ++m_state.blocksCollected;
             } else if (action.place && isSolidBlock(hitBlock) && !m_character.occupiesBlock(previousAir)) {
                 const Block block = placementBlock(action.placementBlock);
                 if (block != Block::Torch || previousAir == blockPos + IVec3 { 0, 1, 0 }) {
-                    world.setBlock(previousAir, block);
-                    ++m_state.blocksPlaced;
+                    if (world.setBlock(previousAir, block))
+                        ++m_state.blocksPlaced;
                 }
             }
             return;
