@@ -118,7 +118,10 @@ VertexOutput meshVertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_In
     ViewPosition viewPosition = worldToView(worldPosition, params);
 
     float faceSkyLightFactor = faceSkyLight(normalize(worldNormal), params);
-    float light = max(faceSkyLightFactor * (instance.skyLight - params.skyInfo.skyLightDimming / 15.0f), instance.blockLight);
+    float faceBlockLightFactor = faceBlockLight(normalize(worldNormal));
+    float light = max(
+        faceSkyLightFactor * (instance.skyLight - params.skyInfo.skyLightDimming / 15.0f),
+        faceBlockLightFactor * instance.blockLight);
 
     VertexOutput output;
     output.position = projectViewPosition(viewPosition, params);

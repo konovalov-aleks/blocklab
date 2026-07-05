@@ -142,13 +142,14 @@ VertexOutput voxelVertexMain(uint vertexId : SV_VertexID)
     ViewPosition viewPosition = worldToView(worldPosition, params);
 
     float faceSkyLightFactor = faceSkyLight(FACE_NORMALS[faceIndex], params);
+    float faceBlockLightFactor = faceBlockLight(FACE_NORMALS[faceIndex]);
 
     VertexOutput output;
     output.position = projectViewPosition(viewPosition, params);
     output.color = float4(1.0, 0.0, 1.0, 1.0); // color is not used for voxels, but we set pink color for debugging purposes
     output.worldPosition = worldPosition;
     uint currentSkyLight = skyLight - min(skyLight, params.skyInfo.skyLightDimming);
-    output.light = max(float(currentSkyLight) * faceSkyLightFactor, float(blockLight)) / 15.0;
+    output.light = max(float(currentSkyLight) * faceSkyLightFactor, float(blockLight) * faceBlockLightFactor) / 15.0;
     output.uv = CUBE_UV[vertexInVoxelIndex];
     output.material = FACE_MATERIALS[blockType][faceIndex];
     output.fog = float4(params.skyInfo.skyColor, fogIntensity(viewPosition.z, params));
