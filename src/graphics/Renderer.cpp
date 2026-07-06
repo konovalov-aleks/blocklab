@@ -913,12 +913,10 @@ void Renderer::uploadInstances(std::size_t slotIndex, const World& world)
         if (m_instances.size() >= MaxEntityInstances)
             break;
 
-        const IVec3 blockPosition = drop.position();
-        const Vec3 position {
-            static_cast<float>(blockPosition.x) + 0.5f,
-            static_cast<float>(blockPosition.y) + 0.35f,
-            static_cast<float>(blockPosition.z) + 0.5f,
-        };
+        if (!drop.alive())
+            continue;
+
+        const Vec3 position = drop.position();
         const float blockLight = lightAtPoint<BlockLightAdapter>(position, world);
         const float skyLight = lightAtPoint<SkyLightAdapter>(position, world);
         const float animationPhase = static_cast<float>(drop.creationTime() % 10000U) * 0.001f;

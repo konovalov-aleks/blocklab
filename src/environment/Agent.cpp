@@ -76,8 +76,21 @@ void Agent::step(World& world, const AgentAction& action, float dt)
         m_character.requestJump(jumpSpeed);
     m_character.applyPhysics(world, dt);
     syncStateFromBody();
+    pickDrops(world);
     interact(world, action);
     syncStateFromBody();
+}
+
+void Agent::pickDrops(World& world)
+{
+    const auto hitVolume = m_character.hitVolume();
+    const auto& drops = world.drops();
+    for (std::size_t i = 0; i < drops.size(); ++i) {
+        if (drops[i].alive() && collides(hitVolume, drops[i].hitVolume())) {
+            std::cout << "Pick drop " << i << std::endl;
+            world.deleteDrop(i);
+        }
+    }
 }
 
 void Agent::interact(World& world, const AgentAction& action)

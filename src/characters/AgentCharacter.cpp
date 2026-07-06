@@ -2,10 +2,10 @@
 
 namespace blocklab {
 
-static constexpr Character::HitBox s_agentHitBox = { .radius = 0.3f, .height = 1.8f };
+static constexpr CylinderDimensions s_agentHitCylinder = { .radius = 0.3f, .height = 1.8f };
 
 AgentCharacter::AgentCharacter(Vec3 position)
-    : Character(0, CharacterKind::Agent, position, s_agentHitBox)
+    : Character(0, CharacterKind::Agent, position, s_agentHitCylinder)
 {
 }
 

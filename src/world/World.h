@@ -53,7 +53,9 @@ public:
     bool hasSolidBlockInArea(IVec3 min, IVec3 max) const;
     std::int32_t terrainHeight(IVec2 xz) const { return m_blockCache.terrainHeight(xz); }
 
-    void throwDrop(IVec3 pos, Item);
+    const std::deque<Drop>& drops() const { return m_drops; }
+    void throwDrop(IVec3 blockPos, Item);
+    void deleteDrop(std::size_t index);
 
     bool isInsideLoadedCache(IVec3 pos) const { return !m_blockCache.empty() && m_blockCache.isInsideBounds(pos); }
 
@@ -72,7 +74,6 @@ public:
     std::size_t overrideCount() const { return m_overrideCount; }
 
     const std::vector<std::unique_ptr<NPC>>& characters() const { return m_characters; }
-    const std::deque<Drop>& drops() const { return m_drops; }
 
     static constexpr bool isValidHeight(std::int32_t y) { return y >= s_minY && y <= s_maxY; }
 
@@ -121,8 +122,9 @@ private:
         State m_state = State::Empty;
     };
 
-    void updateDrops();
+    void updateDrops(float dt);
     void updateCharacters(float dt, Vec3 threatPosition);
+    void gc();
     void spawnTestPigs();
 
     std::size_t m_overrideCount = 0;
@@ -134,7 +136,11 @@ private:
     EntityId m_nextEntityId = 1;
     QuadTree<OverrideClusterColumn> m_overrideColumns;
     std::vector<std::unique_ptr<NPC>> m_characters;
+
     std::deque<Drop> m_drops;
+    bool m_hasObsoleteDrops = false;
+    bool m_needRepositionDrops = false;
+
     mutable BlockCache m_blockCache;
 };
 

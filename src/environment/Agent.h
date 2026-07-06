@@ -28,10 +28,11 @@ public:
     AgentState& mutableState() { return m_state; }
 
     void reset(Vec3 position);
-    void step(World& world, const AgentAction& action, float dt);
+    void step(World&, const AgentAction&, float dt);
 
 private:
-    void interact(World& world, const AgentAction& action);
+    void pickDrops(World&);
+    void interact(World&, const AgentAction&);
     void syncStateFromBody();
 
     AgentState m_state;

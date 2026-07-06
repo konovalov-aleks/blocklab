@@ -76,17 +76,44 @@ std::int32_t World::BlockCache::terrainHeight(IVec2 xz)
     return m_heightMap[localX + m_size.x * localZ];
 }
 
-void World::throwDrop(IVec3 pos, Item item)
+void World::throwDrop(IVec3 blockPos, Item item)
 {
-    // TODO move out of solid blocks
-    // TODO merge identical drops
-    m_drops.emplace_back(logicalTimeMs(), pos, item);
+    const IVec3 blockBelow = {
+        blockPos.x,
+        blockPos.y - 1,
+        blockPos.z,
+    };
+    if (!isValidHeight(blockBelow.y)) {
+        // The drop instantly falls below the bedrock.
+        return;
+    }
+    if (!isSolidBlock(blockType(blockBelow)))
+        m_needRepositionDrops = true;
+
+    const std::uint32_t h = hashCombine(m_drops.size(), logicalTimeMs());
+    const float dx = 0.3f * (randomFloat01(h) - 0.5f);
+    const float dz = 0.3f * (randomFloat01(hash(h)) - 0.5f);
+
+    const Vec3 worldPosition = {
+        static_cast<float>(blockPos.x) + 0.5f + dx,
+        static_cast<float>(blockPos.y) + Drop::s_levitationHeight,
+        static_cast<float>(blockPos.z) + 0.5f + dz,
+    };
+    m_drops.emplace_back(logicalTimeMs(), worldPosition, item);
+}
+
+void World::deleteDrop(std::size_t index)
+{
+    assert(index < m_drops.size());
+    m_drops[index].setDead();
+    m_hasObsoleteDrops = true;
 }
 
 bool World::BlockCache::isInsideBounds(IVec3 pos) const
 {
-    return pos.x >= m_origin.x && pos.y >= m_origin.y && pos.z >= m_origin.z
-        && pos.x < m_origin.x + m_size.x && pos.y < m_origin.y + m_size.y && pos.z < m_origin.z + m_size.z;
+    return pos.x >= m_origin.x && pos.y >= m_origin.y
+        && pos.z >= m_origin.z && pos.x < m_origin.x + m_size.x
+        && pos.y < m_origin.y + m_size.y && pos.z < m_origin.z + m_size.z;
 }
 
 void World::BlockCache::clear()
@@ -150,7 +177,11 @@ void World::resetSeed(std::uint32_t seed)
     m_overrideCount = 0;
     m_blockCache.clear();
     m_dayTimeShiftTicks = hash(seed) % s_ticksPerGameDay;
+
     m_drops.clear();
+    m_hasObsoleteDrops = false;
+    m_needRepositionDrops = false;
+
     ++m_version;
 }
 
@@ -229,6 +260,8 @@ bool World::setBlock(IVec3 pos, Block block, bool throwDrop)
             this->throwDrop(pos, Item(*itemType));
     }
 
+    m_needRepositionDrops = true;
+
     return true;
 }
 
@@ -257,15 +290,85 @@ bool World::hasSolidBlockInArea(IVec3 min, IVec3 max) const
 void World::update(float dt, Vec3 threatPosition)
 {
     m_logicalTimeMs += static_cast<std::uint64_t>(dt * 1000.0f);
-    updateDrops();
+    updateDrops(dt);
     updateCharacters(dt, threatPosition);
+    gc();
 }
 
-void World::updateDrops()
+void World::updateDrops(float dTime)
 {
     // remove expired drops (they are sorted by creation time => it's enough to handle the head)
     while (!m_drops.empty() && (logicalTimeMs() - m_drops[0].creationTime()) > Drop::s_lifetimeMs)
         m_drops.pop_front();
+
+    if (m_needRepositionDrops) {
+        m_needRepositionDrops = false;
+
+        constexpr float moveSpeed = 4.0f;
+
+        for (Drop& drop : m_drops) {
+            if (!drop.alive())
+                continue;
+
+            const Vec3 pos = drop.position();
+            const IVec3 blockPos = floorToInt32({ pos.x, pos.y - Drop::s_levitationHeight, pos.z });
+
+            // 1. check if we need to push out of the current solid block
+            if (isSolidBlock(blockType(blockPos))) {
+                m_needRepositionDrops = true;
+
+                static constexpr IVec3 s_directionsOrder[] = {
+                    // try to fall down at first
+                    {  0, -1,  0 },
+                    // then try to move horizontally
+                    {  1,  0,  0 },
+                    { -1,  0,  0 },
+                    {  0,  0,  1 },
+                    {  0,  0, -1 },
+                    // and lastly try to move up
+                    {  0,  1,  0 },
+                };
+                bool solved = false;
+                for (const IVec3& direction : s_directionsOrder) {
+                    const IVec3 newBlockPos = blockPos + direction;
+                    // TODO handle edge cases if drop is located close to cache boundary.
+                    // Currently it's impossible, because world cache always updates with agent at the center.
+                    // But we need to take care about this case when will implement chunk-based generation.
+                    if (!isValidHeight(newBlockPos.y))
+                        continue;
+
+                    if (!isSolidBlock(blockType(newBlockPos))) {
+                        drop.setPosition(pos + static_cast<Vec3>(direction) * moveSpeed * dTime);
+                        solved = true;
+                        break;
+                    }
+                }
+                if (!solved)
+                    drop.setDead();
+
+                continue;
+            }
+
+            // 2. fall down if the block below is not solid
+            const std::int32_t blockBelowY = floorToInt32(pos.y - 1.0f - Drop::s_levitationHeight);
+            if (!isValidHeight(blockBelowY)) {
+                drop.setDead();
+                continue;
+            }
+
+            float newY = pos.y - dTime * moveSpeed;
+            if (!isSolidBlock(blockType({ blockPos.x, blockBelowY, blockPos.z })))
+                m_needRepositionDrops = true;
+            else {
+                const float targetY = static_cast<float>(blockBelowY) + (1.0f + Drop::s_levitationHeight);
+                if (newY > targetY)
+                    m_needRepositionDrops = true;
+                else
+                    newY = targetY;
+            }
+            drop.setPosition({ pos.x, newY, pos.z });
+        }
+    }
 }
 
 void World::updateCharacters(float dt, Vec3 threatPosition)
@@ -274,6 +377,20 @@ void World::updateCharacters(float dt, Vec3 threatPosition)
         if (!character->isAlive())
             continue;
         character->update(*this, threatPosition, dt);
+    }
+}
+
+void World::gc()
+{
+    // 1. remove obsolete drops
+    if (m_hasObsoleteDrops) {
+        m_drops.erase(
+            std::remove_if(
+                m_drops.begin(), m_drops.end(),
+                [](const Drop& d) { return !d.alive(); }
+            ), m_drops.end()
+        );
+        m_hasObsoleteDrops = false;
     }
 }
 

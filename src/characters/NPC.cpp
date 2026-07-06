@@ -2,8 +2,8 @@
 
 namespace blocklab {
 
-NPC::NPC(EntityId id, CharacterKind kind, Vec3 position, HitBox hitBox)
-    : Character(id, kind, position, hitBox)
+NPC::NPC(EntityId id, CharacterKind kind, Vec3 position, CylinderDimensions hitCylinder)
+    : Character(id, kind, position, hitCylinder)
 {
 }
 
