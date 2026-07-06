@@ -120,10 +120,10 @@ target_compile_features(blocklab_lib PUBLIC cxx_std_20)
 set_target_properties(blocklab_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(blocklab_lib
     PUBLIC
+        CUDA::cudart
         glm::glm
     PRIVATE
         Vulkan::Vulkan
-        CUDA::cudart
         glfw
 )
 add_dependencies(blocklab_lib blocklab_shaders)
