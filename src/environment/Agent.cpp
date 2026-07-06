@@ -69,7 +69,7 @@ void Agent::step(World& world, const AgentAction& action, float dt)
 
     constexpr float moveSpeed = 5.0f;
     constexpr float acceleration = 28.0f;
-    constexpr float jumpSpeed = 7.0f;
+    constexpr float jumpSpeed = 7.42f;
 
     m_character.setHorizontalMovement(wishDir, moveSpeed, acceleration, dt);
     if (action.jump)
@@ -89,7 +89,8 @@ void Agent::interact(World& world, const AgentAction& action)
     const Vec3 forward = forwardFromAngles(m_state.yaw, m_state.pitch);
 
     IVec3 previousAir = floorToInt32(eye);
-    for (float distance = 0.5f; distance <= 4.0f; distance += 0.2f) {
+    constexpr float maxBlockInteractionDistance = 4.5f;
+    for (float distance = 0.5f; distance <= maxBlockInteractionDistance; distance += 0.2f) {
         const Vec3 sample = eye + forward * distance;
         const IVec3 blockPos = floorToInt32(sample);
         const Block hitBlock = world.blockType(blockPos);
@@ -97,8 +98,18 @@ void Agent::interact(World& world, const AgentAction& action)
             if (action.dig) {
                 if (world.setBlock(blockPos, Block::Air, true))
                     ++m_state.blocksCollected;
-            } else if (action.place && isSolidBlock(hitBlock) && !m_character.occupiesBlock(previousAir)) {
+                return;
+            }
+
+            if (!isSolidBlock(hitBlock)) {
+                previousAir = blockPos;
+                continue;
+            }
+
+            if (action.place) {
                 const Block block = placementBlock(action.placementBlock);
+                if (isSolidBlock(block) && m_character.occupiesBlock(previousAir))
+                    return;
                 if (block != Block::Torch || previousAir == blockPos + IVec3 { 0, 1, 0 }) {
                     if (world.setBlock(previousAir, block))
                         ++m_state.blocksPlaced;

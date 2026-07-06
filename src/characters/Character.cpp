@@ -129,8 +129,6 @@ bool Character::occupiesBlock(IVec3 block) const
 void Character::applyPhysics(World& world, float dt)
 {
     m_horizontalBlocked = false;
-    m_velocity.y += CharacterGravity * dt;
-    m_velocity.y = std::max(m_velocity.y, CharacterMaxFallSpeed);
 
     Vec3 next = m_position;
 
@@ -152,7 +150,9 @@ void Character::applyPhysics(World& world, float dt)
         m_velocity.z = 0.0f;
     }
 
-    next.y += m_velocity.y * dt;
+    const float previousVelocityY = m_velocity.y;
+    m_velocity.y = std::max(m_velocity.y + CharacterGravity * dt, CharacterMaxFallSpeed);
+    next.y += 0.5f * (previousVelocityY + m_velocity.y) * dt;
     m_onGround = false;
     if (collides(world, next)) {
         if (m_velocity.y < 0.0f)
