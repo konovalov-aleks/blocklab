@@ -86,10 +86,9 @@ void Agent::pickDrops(World& world)
     const auto hitVolume = m_character.hitVolume();
     const auto& drops = world.drops();
     for (std::size_t i = 0; i < drops.size(); ++i) {
-        if (drops[i].alive() && collides(hitVolume, drops[i].hitVolume())) {
-            std::cout << "Pick drop " << i << std::endl;
-            world.deleteDrop(i);
-        }
+        const Drop& drop = drops[i];
+        if (drop.alive() && collides(hitVolume, drop.hitVolume()))
+            world.moveDropItemsToInventory(i, m_inventory);
     }
 }
 

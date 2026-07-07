@@ -23,6 +23,8 @@
 
 namespace blocklab {
 
+class Inventory;
+
 class World {
 public:
     static constexpr std::int32_t s_height = 32;
@@ -56,6 +58,7 @@ public:
     const std::deque<Drop>& drops() const { return m_drops; }
     void throwDrop(IVec3 blockPos, Item);
     void deleteDrop(std::size_t index);
+    std::uint8_t moveDropItemsToInventory(std::size_t dropIndex, Inventory&);
 
     bool isInsideLoadedCache(IVec3 pos) const { return !m_blockCache.empty() && m_blockCache.isInsideBounds(pos); }
 

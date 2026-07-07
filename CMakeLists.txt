@@ -85,9 +85,9 @@ endif()
 add_library(blocklab_lib
     src/characters/AgentCharacter.cpp
     src/characters/Character.cpp
+    src/characters/meshes/PigMesh.cpp
     src/characters/NPC.cpp
     src/characters/PigCharacter.cpp
-    src/characters/meshes/PigMesh.cpp
     src/environment/Agent.cpp
     src/environment/CudaObservation.cu
     src/environment/Environment.cpp
@@ -101,12 +101,13 @@ add_library(blocklab_lib
     src/graphics/Display.cu
     src/graphics/Mesh.cpp
     src/graphics/Renderer.cpp
+    src/inventory/Inventory.cpp
     src/world/Drop.cpp
     src/world/Lighting.cpp
     src/world/OverrideCluster.cpp
     src/world/World.cpp
-    src/world/WorldGenerator.cu
     src/world/WorldGenerator.cpp
+    src/world/WorldGenerator.cu
 )
 
 target_include_directories(blocklab_lib

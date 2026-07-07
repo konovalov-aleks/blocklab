@@ -10,20 +10,21 @@ namespace blocklab {
 
 class Inventory {
 public:
-    using OptItem = std::optional<Item>;
-    using SlotId = int;
+    using SlotId = unsigned;
 
-    static constexpr int s_inventorySlotsCount = 9;
+    static constexpr int s_hotbarSlotsCount = 9;
     static constexpr int s_storageSlotsCount = 27;
 
-    std::span<const OptItem> inventorySlots() const;
-    std::span<const OptItem> storageSlots() const;
+    std::span<Item> hotbarSlots();
+    std::span<const Item> hotbarSlots() const;
+    std::span<Item> storageSlots();
+    std::span<const Item> storageSlots() const;
 
     std::optional<SlotId> findSlotForItem(Item::Type) const;
-    const OptItem& operator[](SlotId) const;
+    std::uint8_t put(Item&, SlotId);
 
 private:
-    std::array<OptItem, s_inventorySlotsCount + s_storageSlotsCount> m_slots;
+    std::array<Item, s_hotbarSlotsCount + s_storageSlotsCount> m_slots;
 };
 
 } // namespace blocklab

@@ -1,5 +1,6 @@
 #include "World.h"
 
+#include <blocklab/inventory/Inventory.h>
 #include <blocklab/utility/Error.h>
 #include <characters/PigCharacter.h>
 #include <utility/Hash.h>
@@ -9,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <utility>
 
 namespace blocklab {
@@ -107,6 +109,22 @@ void World::deleteDrop(std::size_t index)
     assert(index < m_drops.size());
     m_drops[index].setDead();
     m_hasObsoleteDrops = true;
+}
+
+std::uint8_t World::moveDropItemsToInventory(std::size_t dropIndex, Inventory& inventory)
+{
+    assert(dropIndex < m_drops.size());
+
+    Item& item = m_drops[dropIndex].item();
+    const std::uint8_t initialCount = item.count();
+    while (!item.empty()) {
+        std::optional<Inventory::SlotId> slot = inventory.findSlotForItem(item.type());
+        if (!slot)
+            break;
+
+        inventory.put(item, *slot);
+    }
+    return initialCount - item.count();
 }
 
 bool World::BlockCache::isInsideBounds(IVec3 pos) const

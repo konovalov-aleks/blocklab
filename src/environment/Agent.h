@@ -1,6 +1,7 @@
 #pragma once
 
 #include <blocklab/environment/AgentAction.h>
+#include <blocklab/inventory/Inventory.h>
 #include <blocklab/utility/Math.h>
 #include <characters/AgentCharacter.h>
 
@@ -37,6 +38,7 @@ private:
 
     AgentState m_state;
     AgentCharacter m_character;
+    Inventory m_inventory;
 };
 
 } // namespace blocklab
