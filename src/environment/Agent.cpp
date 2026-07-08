@@ -50,6 +50,7 @@ Agent::Agent()
 void Agent::reset(Vec3 position)
 {
     m_state = {};
+    m_inventory = {};
     m_character.resetBody(position);
     syncStateFromBody();
 }

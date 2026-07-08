@@ -13,8 +13,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
+#include <iomanip>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -101,23 +102,23 @@ namespace {
 
     [[noreturn]] void usage(int exitCode)
     {
-        std::printf(
-            "Usage: blocklab_benchmark [options]\n"
-            "\n"
-            "Options:\n"
-            "  --seconds N              Run for N seconds, default 10. Ignored when --steps is non-zero.\n"
-            "  --steps N                Run fixed number of benchmark iterations, default 0.\n"
-            "  --warmup-steps N         Run N untimed warmup iterations before measurement, default 128.\n"
-            "  --batch-size N           Number of environments stepped and rendered per iteration, default 16.\n"
-            "  --num-envs N             Alias for --batch-size.\n"
-            "  --seed N                 RNG seed, default 1.\n"
-            "  --max-steps N            Episode step limit, default 288000 (4 game days), 0 disables.\n"
-            "  --report-interval N      Progress report interval in seconds, default 1.\n"
-            "  --visualize              Open a Vulkan window and render the environment visibly.\n"
-            "  --action-steps A:B       Hold sampled movement/look for A..B steps, default 20:160.\n"
-            "  --initial-overrides N    Apply N clustered block overrides after each reset, default 1000.\n"
-            "  --resolution WxH         Render/window resolution, default 320x180.\n"
-            "  -h, --help               Show this help.\n");
+        std::cout
+            << "Usage: blocklab_benchmark [options]\n"
+            << "\n"
+            << "Options:\n"
+            << "  --seconds N              Run for N seconds, default 10. Ignored when --steps is non-zero.\n"
+            << "  --steps N                Run fixed number of benchmark iterations, default 0.\n"
+            << "  --warmup-steps N         Run N untimed warmup iterations before measurement, default 128.\n"
+            << "  --batch-size N           Number of environments stepped and rendered per iteration, default 16.\n"
+            << "  --num-envs N             Alias for --batch-size.\n"
+            << "  --seed N                 RNG seed, default 1.\n"
+            << "  --max-steps N            Episode step limit, default 288000 (4 game days), 0 disables.\n"
+            << "  --report-interval N      Progress report interval in seconds, default 1.\n"
+            << "  --visualize              Open a Vulkan window and render the environment visibly.\n"
+            << "  --action-steps A:B       Hold sampled movement/look for A..B steps, default 20:160.\n"
+            << "  --initial-overrides N    Apply N clustered block overrides after each reset, default 1000.\n"
+            << "  --resolution WxH         Render/window resolution, default 320x180.\n"
+            << "  -h, --help               Show this help.\n";
         std::exit(exitCode);
     }
 
@@ -147,7 +148,7 @@ namespace {
                 const auto batchSize = cli::parseInt<std::uint64_t>(cli::optionValue(i, argc, argv, arg, optionName));
                 if (!batchSize || *batchSize == 0 || *batchSize > std::numeric_limits<std::uint32_t>::max())
                     [[unlikely]] {
-                    std::fprintf(stderr, "Invalid %s value.\n", optionName);
+                    std::cerr << "Invalid " << optionName << " value." << std::endl;
                     std::exit(EXIT_FAILURE);
                 }
                 config.batchSize = static_cast<std::uint32_t>(*batchSize);
@@ -157,21 +158,21 @@ namespace {
             else if (arg == "--max-steps" || arg.starts_with("--max-steps=")) {
                 const auto maxSteps = cli::parseInt<std::uint64_t>(cli::optionValue(i, argc, argv, arg, "--max-steps"));
                 if (!maxSteps || *maxSteps > std::numeric_limits<std::uint32_t>::max()) [[unlikely]] {
-                    std::fprintf(stderr, "Invalid --max-steps value.\n");
+                    std::cerr << "Invalid --max-steps value." << std::endl;
                     std::exit(EXIT_FAILURE);
                 }
                 config.maxSteps = static_cast<std::uint32_t>(*maxSteps);
             } else if (arg == "--report-interval" || arg.starts_with("--report-interval=")) {
                 const auto reportInterval = cli::parseDouble(cli::optionValue(i, argc, argv, arg, "--report-interval"));
                 if (!reportInterval || *reportInterval <= 0.0) [[unlikely]] {
-                    std::fprintf(stderr, "Invalid --report-interval value.\n");
+                    std::cerr << "Invalid --report-interval value." << std::endl;
                     std::exit(EXIT_FAILURE);
                 }
                 config.reportInterval = *reportInterval;
             } else if (arg == "--action-steps" || arg.starts_with("--action-steps=")) {
                 const auto actionSteps = cli::parseActionSteps(cli::optionValue(i, argc, argv, arg, "--action-steps"));
                 if (!actionSteps) [[unlikely]] {
-                    std::fprintf(stderr, "Invalid --action-steps value. Expected MIN:MAX.\n");
+                    std::cerr << "Invalid --action-steps value. Expected MIN:MAX." << std::endl;
                     std::exit(EXIT_FAILURE);
                 }
                 config.minActionSteps = actionSteps->first;
@@ -179,7 +180,7 @@ namespace {
             } else if (arg == "--resolution" || arg.starts_with("--resolution=")) {
                 auto renderConfig = cli::parseResolution(cli::optionValue(i, argc, argv, arg, "--resolution"));
                 if (!renderConfig) [[unlikely]] {
-                    std::fprintf(stderr, "Invalid --resolution value. Expected WIDTHxHEIGHT.\n");
+                    std::cerr << "Invalid --resolution value. Expected WIDTHxHEIGHT." << std::endl;
                     std::exit(EXIT_FAILURE);
                 }
                 config.renderConfig = *renderConfig;
@@ -327,7 +328,7 @@ int main(int argc, char** argv)
         }
 
         if (display)
-            display->show(env.observe());
+            display->show(env.observe().images());
 
         const auto now = Clock::now();
         const double elapsed = std::chrono::duration<double>(now - startedAt).count();
@@ -336,10 +337,13 @@ int main(int argc, char** argv)
             const std::uint64_t intervalIterations = stats.iterations - lastReportIterations;
             const std::uint64_t totalSteps = stats.iterations * config.batchSize;
             const double intervalStepsPerSecond = static_cast<double>(intervalIterations * config.batchSize) / interval;
-            std::printf("iterations=%llu steps=%llu elapsed=%.2fs steps/s=%.0f avg_reward=%.4f episodes=%llu\n",
-                static_cast<unsigned long long>(stats.iterations), static_cast<unsigned long long>(totalSteps), elapsed,
-                intervalStepsPerSecond, stats.reward / static_cast<double>(std::max<std::uint64_t>(1, totalSteps)),
-                static_cast<unsigned long long>(stats.episodes));
+            std::cout << "iterations=" << stats.iterations
+                      << " steps=" << totalSteps
+                      << " elapsed=" << std::fixed << std::setprecision(2) << elapsed << "s"
+                      << " steps/s=" << std::fixed << std::setprecision(0) << intervalStepsPerSecond
+                      << " avg_reward=" << std::fixed << std::setprecision(4)
+                      << stats.reward / static_cast<double>(std::max<std::uint64_t>(1, totalSteps))
+                      << " episodes=" << stats.episodes << '\n';
             lastReportAt = now;
             lastReportIterations = stats.iterations;
         }
@@ -353,27 +357,21 @@ int main(int argc, char** argv)
     for (std::uint32_t i = 0; i < config.batchSize; ++i)
         worldOverrides += EnvironmentInternalAccessBenchmarkHelper::world(env, i).overrideCount();
     const std::uint64_t totalSteps = stats.iterations * config.batchSize;
-    std::printf("\nBlockLab benchmark result\n"
-                "  batch_size: %u\n"
-                "  iterations: %llu\n"
-                "  total_steps: %llu\n"
-                "  warmup_steps: %llu\n"
-                "  total_time_s: %.4f\n"
-                "  steps_per_second: %.2f\n"
-                "  avg_reward: %.6f\n"
-                "  episodes: %llu\n"
-                "  blocks_collected: %llu\n"
-                "  blocks_placed: %llu\n"
-                "  initial_overrides_requested: %llu\n"
-                "  initial_overrides_applied: %llu\n"
-                "  final_world_overrides: %llu\n"
-                "  observation_version: %llu\n",
-        config.batchSize, static_cast<unsigned long long>(stats.iterations),
-        static_cast<unsigned long long>(totalSteps), static_cast<unsigned long long>(config.warmupSteps), totalSeconds,
-        static_cast<double>(totalSteps) / totalSeconds,
-        stats.reward / static_cast<double>(std::max<std::uint64_t>(1, totalSteps)),
-        static_cast<unsigned long long>(stats.episodes), static_cast<unsigned long long>(stats.blocksCollected),
-        static_cast<unsigned long long>(stats.blocksPlaced), static_cast<unsigned long long>(config.initialOverrides),
-        static_cast<unsigned long long>(lastInitialOverridesApplied), static_cast<unsigned long long>(worldOverrides),
-        static_cast<unsigned long long>(observation.version()));
+    std::cout << "\nBlockLab benchmark result\n"
+              << "  batch_size: " << config.batchSize << '\n'
+              << "  iterations: " << stats.iterations << '\n'
+              << "  total_steps: " << totalSteps << '\n'
+              << "  warmup_steps: " << config.warmupSteps << '\n'
+              << "  total_time_s: " << std::fixed << std::setprecision(4) << totalSeconds << '\n'
+              << "  steps_per_second: " << std::fixed << std::setprecision(2)
+              << static_cast<double>(totalSteps) / totalSeconds << '\n'
+              << "  avg_reward: " << std::fixed << std::setprecision(6)
+              << stats.reward / static_cast<double>(std::max<std::uint64_t>(1, totalSteps)) << '\n'
+              << "  episodes: " << stats.episodes << '\n'
+              << "  blocks_collected: " << stats.blocksCollected << '\n'
+              << "  blocks_placed: " << stats.blocksPlaced << '\n'
+              << "  initial_overrides_requested: " << config.initialOverrides << '\n'
+              << "  initial_overrides_applied: " << lastInitialOverridesApplied << '\n'
+              << "  final_world_overrides: " << worldOverrides << '\n'
+              << "  observation_version: " << observation.version() << '\n';
 }

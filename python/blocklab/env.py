@@ -45,6 +45,14 @@ class BlockLabObservation:
             raise RuntimeError("BlockLab observations are CUDA-only")
         return (2, 0 if self.device.index is None else self.device.index)
 
+    @property
+    def images(self) -> Any:
+        return self._observation.images
+
+    @property
+    def inventories(self) -> Any:
+        return self._observation.inventories
+
     def __dlpack__(self, stream: int | None = None):
         return self._backend._env.observation_dlpack(self._observation, 0 if stream is None else stream)
 

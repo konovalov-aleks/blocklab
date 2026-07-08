@@ -1,5 +1,9 @@
 #include "CliParsing.h"
 
+#if defined(BLOCKLAB_ENABLE_CLI_DISPLAY)
+#include <blocklab/cli/CliDisplay.h>
+#endif
+
 #include <blocklab/environment/Environment.h>
 #include <blocklab/gpu/vulkan/GLFWInit.h>
 #include <blocklab/gpu/vulkan/Vulkan.h>
@@ -15,6 +19,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <string_view>
 
 namespace {
@@ -37,6 +42,8 @@ struct InputState {
     MouseLookState mouse;
     bool digRequested = false;
     bool frameLimiterToggleRequested = false;
+    bool mouseCaptureToggleRequested = false;
+    bool mouseCaptured = true;
     bool placeRequested = false;
     blocklab::PlacementBlock placementBlock = blocklab::PlacementBlock::Dirt;
 };
@@ -84,6 +91,8 @@ void cursorPositionCallback(GLFWwindow* window, double x, double y)
     auto* input = static_cast<InputState*>(glfwGetWindowUserPointer(window));
     if (!input)
         return;
+    if (!input->mouseCaptured)
+        return;
 
     MouseLookState& mouse = input->mouse;
     if (!mouse.initialized) {
@@ -113,11 +122,30 @@ void keyCallback(GLFWwindow* window, int key, int, int action, int)
     else if (action == GLFW_PRESS && key == GLFW_KEY_3)
         input->placementBlock = blocklab::PlacementBlock::Stone;
     else if (action == GLFW_PRESS && key == GLFW_KEY_TAB)
+        input->mouseCaptureToggleRequested = true;
+    else if (action == GLFW_PRESS && key == GLFW_KEY_GRAVE_ACCENT)
         input->frameLimiterToggleRequested = true;
-    else if (action == GLFW_RELEASE && key == GLFW_KEY_Q)
+}
+
+void mouseButtonCallback(GLFWwindow* window, int button, int action, int)
+{
+    auto* input = static_cast<InputState*>(glfwGetWindowUserPointer(window));
+    if (!input)
+        return;
+
+    if (action == GLFW_RELEASE && button == GLFW_MOUSE_BUTTON_LEFT)
         input->digRequested = true;
-    else if (action == GLFW_RELEASE && key == GLFW_KEY_E)
+    else if (action == GLFW_RELEASE && button == GLFW_MOUSE_BUTTON_RIGHT)
         input->placeRequested = true;
+}
+
+void setMouseCaptured(GLFWwindow* window, InputState& input, bool captured)
+{
+    input.mouseCaptured = captured;
+    input.mouse = {};
+    glfwSetInputMode(window, GLFW_CURSOR, captured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+    if (glfwRawMouseMotionSupported())
+        glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, captured ? GLFW_TRUE : GLFW_FALSE);
 }
 
 } // namespace
@@ -134,14 +162,23 @@ int main(int argc, char** argv)
     blocklab::Renderer renderer(*vk, appConfig.renderConfig);
     blocklab::Environment env(renderer, 1, appConfig.maxSteps);
     env.reset(appConfig.seed);
+#if defined(BLOCKLAB_ENABLE_CLI_DISPLAY)
+    blocklab::CliDisplay cliDisplay;
+    const auto logMessage = [&cliDisplay](std::string_view message) {
+        cliDisplay.log(message);
+    };
+#else
+    const auto logMessage = [](std::string_view message) {
+        std::cout << message << std::endl;
+    };
+#endif
     InputState input;
     GLFWwindow* window = display.window();
     glfwSetWindowUserPointer(window, &input);
     glfwSetCursorPosCallback(window, cursorPositionCallback);
     glfwSetKeyCallback(window, keyCallback);
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-    if (glfwRawMouseMotionSupported())
-        glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+    glfwSetMouseButtonCallback(window, mouseButtonCallback);
+    setMouseCaptured(window, input, true);
 
     using Clock = std::chrono::steady_clock;
     constexpr float fixedDt = 1.0f / 60.0f;
@@ -159,11 +196,16 @@ int main(int argc, char** argv)
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         if (keyDown(window, GLFW_KEY_R))
             env.reset(appConfig.seed);
+        if (input.mouseCaptureToggleRequested) {
+            input.mouseCaptureToggleRequested = false;
+            setMouseCaptured(window, input, !input.mouseCaptured);
+            logMessage(input.mouseCaptured ? "mouse captured" : "mouse released");
+        }
         if (input.frameLimiterToggleRequested) {
             input.frameLimiterToggleRequested = false;
             frameLimiterEnabled = !frameLimiterEnabled;
             accumulator = 0.0f;
-            std::cout << "frame limiter " << (frameLimiterEnabled ? "enabled" : "disabled") << std::endl;
+            logMessage(frameLimiterEnabled ? "frame limiter enabled" : "frame limiter disabled");
         }
 
         const auto now = Clock::now();
@@ -192,9 +234,9 @@ int main(int argc, char** argv)
             const blocklab::StepResult result = env.step(actions).front();
             if (result.terminated || result.truncated) {
                 if (result.terminated)
-                    std::cout << "environment reset due to character death" << std::endl;
+                    logMessage("environment reset due to character death");
                 else if (result.truncated)
-                    std::cout << "environment reset due to step limit reached" << std::endl;
+                    logMessage("environment reset due to step limit reached");
                 env.reset(appConfig.seed);
             }
             ++statsSteps;
@@ -209,19 +251,22 @@ int main(int argc, char** argv)
         } else
             stepEnvironment();
 
-        if (display.show(env.observe()))
+        if (display.show(env.observe().images()))
             ++statsFrames;
+#if defined(BLOCKLAB_ENABLE_CLI_DISPLAY)
+        cliDisplay.show(env.observe());
+#endif
 
         const double statsElapsed = std::chrono::duration<double>(now - lastStatsAt).count();
         if (statsElapsed >= 1.0) {
-            // clang-format off
-            std::cout << std::fixed << std::setprecision(1)
+            std::ostringstream stats;
+            stats << std::fixed << std::setprecision(1)
                 << "fps=" << static_cast<double>(statsFrames) / statsElapsed
                 << " sim_steps/s=" << static_cast<double>(statsSteps) / statsElapsed
                 << " total_steps=" << totalSteps
                 << " observation_version=" << env.observe().version()
-                << " mode=" << (frameLimiterEnabled ? "fixed" : "unlocked") << '\n';
-            // clang-format on
+                << " mode=" << (frameLimiterEnabled ? "fixed" : "unlocked");
+            logMessage(stats.str());
             lastStatsAt = now;
             statsFrames = 0;
             statsSteps = 0;

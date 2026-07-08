@@ -25,11 +25,12 @@ class Agent {
 public:
     Agent();
 
-    const AgentState& state() const { return m_state; }
-    AgentState& mutableState() { return m_state; }
-
     void reset(Vec3 position);
     void step(World&, const AgentAction&, float dt);
+
+    const Inventory& inventory() const { return m_inventory; }
+    const AgentState& state() const { return m_state; }
+    AgentState& mutableState() { return m_state; }
 
 private:
     void pickDrops(World&);

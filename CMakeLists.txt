@@ -13,6 +13,8 @@ set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_EXTENSIONS OFF)
 
+option(BLOCKLAB_ENABLE_CLI_DISPLAY "Build the FTXUI-based CLI debug display" ON)
+
 include(FetchContent)
 
 find_package(Vulkan REQUIRED)
@@ -72,6 +74,16 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(Catch2)
 
+if(BLOCKLAB_ENABLE_CLI_DISPLAY)
+    FetchContent_Declare(
+        ftxui
+        GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
+        GIT_TAG v6.1.9
+        GIT_PROGRESS TRUE
+    )
+    FetchContent_MakeAvailable(ftxui)
+endif()
+
 if(NOT pybind11_FOUND)
     FetchContent_Declare(
         pybind11
@@ -110,6 +122,10 @@ add_library(blocklab_lib
     src/world/WorldGenerator.cu
 )
 
+if(BLOCKLAB_ENABLE_CLI_DISPLAY)
+    target_sources(blocklab_lib PRIVATE src/cli/CliDisplay.cpp)
+endif()
+
 target_include_directories(blocklab_lib
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -127,6 +143,9 @@ target_link_libraries(blocklab_lib
         Vulkan::Vulkan
         glfw
 )
+if(BLOCKLAB_ENABLE_CLI_DISPLAY)
+    target_link_libraries(blocklab_lib PRIVATE ftxui::screen ftxui::dom)
+endif()
 add_dependencies(blocklab_lib blocklab_shaders)
 target_compile_definitions(blocklab_lib PRIVATE BLOCKLAB_SHADER_DIR="${BLOCKLAB_SHADER_OUTPUT_DIR}")
 target_compile_definitions(blocklab_lib PUBLIC VULKAN_HPP_NO_EXCEPTIONS VULKAN_HPP_NO_STRUCT_CONSTRUCTORS)
@@ -139,6 +158,9 @@ add_executable(blocklab
 
 target_include_directories(blocklab PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(blocklab PRIVATE blocklab_lib)
+if(BLOCKLAB_ENABLE_CLI_DISPLAY)
+    target_compile_definitions(blocklab PRIVATE BLOCKLAB_ENABLE_CLI_DISPLAY=1)
+endif()
 
 blocklab_enable_strict_warnings(blocklab)
 

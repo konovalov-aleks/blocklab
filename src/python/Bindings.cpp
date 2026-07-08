@@ -1,8 +1,12 @@
 #include <blocklab/environment/Environment.h>
-#include <blocklab/environment/Observation.h>
+#include <blocklab/environment/observation/ImageBatch.h>
+#include <blocklab/environment/observation/InventoryBatch.h>
+#include <blocklab/environment/observation/Observation.h>
 #include <blocklab/gpu/cuda/CudaHelpers.h>
 #include <blocklab/gpu/vulkan/Vulkan.h>
 #include <blocklab/graphics/Renderer.h>
+#include <blocklab/inventory/Inventory.h>
+#include <blocklab/inventory/Item.h>
 #include <blocklab/utility/Error.h>
 
 #include <cuda_runtime.h>
@@ -15,6 +19,7 @@
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace py = pybind11;
@@ -62,6 +67,14 @@ namespace {
     {
         delete static_cast<DlpackObservationContext*>(managed->manager_ctx);
         delete managed;
+    }
+
+    py::tuple itemTuple(std::span<const Item> items)
+    {
+        py::tuple result(items.size());
+        for (std::size_t i = 0; i < items.size(); ++i)
+            result[i] = py::cast(items[i]);
+        return result;
     }
 
     class NativeEnvironment {
@@ -119,19 +132,22 @@ namespace {
             return result;
         }
 
-        Observation observe() const { return m_environment.observe(); }
+        const Observation& observe() const { return m_environment.observe(); }
 
         py::capsule observationDlpack(const Observation& observation, std::uintptr_t streamHandle = 0)
         {
-            void* const data = observation.data();
+            const ImageBatch& images = observation.images();
+
+            void* const data = images.data();
             if (!data) [[unlikely]]
                 fatalError("native observation has no CUDA tensor data");
-            if (observation.batchSize() != m_numEnvs || observation.width() != m_width
-                || observation.height() != m_height) [[unlikely]]
+            if (images.batchSize() != m_numEnvs
+             || images.width() != m_width
+             || images.height() != m_height) [[unlikely]]
                 fatalError("native observation metadata does not match environment");
 
             cudaStream_t stream = reinterpret_cast<cudaStream_t>(streamHandle);
-            observation.enqueueReadyWait(stream);
+            images.enqueueReadyWait(stream);
 
             int deviceId = 0;
             const cudaError_t cudaResult = cudaGetDevice(&deviceId);
@@ -187,7 +203,7 @@ namespace {
         {
             py::dict info;
             info["version"] = version;
-            info["observation"] = m_environment.observe();
+            info["observation"] = py::cast(m_environment.observe(), py::return_value_policy::reference);
             return info;
         }
 
@@ -237,17 +253,71 @@ PYBIND11_MODULE(_native, module)
 {
     module.doc() = "Native BlockLab CUDA/Vulkan environment bindings";
 
+    py::enum_<blocklab::Item::Type>(module, "ItemType")
+        .value("Dirt", blocklab::Item::Type::Dirt)
+        .value("Stone", blocklab::Item::Type::Stone)
+        .value("Torch", blocklab::Item::Type::Torch);
+
+    py::class_<blocklab::Item>(module, "Item")
+        .def_property_readonly("empty", &blocklab::Item::empty)
+        .def_property_readonly("type", [](const blocklab::Item& item) -> py::object {
+            if (item.empty())
+                return py::none();
+            return py::cast(item.type());
+        })
+        .def_property_readonly("count", &blocklab::Item::count)
+        .def("__repr__", [](const blocklab::Item& item) -> std::string {
+            if (item.empty())
+                return "<blocklab.Item empty>";
+            return "<blocklab.Item type=" + std::to_string(static_cast<std::uint32_t>(item.type()))
+                + " count=" + std::to_string(item.count()) + '>';
+        });
+
+    py::class_<blocklab::Inventory>(module, "Inventory")
+        .def_property_readonly("hotbar_slots", [](const blocklab::Inventory& inventory) {
+            return blocklab::itemTuple(inventory.hotbarSlots());
+        })
+        .def_property_readonly("storage_slots", [](const blocklab::Inventory& inventory) {
+            return blocklab::itemTuple(inventory.storageSlots());
+        })
+        .def("__repr__", [](const blocklab::Inventory&) {
+            return "<blocklab.Inventory>";
+        });
+
+    py::class_<blocklab::ImageBatch>(module, "ImageBatch")
+        .def_property_readonly("width", &blocklab::ImageBatch::width)
+        .def_property_readonly("height", &blocklab::ImageBatch::height)
+        .def_property_readonly("channels", &blocklab::ImageBatch::channels)
+        .def_property_readonly("batch_size", &blocklab::ImageBatch::batchSize)
+        .def("__repr__", [](const blocklab::ImageBatch& images) {
+            return "<blocklab.ImageBatch width=" + std::to_string(images.width())
+                                     + " height=" + std::to_string(images.height())
+                                     + " channels=" + std::to_string(images.channels())
+                                     + " batch_size=" + std::to_string(images.batchSize()) + '>';
+        });
+
+    py::class_<blocklab::InventoryBatch>(module, "InventoryBatch")
+        .def("__len__", &blocklab::InventoryBatch::batchSize)
+        .def_property_readonly("batch_size", &blocklab::InventoryBatch::batchSize)
+        .def("__getitem__", [](const blocklab::InventoryBatch& inventories, std::uint32_t index) -> const blocklab::Inventory& {
+            if (index >= inventories.batchSize())
+                throw py::index_error();
+            return inventories[index];
+        }, py::return_value_policy::reference_internal)
+        .def("__repr__", [](const blocklab::InventoryBatch& inventories) {
+            return "<blocklab.InventoryBatch batch_size=" + std::to_string(inventories.batchSize()) + '>';
+        });
+
     py::class_<blocklab::Observation>(module, "Observation")
-        .def_property_readonly("width", &blocklab::Observation::width)
-        .def_property_readonly("height", &blocklab::Observation::height)
-        .def_property_readonly("channels", &blocklab::Observation::channels)
         .def_property_readonly("version", &blocklab::Observation::version)
         .def_property_readonly("batch_size", &blocklab::Observation::batchSize)
+        .def_property_readonly("images", &blocklab::Observation::images, py::return_value_policy::reference_internal)
+        .def_property_readonly("inventories", [](const blocklab::Observation& observation) -> const blocklab::InventoryBatch& {
+            return observation.inventories();
+        }, py::return_value_policy::reference_internal)
         .def("__repr__", [](const blocklab::Observation& observation) {
-            return "<blocklab.Observation width=" + std::to_string(observation.width()) + " height="
-                + std::to_string(observation.height()) + " channels=" + std::to_string(observation.channels())
-                + " batch_size=" + std::to_string(observation.batchSize())
-                + " version=" + std::to_string(observation.version()) + ">";
+            return "<blocklab.Observation batch_size=" + std::to_string(observation.batchSize())
+                + " version=" + std::to_string(observation.version()) + '>';
         });
 
     py::enum_<blocklab::PlacementBlock>(module, "PlacementBlock")
@@ -277,7 +347,7 @@ PYBIND11_MODULE(_native, module)
             py::arg("max_steps") = 0)
         .def("reset", &blocklab::NativeEnvironment::reset, py::arg("seed") = 1)
         .def("step", &blocklab::NativeEnvironment::step, py::arg("actions"))
-        .def("observe", &blocklab::NativeEnvironment::observe)
+        .def("observe", &blocklab::NativeEnvironment::observe, py::return_value_policy::reference_internal)
         .def("observation_dlpack", &blocklab::NativeEnvironment::observationDlpack, py::arg("observation"),
             py::arg("stream") = 0);
 }

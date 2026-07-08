@@ -1,6 +1,6 @@
 #pragma once
 
-#include <blocklab/environment/Observation.h>
+#include <blocklab/environment/observation/ImageBatch.h>
 #include <blocklab/gpu/interop/VulkanCudaInteropBuffer.h>
 #include <blocklab/gpu/interop/VulkanCudaInteropSemaphore.h>
 #include <blocklab/gpu/vulkan/Vulkan.h>
@@ -35,7 +35,7 @@ public:
     bool shouldClose() const;
 
     // returns false if the frame was skipped
-    bool show(const Observation&);
+    bool show(const ImageBatch&);
 
 private:
     using ClockT = std::chrono::steady_clock;

@@ -734,20 +734,13 @@ Renderer::Renderer(Vulkan& vk, RenderConfig config)
 
 Renderer::~Renderer() { destroyVulkan(m_vk, *m_state); }
 
-std::size_t Renderer::cudaObservationTensorBytes() const
-{
-    return static_cast<std::size_t>(m_state->renderExtent.width)
-        * static_cast<std::size_t>(m_state->renderExtent.height) * 3U * m_state->batchSize * sizeof(float);
-}
-
 void Renderer::initializeBatchData()
 {
     m_batchSize = m_state->batchSize;
     m_slots = std::make_unique<RenderSlot[]>(m_batchSize);
     m_renderParams = std::make_unique<RenderParams[]>(m_batchSize);
     m_instances.reserve(MaxEntityInstances);
-    m_observation.reset(m_state->renderExtent.width, m_state->renderExtent.height, m_batchSize);
-    m_observation.setVersion(m_observationVersion);
+    m_observationImages.reset(m_state->renderExtent.width, m_state->renderExtent.height, m_batchSize);
     if (!m_entityMeshesUploaded) {
         PigMesh pigMeshGenerator;
         const std::span<MeshVertex> pigMesh = pigMeshGenerator.generate();
@@ -1096,7 +1089,7 @@ void Renderer::drawFrame()
     offscreenFrame.conversionTaskFuture = conversionTask.share();
 }
 
-const Observation& Renderer::renderObservations(std::span<const World> worlds, std::span<const AgentState> agents)
+Renderer::RenderResult Renderer::renderObservations(std::span<const World> worlds, std::span<const AgentState> agents)
 {
     if (worlds.size() != agents.size()) [[unlikely]]
         fatalError("renderObservations world/agent count mismatch");
@@ -1109,9 +1102,11 @@ const Observation& Renderer::renderObservations(std::span<const World> worlds, s
     }
     drawFrame();
     OffscreenFrame& frame = m_state->frames[m_state->lastSubmittedFrame];
-    m_observation.setVersion(m_observationVersion);
-    m_observation.setData(frame.observationTensor, frame.conversionTaskFuture);
-    return m_observation;
+    m_observationImages.setData(frame.observationTensor, frame.conversionTaskFuture);
+    return {
+        .images = m_observationImages,
+        .version = m_observationVersion,
+    };
 }
 
 void Renderer::renderObservationSlot(std::size_t slotIndex, const World& world, const AgentState& agent)

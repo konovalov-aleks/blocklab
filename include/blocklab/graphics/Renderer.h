@@ -1,6 +1,6 @@
 #pragma once
 
-#include <blocklab/environment/Observation.h>
+#include <blocklab/environment/observation/ImageBatch.h>
 #include <blocklab/utility/Math.h>
 
 #include <cstddef>
@@ -49,14 +49,18 @@ struct RenderConfig {
 
 class Renderer final {
 public:
+    struct RenderResult {
+        const ImageBatch& images;
+        std::uint64_t version;
+    };
+
     Renderer(Vulkan&, RenderConfig config = {});
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
 
-    const Observation& observation() const { return m_observation; }
-    std::size_t cudaObservationTensorBytes() const;
+    RenderResult renderObservations(std::span<const World>, std::span<const AgentState>);
 
     struct RenderParams {
         struct alignas(16) FrameInfo {
@@ -118,7 +122,6 @@ public:
     struct VulkanState;
 
 private:
-    const Observation& renderObservations(std::span<const World>, std::span<const AgentState>);
     RenderParams buildRenderParams(const AgentState&, const World&) const;
     void uploadInstances(std::size_t slot, const World&);
     void drawFrame();
@@ -131,7 +134,7 @@ private:
     std::unique_ptr<VulkanState> m_state;
 
     std::unique_ptr<WorldGenerator> m_worldGenerator;
-    Observation m_observation;
+    ImageBatch m_observationImages;
     std::vector<EntityInstance> m_instances;
     std::unique_ptr<RenderSlot[]> m_slots;
     std::unique_ptr<RenderParams[]> m_renderParams;
@@ -141,8 +144,6 @@ private:
     std::uint32_t m_dropMeshVertexCount = 0;
     std::uint64_t m_observationVersion = 0;
     bool m_entityMeshesUploaded = false;
-
-    friend class Environment;
 };
 
 } // namespace blocklab

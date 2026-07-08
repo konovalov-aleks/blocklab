@@ -16,6 +16,7 @@ static constexpr Vec3 InitialAgentPosition { 0.5f, 14.0f, 0.5f };
 Environment::Environment(Renderer& renderer, std::uint32_t numEnvs, std::uint32_t maxSteps)
     : m_worlds(std::make_unique<World[]>(numEnvs))
     , m_agents(std::make_unique<Agent[]>(numEnvs))
+    , m_observation(numEnvs)
     , m_renderer(renderer)
     , m_stepCounts(std::make_unique<std::uint32_t[]>(numEnvs))
     , m_stepResults(std::make_unique<StepResult[]>(numEnvs))
@@ -25,6 +26,9 @@ Environment::Environment(Renderer& renderer, std::uint32_t numEnvs, std::uint32_
 {
     if (numEnvs == 0) [[unlikely]]
         fatalError("Environment batch size must be positive");
+
+    for (std::uint32_t i = 0; i < numEnvs; ++i)
+        m_observation.inventories().set(i, m_agents[i].inventory());
 }
 
 Environment::~Environment() = default;
@@ -88,12 +92,13 @@ const Observation& Environment::updateObservation()
 {
     for (std::uint32_t i = 0; i < m_batchSize; ++i)
         m_renderAgents[i] = m_agents[i].state();
-    const Observation& observation
+    const Renderer::RenderResult renderObservation
         = m_renderer.renderObservations({ m_worlds.get(), m_batchSize }, { m_renderAgents.get(), m_batchSize });
-    if (observation.batchSize() != m_batchSize) [[unlikely]]
+    if (renderObservation.images.batchSize() != m_batchSize) [[unlikely]]
         fatalError("Observation renderer returned an unexpected batch size");
-    m_observation = &observation;
-    return *m_observation;
+    m_observation.setImageBatchRef(renderObservation.images);
+    m_observation.setVersion(renderObservation.version);
+    return m_observation;
 }
 
 } // namespace blocklab

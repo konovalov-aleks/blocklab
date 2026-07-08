@@ -83,7 +83,7 @@ void Display::pollEvents() const { glfwPollEvents(); }
 
 bool Display::shouldClose() const { return glfwWindowShouldClose(m_window); }
 
-bool Display::show(const Observation& observation)
+bool Display::show(const ImageBatch& images)
 {
     assert(m_vk);
 
@@ -91,8 +91,8 @@ bool Display::show(const Observation& observation)
     if (now - m_lastFrameTime < s_minFrameInterval)
         return false;
 
-    if (observation.batchSize() != m_batchSize || observation.channels() != 3 || observation.height() != m_imageHeight
-        || observation.width() != m_imageWidth) [[unlikely]]
+    if (images.batchSize() != m_batchSize || images.channels() != 3
+     || images.height() != m_imageHeight || images.width() != m_imageWidth) [[unlikely]]
         fatalError("Display: observation tensor shape is incompatible");
 
     const vk::Result fenceStatus = m_vk->device().getFenceStatus(*m_renderFence);
@@ -101,9 +101,9 @@ bool Display::show(const Observation& observation)
     if (fenceStatus != vk::Result::eSuccess) [[unlikely]]
         fatalError("incorrect display fence status");
 
-    observation.enqueueReadyWait(m_conversionStream);
-    enqueueObservationConversionForDisplay(m_conversionStream, m_buffer.cudaPtr<std::uint8_t>(), observation.data(),
-        observation.batchSize(), observation.width(), observation.height(), m_imageGridWidth, m_imageGridHeight,
+    images.enqueueReadyWait(m_conversionStream);
+    enqueueObservationConversionForDisplay(m_conversionStream, m_buffer.cudaPtr<std::uint8_t>(), images.data(),
+        images.batchSize(), images.width(), images.height(), m_imageGridWidth, m_imageGridHeight,
         m_surfaceColorFormat == ColorFormat::BGRA);
 
     std::uint32_t nextImageIndex = 0;
