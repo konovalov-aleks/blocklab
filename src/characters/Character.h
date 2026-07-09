@@ -3,6 +3,7 @@
 #include "CharacterKind.h"
 
 #include <blocklab/utility/Math.h>
+#include <world/HitVolume.h>
 
 #include <cstdint>
 
@@ -14,12 +15,7 @@ using EntityId = std::uint32_t;
 
 class Character {
 public:
-    struct HitBox {
-        float radius;
-        float height;
-    };
-
-    Character(EntityId, CharacterKind, Vec3 position, HitBox);
+    Character(EntityId, CharacterKind, Vec3 position, CylinderDimensions hitCylinder);
     virtual ~Character() = default;
 
     EntityId id() const { return m_id; }
@@ -31,6 +27,11 @@ public:
     const Vec3& position() const { return m_position; }
     const Vec3& velocity() const { return m_velocity; }
     const Vec3& direction() const { return m_forward; }
+
+    HitCylinder hitVolume() const
+    {
+        return { m_hitCylinderDimensions, m_position };
+    }
 
     bool onGround() const { return m_onGround; }
     bool horizontalBlocked() const { return m_horizontalBlocked; }
@@ -51,7 +52,8 @@ protected:
     Vec3 m_velocity {};
     Vec3 m_home {};
     Vec3 m_forward { 0.0f, 0.0f, 1.0f };
-    const HitBox m_hitBox;
+
+    const CylinderDimensions m_hitCylinderDimensions;
     std::int32_t m_health = 1;
     bool m_onGround = false;
     bool m_hasHorizontalMovement = false;

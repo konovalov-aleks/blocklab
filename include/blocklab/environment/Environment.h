@@ -1,7 +1,7 @@
 #pragma once
 
+#include "observation/Observation.h"
 #include "AgentAction.h"
-#include "Observation.h"
 
 #include <cstdint>
 #include <memory>
@@ -33,7 +33,7 @@ public:
     void reset(std::uint32_t seed = 1);
     std::span<const StepResult> step(std::span<const AgentAction> actions);
     // Returned observation remains valid until the next reset() or step() call.
-    const Observation& observe() const { return *m_observation; }
+    const Observation& observe() const { return m_observation; }
 
     std::uint32_t batchSize() const { return m_batchSize; }
 
@@ -44,7 +44,7 @@ private:
 
     std::unique_ptr<World[]> m_worlds;
     std::unique_ptr<Agent[]> m_agents;
-    const Observation* m_observation = nullptr;
+    Observation m_observation;
     Renderer& m_renderer;
     std::unique_ptr<std::uint32_t[]> m_stepCounts;
     std::unique_ptr<StepResult[]> m_stepResults;

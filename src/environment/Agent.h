@@ -1,6 +1,7 @@
 #pragma once
 
 #include <blocklab/environment/AgentAction.h>
+#include <blocklab/inventory/Inventory.h>
 #include <blocklab/utility/Math.h>
 #include <characters/AgentCharacter.h>
 
@@ -24,18 +25,21 @@ class Agent {
 public:
     Agent();
 
+    void reset(Vec3 position);
+    void step(World&, const AgentAction&, float dt);
+
+    const Inventory& inventory() const { return m_inventory; }
     const AgentState& state() const { return m_state; }
     AgentState& mutableState() { return m_state; }
 
-    void reset(Vec3 position);
-    void step(World& world, const AgentAction& action, float dt);
-
 private:
-    void interact(World& world, const AgentAction& action);
+    void pickDrops(World&);
+    void interact(World&, const AgentAction&);
     void syncStateFromBody();
 
     AgentState m_state;
     AgentCharacter m_character;
+    Inventory m_inventory;
 };
 
 } // namespace blocklab

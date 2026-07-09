@@ -27,10 +27,11 @@ namespace {
 
 } // namespace
 
-Character::Character(EntityId id, CharacterKind kind, Vec3 position, HitBox hitbox)
+Character::Character(EntityId id, CharacterKind kind, Vec3 position,
+                     CylinderDimensions hitCylinder)
     : m_position(position)
     , m_home(position)
-    , m_hitBox(hitbox)
+    , m_hitCylinderDimensions(hitCylinder)
     , m_id(id)
     , m_kind(kind)
 {
@@ -103,34 +104,33 @@ bool Character::collides(const World& world, Vec3 position) const
 {
     return world.hasSolidBlockInArea(
         {
-            floorToInt32(position.x - m_hitBox.radius),
+            floorToInt32(position.x - m_hitCylinderDimensions.radius),
             floorToInt32(position.y),
-            floorToInt32(position.z - m_hitBox.radius),
+            floorToInt32(position.z - m_hitCylinderDimensions.radius),
         },
         {
-            floorToInt32(position.x + m_hitBox.radius),
-            floorToInt32(position.y + m_hitBox.height),
-            floorToInt32(position.z + m_hitBox.radius),
+            floorToInt32(position.x + m_hitCylinderDimensions.radius),
+            floorToInt32(position.y + m_hitCylinderDimensions.height),
+            floorToInt32(position.z + m_hitCylinderDimensions.radius),
         });
 }
 
 bool Character::occupiesBlock(IVec3 block) const
 {
-    const std::int32_t minX = floorToInt32(m_position.x - m_hitBox.radius);
-    const std::int32_t maxX = floorToInt32(m_position.x + m_hitBox.radius);
+    const std::int32_t minX = floorToInt32(m_position.x - m_hitCylinderDimensions.radius);
+    const std::int32_t maxX = floorToInt32(m_position.x + m_hitCylinderDimensions.radius);
     const std::int32_t minY = floorToInt32(m_position.y);
-    const std::int32_t maxY = floorToInt32(m_position.y + m_hitBox.height);
-    const std::int32_t minZ = floorToInt32(m_position.z - m_hitBox.radius);
-    const std::int32_t maxZ = floorToInt32(m_position.z + m_hitBox.radius);
-    return block.x >= minX && block.x <= maxX && block.y >= minY && block.y <= maxY && block.z >= minZ
-        && block.z <= maxZ;
+    const std::int32_t maxY = floorToInt32(m_position.y + m_hitCylinderDimensions.height);
+    const std::int32_t minZ = floorToInt32(m_position.z - m_hitCylinderDimensions.radius);
+    const std::int32_t maxZ = floorToInt32(m_position.z + m_hitCylinderDimensions.radius);
+    return block.x >= minX && block.x <= maxX
+        && block.y >= minY && block.y <= maxY
+        && block.z >= minZ && block.z <= maxZ;
 }
 
 void Character::applyPhysics(World& world, float dt)
 {
     m_horizontalBlocked = false;
-    m_velocity.y += CharacterGravity * dt;
-    m_velocity.y = std::max(m_velocity.y, CharacterMaxFallSpeed);
 
     Vec3 next = m_position;
 
@@ -152,7 +152,9 @@ void Character::applyPhysics(World& world, float dt)
         m_velocity.z = 0.0f;
     }
 
-    next.y += m_velocity.y * dt;
+    const float previousVelocityY = m_velocity.y;
+    m_velocity.y = std::max(m_velocity.y + CharacterGravity * dt, CharacterMaxFallSpeed);
+    next.y += 0.5f * (previousVelocityY + m_velocity.y) * dt;
     m_onGround = false;
     if (collides(world, next)) {
         if (m_velocity.y < 0.0f)

@@ -3,6 +3,7 @@
 #include <blocklab/environment/Environment.h>
 #include <blocklab/gpu/vulkan/Vulkan.h>
 #include <blocklab/graphics/Renderer.h>
+#include <blocklab/inventory/Inventory.h>
 #include <environment/Agent.h>
 #include <world/World.h>
 
@@ -13,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <sstream>
 #include <vector>
 
 namespace blocklab::test {
@@ -24,6 +26,8 @@ public:
 };
 
 namespace {
+    constexpr float TestStepDt = 1.0f / 60.0f;
+
     struct TestRenderContext {
         explicit TestRenderContext(std::uint32_t batchSize = 1)
             : vkInstance(false)
@@ -37,7 +41,58 @@ namespace {
         Renderer renderer;
     };
 
+    std::uint32_t itemCount(const Inventory& inventory, Item::Type type)
+    {
+        std::uint32_t count = 0;
+        const auto addSlots = [&](std::span<const Item> slots) {
+            for (const Item& item : slots) {
+                if (!item.empty() && item.type() == type)
+                    count += item.count();
+            }
+        };
+        addSlots(inventory.hotbarSlots());
+        addSlots(inventory.storageSlots());
+        return count;
+    }
+
+    void setupEmptyTestArea(World& world)
+    {
+        world.resetSeed(17);
+        updateWorldCacheAt(world, { 0, 14, 0 });
+        clearBlocks(world, { -3, 0, -3 }, { 7, 22, 7 });
+    }
+
+    void stepAgent(World& world, Agent& agent, const AgentAction& action, int steps = 1, float dt = TestStepDt)
+    {
+        for (int i = 0; i < steps; ++i) {
+            agent.step(world, action, dt);
+            world.update(dt, agent.state().position);
+        }
+    }
+
+    AgentAction lookDownAttack()
+    {
+        AgentAction action;
+        action.pitchDelta = -Pi;
+        action.attack = true;
+        return action;
+    }
+
 } // namespace
+
+#define BLOCKLAB_INFO_DROPS(world) \
+    std::ostringstream blocklabDropInfo; \
+    blocklabDropInfo << "drops = " << (world).drops().size(); \
+    for (std::size_t blocklabDropIndex = 0; blocklabDropIndex < (world).drops().size(); ++blocklabDropIndex) { \
+        const Drop& blocklabDrop = (world).drops()[blocklabDropIndex]; \
+        const Vec3 blocklabDropPosition = blocklabDrop.position(); \
+        blocklabDropInfo << "\ndrop[" << blocklabDropIndex << "]" \
+            << " alive=" << blocklabDrop.alive() \
+            << " x=" << blocklabDropPosition.x \
+            << " y=" << blocklabDropPosition.y \
+            << " z=" << blocklabDropPosition.z; \
+    } \
+    INFO(blocklabDropInfo.str())
 
 TEST_CASE("Environment can step a moving agent", "[environment]")
 {
@@ -95,7 +150,8 @@ TEST_CASE("Agent cannot place a block into its own body", "[environment]")
 
     AgentAction placeIntoSelf;
     placeIntoSelf.pitchDelta = 1.2f;
-    placeIntoSelf.place = true;
+    placeIntoSelf.activeHotbarSlot = Inventory::hotbarSlotId(1);
+    placeIntoSelf.use = true;
     const AgentAction placeActions[] { placeIntoSelf };
     placeEnv.step(placeActions);
     CHECK(world.blockType({ occupiedX, occupiedY, occupiedZ }) == Block::Air);
@@ -115,10 +171,119 @@ TEST_CASE("Agent interaction ray can leave the world vertically", "[environment]
 
     AgentAction action;
     action.pitchDelta = -Pi;
-    action.dig = true;
+    action.attack = true;
 
     agent.step(world, action, 0.0f);
     CHECK(agent.state().blocksCollected == 0);
+}
+
+TEST_CASE("Agent picks up a mined block after falling through it", "[environment][inventory][drop]")
+{
+    World world;
+    setupEmptyTestArea(world);
+    world.setBlock({ 0, 10, 0 }, Block::Stone);
+    world.setBlock({ 0, 13, 0 }, Block::Dirt);
+
+    Agent agent;
+    agent.reset({ 0.5f, 14.0f, 0.5f });
+    REQUIRE(itemCount(agent.inventory(), Item::Type::Dirt) == 64);
+
+    stepAgent(world, agent, lookDownAttack(), 1, 0.0f);
+    REQUIRE(world.blockType({ 0, 13, 0 }) == Block::Air);
+    CHECK(itemCount(agent.inventory(), Item::Type::Dirt) == 64);
+
+    stepAgent(world, agent, {}, 120);
+    INFO("agent y = " << agent.state().position.y);
+    BLOCKLAB_INFO_DROPS(world);
+    CHECK(itemCount(agent.inventory(), Item::Type::Dirt) == 65);
+    CHECK(world.drops().empty());
+}
+
+TEST_CASE("Agent picks up multiple drops with their original item types", "[environment][inventory][drop]")
+{
+    World world;
+    setupEmptyTestArea(world);
+    world.setBlock({ 0, 12, 0 }, Block::Stone);
+    world.setBlock({ 0, 14, 0 }, Block::Stone);
+    world.setBlock({ 0, 15, 0 }, Block::Dirt);
+    world.setBlock({ 0, 16, 0 }, Block::Dirt);
+    world.setBlock({ 0, 17, 0 }, Block::Torch);
+
+    Agent agent;
+    agent.reset({ 0.5f, 17.0f, 0.5f });
+    REQUIRE(itemCount(agent.inventory(), Item::Type::Torch) == 64);
+    REQUIRE(itemCount(agent.inventory(), Item::Type::Dirt) == 64);
+    REQUIRE(itemCount(agent.inventory(), Item::Type::Stone) == 64);
+
+    AgentAction attack = lookDownAttack();
+    stepAgent(world, agent, attack, 1, 0.0f);
+    stepAgent(world, agent, attack, 1, 0.0f);
+    stepAgent(world, agent, attack, 1, 0.0f);
+    stepAgent(world, agent, attack, 1, 0.0f);
+
+    REQUIRE(world.blockType({ 0, 17, 0 }) == Block::Air);
+    REQUIRE(world.blockType({ 0, 16, 0 }) == Block::Air);
+    REQUIRE(world.blockType({ 0, 15, 0 }) == Block::Air);
+    REQUIRE(world.blockType({ 0, 14, 0 }) == Block::Air);
+
+    stepAgent(world, agent, {}, 180);
+    BLOCKLAB_INFO_DROPS(world);
+    CHECK(itemCount(agent.inventory(), Item::Type::Torch) == 65);
+    CHECK(itemCount(agent.inventory(), Item::Type::Dirt) == 66);
+    CHECK(itemCount(agent.inventory(), Item::Type::Stone) == 65);
+    CHECK(world.drops().empty());
+}
+
+TEST_CASE("Agent use places the active hotbar item and consumes it", "[environment][inventory]")
+{
+    World world;
+    setupEmptyTestArea(world);
+    world.setBlock({ 0, 10, 0 }, Block::Stone);
+    world.setBlock({ 0, 15, 2 }, Block::Stone);
+
+    Agent agent;
+    agent.reset({ 0.5f, 14.0f, 0.5f });
+    REQUIRE(itemCount(agent.inventory(), Item::Type::Dirt) == 64);
+
+    AgentAction action;
+    action.activeHotbarSlot = Inventory::hotbarSlotId(1);
+    action.use = true;
+    stepAgent(world, agent, action, 1, 0.0f);
+
+    CHECK(world.blockType({ 0, 15, 1 }) == Block::Dirt);
+    CHECK(itemCount(agent.inventory(), Item::Type::Dirt) == 63);
+}
+
+TEST_CASE("Agent use with an empty active hotbar slot does not place a block", "[environment][inventory]")
+{
+    World world;
+    setupEmptyTestArea(world);
+    world.setBlock({ 0, 10, 0 }, Block::Stone);
+    world.setBlock({ 0, 15, 2 }, Block::Stone);
+
+    Agent agent;
+    agent.reset({ 0.5f, 14.0f, 0.5f });
+
+    const auto trySetBlock = [&](Inventory::SlotId slot) {
+        AgentAction action;
+        action.activeHotbarSlot = slot;
+        action.use = true;
+        stepAgent(world, agent, action, 1, 0.0f);
+    };
+
+    trySetBlock(Inventory::hotbarSlotId(8));
+    CHECK(world.blockType({ 0, 15, 1 }) == Block::Air);
+    CHECK(itemCount(agent.inventory(), Item::Type::Torch) == 64);
+    CHECK(itemCount(agent.inventory(), Item::Type::Dirt) == 64);
+    CHECK(itemCount(agent.inventory(), Item::Type::Stone) == 64);
+
+    const Inventory::SlotId stoneSlot = Inventory::hotbarSlotId(2);
+    REQUIRE(agent.inventory()[stoneSlot].count() == 64);
+
+    trySetBlock(stoneSlot);
+    CHECK(world.blockType({ 0, 15, 1 }) == Block::Stone);
+    CHECK(agent.inventory()[stoneSlot].count() == 63);
+    CHECK(itemCount(agent.inventory(), Item::Type::Stone) == 63);
 }
 
 TEST_CASE("World collision queries respect air and solid override masks", "[world]")

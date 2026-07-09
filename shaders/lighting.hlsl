@@ -18,4 +18,13 @@ float faceSkyLight(float3 faceNormal, RenderParams params)
     return lerp(faceDirectionLight, fallbackLight, fallbackLightFactor);
 }
 
+float faceBlockLight(float3 faceNormal)
+{
+    // Block light has no tracked source direction. Use a stable fake direction to keep torch-lit meshes from looking flat.
+    static const float3 fakeBlockKeyLightDirection = normalize(float3(0.35, 0.85, 0.45));
+    static const float3 fakeBlockFillLightDirection = normalize(float3(-0.55, 0.65, -0.25));
 
+    float keyLight = saturate(dot(faceNormal, fakeBlockKeyLightDirection));
+    float fillLight = saturate(dot(faceNormal, fakeBlockFillLightDirection));
+    return 0.45 + keyLight * 0.40 + fillLight * 0.15;
+}

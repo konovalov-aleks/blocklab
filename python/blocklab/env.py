@@ -15,6 +15,8 @@ else:
     _native_import_error = None
 
 AgentAction = _native.AgentAction if _native is not None else None
+Item = _native.Item if _native is not None else None
+ItemType = _native.ItemType if _native is not None else None
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,14 @@ class BlockLabObservation:
         if self.device.type != "cuda":
             raise RuntimeError("BlockLab observations are CUDA-only")
         return (2, 0 if self.device.index is None else self.device.index)
+
+    @property
+    def images(self) -> Any:
+        return self._observation.images
+
+    @property
+    def inventories(self) -> Any:
+        return self._observation.inventories
 
     def __dlpack__(self, stream: int | None = None):
         return self._backend._env.observation_dlpack(self._observation, 0 if stream is None else stream)
@@ -203,9 +213,9 @@ def _action_from_discrete(action_id: int):
     elif action_id == 4:
         action.jump = True
     elif action_id == 5:
-        action.dig = True
+        action.attack = True
     elif action_id == 6:
-        action.place = True
+        action.use = True
     else:
         raise ValueError(f"unknown discrete action: {action_id}")
     return action

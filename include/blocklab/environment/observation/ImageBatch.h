@@ -7,13 +7,13 @@
 
 namespace blocklab {
 
-class Observation {
+class ImageBatch {
 public:
     std::uint32_t width() const { return m_width; }
     std::uint32_t height() const { return m_height; }
     std::uint32_t channels() const { return 3; }
-    std::uint64_t version() const { return m_version; }
     std::uint32_t batchSize() const { return m_batchSize; }
+
     float* data() const { return m_data; }
     bool ready() const { return m_ready.ready(); }
     void enqueueReadyWait(cudaStream_t stream) const { m_ready.enqueueGPUWait(stream); }
@@ -27,7 +27,6 @@ public:
         m_ready = {};
     }
 
-    void setVersion(std::uint64_t version) { m_version = version; }
     void setData(float* data, CudaSharedFuture<void> ready)
     {
         m_data = data;
@@ -35,7 +34,6 @@ public:
     }
 
 private:
-    std::uint64_t m_version = 0;
     float* m_data = nullptr;
     CudaSharedFuture<void> m_ready;
     std::uint32_t m_width = 0;

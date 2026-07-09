@@ -23,7 +23,7 @@ struct CharacterState {
 
 class NPC : public Character {
 public:
-    NPC(EntityId id, CharacterKind kind, Vec3 position, HitBox);
+    NPC(EntityId id, CharacterKind kind, Vec3 position, CylinderDimensions hitCylinder);
 
     CharacterStateKind stateKind() const { return m_state.kind; }
     void update(World& world, Vec3 threatPosition, float dt);

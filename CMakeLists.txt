@@ -13,6 +13,8 @@ set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_EXTENSIONS OFF)
 
+option(BLOCKLAB_ENABLE_CLI_DISPLAY "Build the FTXUI-based CLI debug display" ON)
+
 include(FetchContent)
 
 find_package(Vulkan REQUIRED)
@@ -22,28 +24,6 @@ find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 find_package(pybind11 CONFIG QUIET)
 
 find_program(GLSLC_EXECUTABLE glslc REQUIRED)
-find_program(CLANG_FORMAT_EXECUTABLE clang-format)
-
-file(GLOB_RECURSE BLOCKLAB_FORMAT_SOURCES CONFIGURE_DEPENDS
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cu
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cuh
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/*.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.h
-)
-
-if(CLANG_FORMAT_EXECUTABLE)
-    add_custom_target(format
-        COMMAND ${CLANG_FORMAT_EXECUTABLE} --sort-includes -i ${BLOCKLAB_FORMAT_SOURCES}
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        COMMENT "Format C++ and CUDA sources"
-        VERBATIM
-    )
-else()
-    message(STATUS "clang-format not found; format target will not be available")
-endif()
 
 set(BLOCKLAB_SHADER_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 file(GLOB BLOCKLAB_SHADER_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.hlsl)
@@ -94,6 +74,16 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(Catch2)
 
+if(BLOCKLAB_ENABLE_CLI_DISPLAY)
+    FetchContent_Declare(
+        ftxui
+        GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
+        GIT_TAG v6.1.9
+        GIT_PROGRESS TRUE
+    )
+    FetchContent_MakeAvailable(ftxui)
+endif()
+
 if(NOT pybind11_FOUND)
     FetchContent_Declare(
         pybind11
@@ -104,38 +94,15 @@ if(NOT pybind11_FOUND)
     FetchContent_MakeAvailable(pybind11)
 endif()
 
-add_library(blocklab_env
+add_library(blocklab_lib
     src/characters/AgentCharacter.cpp
     src/characters/Character.cpp
+    src/characters/meshes/PigMesh.cpp
     src/characters/NPC.cpp
     src/characters/PigCharacter.cpp
     src/environment/Agent.cpp
-    src/environment/Environment.cpp
-    src/world/Lighting.cpp
-    src/world/OverrideCluster.cpp
-    src/world/World.cpp
-)
-
-target_include_directories(blocklab_env
-    PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-
-target_compile_features(blocklab_env PUBLIC cxx_std_20)
-set_target_properties(blocklab_env PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(blocklab_env
-    PUBLIC
-        glm::glm
-        CUDA::cudart
-)
-
-blocklab_enable_strict_warnings(blocklab_env)
-
-add_library(blocklab_render
-    src/characters/meshes/PigMesh.cpp
     src/environment/CudaObservation.cu
+    src/environment/Environment.cpp
     src/gpu/interop/VulkanCudaInteropBuffer.cpp
     src/gpu/interop/VulkanCudaInteropSemaphore.cpp
     src/gpu/vulkan/GLFWInit.cpp
@@ -144,41 +111,56 @@ add_library(blocklab_render
     src/gpu/vulkan/VulkanSemaphore.cpp
     src/graphics/Display.cpp
     src/graphics/Display.cu
+    src/graphics/Mesh.cpp
     src/graphics/Renderer.cpp
-    src/world/WorldGenerator.cu
+    src/inventory/Inventory.cpp
+    src/world/Drop.cpp
+    src/world/Lighting.cpp
+    src/world/OverrideCluster.cpp
+    src/world/World.cpp
     src/world/WorldGenerator.cpp
+    src/world/WorldGenerator.cu
 )
 
-target_include_directories(blocklab_render
+if(BLOCKLAB_ENABLE_CLI_DISPLAY)
+    target_sources(blocklab_lib PRIVATE src/cli/CliDisplay.cpp)
+endif()
+
+target_include_directories(blocklab_lib
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_compile_features(blocklab_render PUBLIC cxx_std_20)
-set_target_properties(blocklab_render PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(blocklab_render
+target_compile_features(blocklab_lib PUBLIC cxx_std_20)
+set_target_properties(blocklab_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(blocklab_lib
     PUBLIC
-        blocklab_env
+        CUDA::cudart
         glm::glm
     PRIVATE
         Vulkan::Vulkan
-        CUDA::cudart
         glfw
 )
-add_dependencies(blocklab_render blocklab_shaders)
-target_compile_definitions(blocklab_render PRIVATE BLOCKLAB_SHADER_DIR="${BLOCKLAB_SHADER_OUTPUT_DIR}")
-target_compile_definitions(blocklab_render PUBLIC VULKAN_HPP_NO_EXCEPTIONS VULKAN_HPP_NO_STRUCT_CONSTRUCTORS)
+if(BLOCKLAB_ENABLE_CLI_DISPLAY)
+    target_link_libraries(blocklab_lib PRIVATE ftxui::screen ftxui::dom)
+endif()
+add_dependencies(blocklab_lib blocklab_shaders)
+target_compile_definitions(blocklab_lib PRIVATE BLOCKLAB_SHADER_DIR="${BLOCKLAB_SHADER_OUTPUT_DIR}")
+target_compile_definitions(blocklab_lib PUBLIC VULKAN_HPP_NO_EXCEPTIONS VULKAN_HPP_NO_STRUCT_CONSTRUCTORS)
 
-blocklab_enable_strict_warnings(blocklab_render)
+blocklab_enable_strict_warnings(blocklab_lib)
 
 add_executable(blocklab
     src/app/main.cpp
 )
 
 target_include_directories(blocklab PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(blocklab PRIVATE blocklab_render)
+target_link_libraries(blocklab PRIVATE blocklab_lib)
+if(BLOCKLAB_ENABLE_CLI_DISPLAY)
+    target_compile_definitions(blocklab PRIVATE BLOCKLAB_ENABLE_CLI_DISPLAY=1)
+endif()
 
 blocklab_enable_strict_warnings(blocklab)
 
@@ -187,7 +169,7 @@ add_executable(blocklab_benchmark
 )
 
 target_include_directories(blocklab_benchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(blocklab_benchmark PRIVATE blocklab_render)
+target_link_libraries(blocklab_benchmark PRIVATE blocklab_lib)
 
 blocklab_enable_strict_warnings(blocklab_benchmark)
 
@@ -195,7 +177,7 @@ pybind11_add_module(_native
     src/python/Bindings.cpp
 )
 
-target_link_libraries(_native PRIVATE blocklab_render)
+target_link_libraries(_native PRIVATE blocklab_lib)
 blocklab_enable_strict_warnings(_native)
 set_target_properties(_native PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/python/blocklab
@@ -215,7 +197,7 @@ add_executable(blocklab_tests
 )
 
 target_include_directories(blocklab_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(blocklab_tests PRIVATE blocklab_render Catch2::Catch2WithMain)
+target_link_libraries(blocklab_tests PRIVATE blocklab_lib Catch2::Catch2WithMain)
 
 blocklab_enable_strict_warnings(blocklab_tests)
 
@@ -223,6 +205,13 @@ add_test(NAME blocklab_tests COMMAND blocklab_tests)
 
 set(BLOCKLAB_PYTHON_TEST_EXECUTABLE ${CMAKE_CURRENT_SOURCE_DIR}/.venv/bin/python)
 set(BLOCKLAB_VULKAN_VALIDATION_RUNNER ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_vulkan_validation.py)
+
+add_test(NAME blocklab_python_tests
+    COMMAND ${BLOCKLAB_PYTHON_TEST_EXECUTABLE} -m pytest ${CMAKE_CURRENT_SOURCE_DIR}/tests/python
+)
+set_tests_properties(blocklab_python_tests PROPERTIES
+    ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/python"
+)
 
 add_test(NAME blocklab_cpp_vulkan_validation
     COMMAND ${Python_EXECUTABLE} ${BLOCKLAB_VULKAN_VALIDATION_RUNNER} --

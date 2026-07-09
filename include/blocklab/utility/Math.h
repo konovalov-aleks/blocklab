@@ -32,6 +32,12 @@ inline constexpr IVec3 floorToInt32(Vec3 v)
     };
 }
 
+template <typename T>
+T sqr(T a)
+{
+    return a * a;
+}
+
 inline float wrapAngle(float angle)
 {
     while (angle > Pi)
