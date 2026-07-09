@@ -9,6 +9,7 @@
 #include <blocklab/gpu/vulkan/Vulkan.h>
 #include <blocklab/graphics/Display.h>
 #include <blocklab/graphics/Renderer.h>
+#include <blocklab/inventory/Inventory.h>
 
 #include <GLFW/glfw3.h>
 
@@ -19,6 +20,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string_view>
 
@@ -40,12 +42,12 @@ struct MouseLookState {
 
 struct InputState {
     MouseLookState mouse;
-    bool digRequested = false;
+    bool attackRequested = false;
     bool frameLimiterToggleRequested = false;
     bool mouseCaptureToggleRequested = false;
     bool mouseCaptured = true;
-    bool placeRequested = false;
-    blocklab::PlacementBlock placementBlock = blocklab::PlacementBlock::Dirt;
+    bool useRequested = false;
+    std::optional<blocklab::Inventory::SlotId> activeHotbarSlot;
 };
 
 AppConfig parseAppConfig(int argc, char** argv)
@@ -115,12 +117,8 @@ void keyCallback(GLFWwindow* window, int key, int, int action, int)
     if (!input)
         return;
 
-    if (action == GLFW_PRESS && key == GLFW_KEY_1)
-        input->placementBlock = blocklab::PlacementBlock::Torch;
-    else if (action == GLFW_PRESS && key == GLFW_KEY_2)
-        input->placementBlock = blocklab::PlacementBlock::Dirt;
-    else if (action == GLFW_PRESS && key == GLFW_KEY_3)
-        input->placementBlock = blocklab::PlacementBlock::Stone;
+    if (action == GLFW_PRESS && key >= GLFW_KEY_1 && key <= GLFW_KEY_9)
+        input->activeHotbarSlot = blocklab::Inventory::hotbarSlotId(static_cast<unsigned>(key - GLFW_KEY_1));
     else if (action == GLFW_PRESS && key == GLFW_KEY_TAB)
         input->mouseCaptureToggleRequested = true;
     else if (action == GLFW_PRESS && key == GLFW_KEY_GRAVE_ACCENT)
@@ -134,9 +132,9 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int)
         return;
 
     if (action == GLFW_RELEASE && button == GLFW_MOUSE_BUTTON_LEFT)
-        input->digRequested = true;
+        input->attackRequested = true;
     else if (action == GLFW_RELEASE && button == GLFW_MOUSE_BUTTON_RIGHT)
-        input->placeRequested = true;
+        input->useRequested = true;
 }
 
 void setMouseCaptured(GLFWwindow* window, InputState& input, bool captured)
@@ -219,17 +217,18 @@ int main(int argc, char** argv)
             action.forward = (keyDown(window, GLFW_KEY_W) ? 1.0f : 0.0f) - (keyDown(window, GLFW_KEY_S) ? 1.0f : 0.0f);
             action.right = (keyDown(window, GLFW_KEY_D) ? 1.0f : 0.0f) - (keyDown(window, GLFW_KEY_A) ? 1.0f : 0.0f);
             action.jump = keyDown(window, GLFW_KEY_SPACE);
-            action.dig = input.digRequested;
-            action.place = input.placeRequested;
-            action.placementBlock = input.placementBlock;
+            action.attack = input.attackRequested;
+            action.use = input.useRequested;
+            action.activeHotbarSlot = input.activeHotbarSlot;
             action.yawDelta
                 = (keyDown(window, GLFW_KEY_RIGHT) ? 0.045f : 0.0f) - (keyDown(window, GLFW_KEY_LEFT) ? 0.045f : 0.0f);
             action.yawDelta += input.mouse.pendingYawDelta;
             action.pitchDelta += input.mouse.pendingPitchDelta;
             input.mouse.pendingYawDelta = 0.0f;
             input.mouse.pendingPitchDelta = 0.0f;
-            input.digRequested = false;
-            input.placeRequested = false;
+            input.attackRequested = false;
+            input.useRequested = false;
+            input.activeHotbarSlot.reset();
             const blocklab::AgentAction actions[] { action };
             const blocklab::StepResult result = env.step(actions).front();
             if (result.terminated || result.truncated) {

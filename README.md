@@ -83,8 +83,8 @@ Actions can be passed either as `AgentAction` objects or as discrete action IDs:
 - `2` - left
 - `3` - right
 - `4` - jump
-- `5` - dig
-- `6` - place
+- `5` - attack
+- `6` - use selected hotbar slot
 
 Examples:
 
@@ -121,11 +121,9 @@ By default, the benchmark renders GPU observations offscreen without presenting 
 - `WASD` - move
 - `Space` - jump
 - Mouse or arrow keys - look around
-- Left mouse button - dig
-- Right mouse button - place
-- `1` - select torch placement
-- `2` - select dirt placement
-- `3` - select stone placement
+- Left mouse button - attack
+- Right mouse button - use selected hotbar slot
+- `1`-`9` - select hotbar slot
 - `Tab` - toggle mouse capture
 - `~` - toggle the frame limiter
 - `R` - reset

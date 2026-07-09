@@ -211,9 +211,9 @@ def _action_from_discrete(action_id: int):
     elif action_id == 4:
         action.jump = True
     elif action_id == 5:
-        action.dig = True
+        action.attack = True
     elif action_id == 6:
-        action.place = True
+        action.use = True
     else:
         raise ValueError(f"unknown discrete action: {action_id}")
     return action

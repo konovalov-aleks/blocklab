@@ -36,8 +36,8 @@ class RandomAgent:
         action.yaw_delta = self._yaw_delta
         action.pitch_delta = self._pitch_delta
         action.jump = rng.random() < 0.004
-        action.dig = rng.random() < 0.004
-        action.place = (not action.dig) and rng.random() < 0.003
+        action.attack = rng.random() < 0.004
+        action.use = (not action.attack) and rng.random() < 0.003
         self._remaining_steps -= 1
         return action
 

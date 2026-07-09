@@ -7,9 +7,11 @@
 #include <ftxui/screen/screen.hpp>
 
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <deque>
 #include <iostream>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -59,7 +61,7 @@ namespace {
 
     std::string slotText(std::size_t index, const Item& item)
     {
-        std::string result = std::to_string(index) + ": ";
+        std::string result = std::to_string(index + 1) + ": ";
         if (item.empty())
             return result + "-";
 
@@ -69,7 +71,8 @@ namespace {
         return result;
     }
 
-    ftxui::Element renderSlots(std::span<const Item> slots, std::uint32_t columns)
+    ftxui::Element renderSlots(
+        std::span<const Item> slots, std::uint32_t columns, std::optional<unsigned> activeSlot = std::nullopt)
     {
         std::vector<ftxui::Element> rows;
         rows.reserve((slots.size() + columns - 1) / columns);
@@ -78,8 +81,10 @@ namespace {
             cells.reserve(std::min<std::size_t>(columns, slots.size() - first));
             for (std::size_t offset = 0; offset < columns && first + offset < slots.size(); ++offset) {
                 const std::size_t index = first + offset;
-                cells.push_back(ftxui::text(slotText(index, slots[index]))
-                    | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, 18));
+                ftxui::Element cell = ftxui::text(slotText(index, slots[index]));
+                if (activeSlot && index == *activeSlot)
+                    cell = cell | ftxui::bold;
+                cells.push_back(cell | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, 18));
             }
             rows.push_back(ftxui::hbox(std::move(cells)));
         }
@@ -88,9 +93,10 @@ namespace {
 
     ftxui::Element renderInventory(const Inventory& inventory)
     {
+        const unsigned activeHotbarIndex = inventory.activeHotbarSlotIndex();
         return ftxui::vbox({
             ftxui::text("Hotbar") | ftxui::bold,
-            renderSlots(inventory.hotbarSlots(), 3),
+            renderSlots(inventory.hotbarSlots(), 3, activeHotbarIndex),
             ftxui::separator(),
             ftxui::text("Storage") | ftxui::bold,
             renderSlots(inventory.storageSlots(), 3),

@@ -50,6 +50,14 @@ public:
         return count;
     }
 
+    bool remove(unsigned count)
+    {
+        if (m_count < count)
+            return false;
+        m_count = static_cast<std::uint8_t>(m_count - count);
+        return true;
+    }
+
 private:
     Type m_type = Type::Dirt;
     std::uint8_t m_count = 0;

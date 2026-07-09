@@ -15,6 +15,7 @@
 #include <pybind11/stl.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -274,6 +275,9 @@ PYBIND11_MODULE(_native, module)
         });
 
     py::class_<blocklab::Inventory>(module, "Inventory")
+        .def_property_readonly("active_hotbar_slot", [](const blocklab::Inventory& inventory) {
+            return *blocklab::Inventory::hotbarSlotIndex(inventory.activeHotbarSlot());
+        })
         .def_property_readonly("hotbar_slots", [](const blocklab::Inventory& inventory) {
             return blocklab::itemTuple(inventory.hotbarSlots());
         })
@@ -320,19 +324,31 @@ PYBIND11_MODULE(_native, module)
                 + " version=" + std::to_string(observation.version()) + '>';
         });
 
-    py::enum_<blocklab::PlacementBlock>(module, "PlacementBlock")
-        .value("Torch", blocklab::PlacementBlock::Torch)
-        .value("Dirt", blocklab::PlacementBlock::Dirt)
-        .value("Stone", blocklab::PlacementBlock::Stone);
-
     py::class_<blocklab::AgentAction>(module, "AgentAction")
         .def(py::init<>())
         .def_readwrite("forward", &blocklab::AgentAction::forward)
         .def_readwrite("right", &blocklab::AgentAction::right)
         .def_readwrite("jump", &blocklab::AgentAction::jump)
-        .def_readwrite("dig", &blocklab::AgentAction::dig)
-        .def_readwrite("place", &blocklab::AgentAction::place)
-        .def_readwrite("placement_block", &blocklab::AgentAction::placementBlock)
+        .def_readwrite("attack", &blocklab::AgentAction::attack)
+        .def_readwrite("use", &blocklab::AgentAction::use)
+        .def_property("active_hotbar_slot",
+            [](const blocklab::AgentAction& action) -> py::object {
+                if (!action.activeHotbarSlot)
+                    return py::none();
+                const auto optIndex = blocklab::Inventory::hotbarSlotIndex(*action.activeHotbarSlot);
+                assert(optIndex);
+                return py::int_(*optIndex);
+            },
+            [](blocklab::AgentAction& action, py::object value) {
+                if (value.is_none()) {
+                    action.activeHotbarSlot.reset();
+                    return;
+                }
+                const std::int64_t slot = value.cast<std::int64_t>();
+                if (slot < 0 || static_cast<std::uint64_t>(slot) >= blocklab::Inventory::s_hotbarSlotsCount)
+                    throw py::value_error("active_hotbar_slot must be None or a hotbar slot index in [0, 8]");
+                action.activeHotbarSlot = blocklab::Inventory::hotbarSlotId(static_cast<unsigned>(slot));
+            })
         .def_readwrite("yaw_delta", &blocklab::AgentAction::yawDelta)
         .def_readwrite("pitch_delta", &blocklab::AgentAction::pitchDelta);
 

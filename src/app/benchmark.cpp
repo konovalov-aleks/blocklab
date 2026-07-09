@@ -84,11 +84,11 @@ namespace {
 
             AgentAction action = m_action;
             std::bernoulli_distribution jump(0.004);
-            std::bernoulli_distribution dig(0.004);
-            std::bernoulli_distribution place(0.003);
+            std::bernoulli_distribution attack(0.004);
+            std::bernoulli_distribution use(0.003);
             action.jump = jump(rng);
-            action.dig = dig(rng);
-            action.place = !action.dig && place(rng);
+            action.attack = attack(rng);
+            action.use = !action.attack && use(rng);
             --m_remainingSteps;
             return action;
         }

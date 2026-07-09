@@ -95,7 +95,8 @@ TEST_CASE("Agent cannot place a block into its own body", "[environment]")
 
     AgentAction placeIntoSelf;
     placeIntoSelf.pitchDelta = 1.2f;
-    placeIntoSelf.place = true;
+    placeIntoSelf.activeHotbarSlot = Inventory::hotbarSlotId(1);
+    placeIntoSelf.use = true;
     const AgentAction placeActions[] { placeIntoSelf };
     placeEnv.step(placeActions);
     CHECK(world.blockType({ occupiedX, occupiedY, occupiedZ }) == Block::Air);
@@ -115,7 +116,7 @@ TEST_CASE("Agent interaction ray can leave the world vertically", "[environment]
 
     AgentAction action;
     action.pitchDelta = -Pi;
-    action.dig = true;
+    action.attack = true;
 
     agent.step(world, action, 0.0f);
     CHECK(agent.state().blocksCollected == 0);
