@@ -124,6 +124,8 @@ std::uint8_t World::moveDropItemsToInventory(std::size_t dropIndex, Inventory& i
 
         inventory.put(item, *slot);
     }
+    if (item.empty())
+        m_hasObsoleteDrops = true;
     return initialCount - item.count();
 }
 

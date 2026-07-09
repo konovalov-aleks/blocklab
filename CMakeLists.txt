@@ -206,6 +206,13 @@ add_test(NAME blocklab_tests COMMAND blocklab_tests)
 set(BLOCKLAB_PYTHON_TEST_EXECUTABLE ${CMAKE_CURRENT_SOURCE_DIR}/.venv/bin/python)
 set(BLOCKLAB_VULKAN_VALIDATION_RUNNER ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_vulkan_validation.py)
 
+add_test(NAME blocklab_python_tests
+    COMMAND ${BLOCKLAB_PYTHON_TEST_EXECUTABLE} -m pytest ${CMAKE_CURRENT_SOURCE_DIR}/tests/python
+)
+set_tests_properties(blocklab_python_tests PROPERTIES
+    ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/python"
+)
+
 add_test(NAME blocklab_cpp_vulkan_validation
     COMMAND ${Python_EXECUTABLE} ${BLOCKLAB_VULKAN_VALIDATION_RUNNER} --
         $<TARGET_FILE:blocklab_benchmark>

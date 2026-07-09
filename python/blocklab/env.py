@@ -15,6 +15,8 @@ else:
     _native_import_error = None
 
 AgentAction = _native.AgentAction if _native is not None else None
+Item = _native.Item if _native is not None else None
+ItemType = _native.ItemType if _native is not None else None
 
 
 @dataclass(frozen=True)
