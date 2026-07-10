@@ -20,12 +20,16 @@ BlockLab currently provides:
 
 Near-term work is focused on making the environment less prototype-like:
 
-- Smooth vertex lighting for less blocky light gradients.
-- Sun and moon rendering.
-- Inventory and dropped items.
-- Tools.
+- ~~Inventory and dropped items.~~ ✅
+- Interaction with NPC.
+- NPC spawn.
+- Health / hunger management.
 - More world content: trees, water, lava, and additional block/entity types.
 - More complete terrain generation.
+- Tools.
+- Craft.
+- Smooth vertex lighting for less blocky light gradients.
+- Sun and moon rendering.
   
 ## Build
 
