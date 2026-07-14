@@ -1,8 +1,11 @@
 #include "Agent.h"
 
+#include <algorithms/Raycast.h>
 #include <blocklab/utility/Error.h>
 #include <blocklab/utility/Math.h>
 #include <world/World.h>
+
+#include <glm/gtx/norm.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -27,7 +30,7 @@ namespace {
         };
     }
 
-    Block itemBlock(Item::Type item)
+    Block inventoryItemBlock(Item::Type item)
     {
         switch (item) {
         case Item::Type::Torch:
@@ -76,7 +79,7 @@ void Agent::step(World& world, const AgentAction& action, float dt)
         m_state.yaw += 2.0f * Pi;
 
     Vec3 wishDir = forwardFromYaw(m_state.yaw) * action.forward + rightFromYaw(m_state.yaw) * action.right;
-    if (glm::length(wishDir) > 0.00001f)
+    if (glm::length2(wishDir) > 1.0E-10f)
         wishDir = glm::normalize(wishDir);
 
     constexpr float moveSpeed = 5.0f;
@@ -112,42 +115,53 @@ void Agent::interact(World& world, const AgentAction& action)
     const Vec3 eye = m_character.position() + Vec3 { 0.0f, s_eyeHeight, 0.0f };
     const Vec3 forward = forwardFromAngles(m_state.yaw, m_state.pitch);
 
-    IVec3 previousAir = floorToInt32(eye);
     constexpr float maxBlockInteractionDistance = 4.5f;
-    for (float distance = 0.5f; distance <= maxBlockInteractionDistance; distance += 0.2f) {
-        const Vec3 sample = eye + forward * distance;
-        const IVec3 blockPos = floorToInt32(sample);
-        const Block hitBlock = world.blockType(blockPos);
-        if (hitBlock != Block::Air) {
-            if (action.attack) {
-                if (world.setBlock(blockPos, Block::Air, true))
+
+    if (action.attack) {
+        raycast(eye, forward, [this, &world](const RaycastCbParams& p) {
+            if (p.distance > maxBlockInteractionDistance)
+                return RaycastCommand::Break;
+
+            const Block hitBlock = world.blockType(p.pos);
+            if (hitBlock != Block::Air) {
+                if (world.setBlock(p.pos, Block::Air, true))
                     ++m_state.blocksCollected;
-                return;
+                return RaycastCommand::Break;
             }
+            return RaycastCommand::Continue;
+        });
 
-            if (!isSolidBlock(hitBlock)) {
-                previousAir = blockPos;
-                continue;
-            }
-
-            if (action.use) {
-                Item& activeItem = m_inventory[m_inventory.activeHotbarSlot()];
-                if (activeItem.empty())
-                    return;
-
-                const Block block = itemBlock(activeItem.type());
-                if (isSolidBlock(block) && m_character.occupiesBlock(previousAir))
-                    return;
-                if (block != Block::Torch || previousAir == blockPos + IVec3 { 0, 1, 0 }) {
-                    if (world.setBlock(previousAir, block)) {
-                        activeItem.remove(1);
-                        ++m_state.blocksPlaced;
-                    }
-                }
-            }
+    } else if (action.use) {
+        Item& activeItem = m_inventory[m_inventory.activeHotbarSlot()];
+        if (activeItem.empty())
             return;
-        }
-        previousAir = blockPos;
+        const Block itemBlock = inventoryItemBlock(activeItem.type());
+
+        raycast(eye, forward, [this, itemBlock, &world, &activeItem](const RaycastCbParams& p) {
+            if (p.distance > maxBlockInteractionDistance)
+                return RaycastCommand::Break;
+
+            const Block block = world.blockType(p.pos);
+            if (!isSolidBlock(block))
+                return RaycastCommand::Continue;
+
+            const IVec3 prevBlock = p.normal ? p.pos + *p.normal
+                                             : p.pos; // the agent is inside a solid block
+            assert(world.isInsideLoadedCache(prevBlock));
+            if (isSolidBlock(itemBlock) && m_character.occupiesBlock(prevBlock))
+                return RaycastCommand::Break;
+
+            if (itemBlock == Block::Torch && p.normal != IVec3 { 0, 1, 0 }) {
+                // currently Torch can be only placed on a top block surface
+                return RaycastCommand::Break;
+            }
+
+            if (world.setBlock(prevBlock, itemBlock)) {
+                activeItem.remove(1);
+                ++m_state.blocksPlaced;
+            }
+            return RaycastCommand::Break;
+        });
     }
 }
 

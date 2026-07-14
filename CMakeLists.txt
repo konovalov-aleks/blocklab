@@ -149,6 +149,7 @@ endif()
 add_dependencies(blocklab_lib blocklab_shaders)
 target_compile_definitions(blocklab_lib PRIVATE BLOCKLAB_SHADER_DIR="${BLOCKLAB_SHADER_OUTPUT_DIR}")
 target_compile_definitions(blocklab_lib PUBLIC VULKAN_HPP_NO_EXCEPTIONS VULKAN_HPP_NO_STRUCT_CONSTRUCTORS)
+target_compile_definitions(blocklab_lib PUBLIC GLM_ENABLE_EXPERIMENTAL)
 
 blocklab_enable_strict_warnings(blocklab_lib)
 
@@ -191,6 +192,7 @@ add_executable(blocklab_tests
     tests/Hash.cpp
     tests/PageLockedVector.cpp
     tests/QuadTree.cpp
+    tests/Raycast.cpp
     tests/SmokeTest.cpp
     tests/WorldLighting.cpp
     tests/WorldTestUtils.cpp
