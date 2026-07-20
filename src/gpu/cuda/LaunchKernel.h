@@ -16,7 +16,7 @@ namespace blocklab {
 
 #ifndef CUDA_CPU_FALLBACK_MODE
 
-#define CUDA_KERNEL(name) __global__ void name
+#define CUDA_KERNEL __global__ void
 #define CUDA_RETURN return
 
 template <typename FnT, typename... ArgsT>

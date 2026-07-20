@@ -1,0 +1,43 @@
+name: Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  ubuntu-cuda:
+    name: Tests (CPU fallback)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            glslc \
+            libglfw3-dev \
+            libvulkan-dev \
+            ninja-build
+
+      - name: Show toolchain versions
+        run: |
+          cmake --version
+          ninja --version
+          glslc --version
+          echo "Installed cuda version is: ${{ steps.cuda-toolkit.outputs.cuda }}"
+          echo "Cuda install location: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}"
+          nvcc -V
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCUDA_CPU_FALLBACK=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests 
+        run: cd build && ./blocklab_tests
