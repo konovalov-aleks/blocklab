@@ -17,6 +17,7 @@ namespace details {
     CudaSemaphoreBase::CudaSemaphoreBase(
         vk::Device device, vk::Semaphore vkSemaphore, cudaExternalSemaphoreHandleType cudaHandleType)
     {
+        #ifndef CUDA_CPU_FALLBACK_MODE
         auto vkGetSemaphoreFdKHRFn
             = reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(vkGetDeviceProcAddr(device, "vkGetSemaphoreFdKHR"));
         if (!vkGetSemaphoreFdKHRFn) [[unlikely]]
@@ -29,6 +30,11 @@ namespace details {
         };
         int fd = -1;
         vkCheck(vkGetSemaphoreFdKHRFn(device, &fdInfo, &fd), "vkGetSemaphoreFdKHR");
+        #else
+        (void)device;
+        (void)vkSemaphore;
+        int fd = -1;
+        #endif // !CUDA_CPU_FALLBACK_MODE
 
         cudaExternalSemaphoreHandleDesc externalSemaphoreDesc {};
         externalSemaphoreDesc.type = cudaHandleType;

@@ -43,8 +43,8 @@ namespace test {
     // Checks a block-light volume using one string layer per Y level. Inside each layer, rows are Z and columns are X.
     // Hex digits 0-F mean a non-solid block with the corresponding blockLight value, S means a solid block with
     // blockLight == 0, and . skips the cell.
-    void checkBlockLight(
-        const GeneratedVoxels&, IVec3 origin, IVec3 size, std::initializer_list<std::string_view> layers);
+    void checkBlockLight(int lineno, const GeneratedVoxels&, IVec3 origin, IVec3 size,
+                         std::initializer_list<std::string_view> layers);
 
 } // namespace test
 

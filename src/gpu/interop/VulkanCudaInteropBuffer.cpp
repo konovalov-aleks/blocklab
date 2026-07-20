@@ -8,8 +8,15 @@
 namespace blocklab {
 
 VulkanCudaInteropBuffer::VulkanCudaInteropBuffer(Vulkan& vk, vk::DeviceSize size, vk::BufferUsageFlags usage)
+    #ifndef CUDA_CPU_FALLBACK_MODE
     : VulkanBuffer(vk, size, usage, vk::MemoryPropertyFlagBits::eDeviceLocal, true)
+    #else
+    : VulkanBuffer(
+        vk, size, usage ,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, false)
+    #endif
 {
+    #ifndef CUDA_CPU_FALLBACK_MODE
     auto vkGetMemoryFdKHRFn
         = reinterpret_cast<PFN_vkGetMemoryFdKHR>(vkGetDeviceProcAddr(vk.device(), "vkGetMemoryFdKHR"));
     if (!vkGetMemoryFdKHRFn) [[unlikely]]
@@ -28,6 +35,13 @@ VulkanCudaInteropBuffer::VulkanCudaInteropBuffer(Vulkan& vk, vk::DeviceSize size
         .handle = { .fd = fd },
         .size = static_cast<unsigned long long>(physicalSize()),
     };
+    #else
+    cudaExternalMemoryHandleDesc externalMemoryDesc {
+        .device = vk.device(),
+        .deviceMemory = vkMemory(),
+        .size = static_cast<unsigned long long>(physicalSize()),
+    };
+    #endif // !CUDA_CPU_FALLBACK_MODE
     cudaCheck(cudaImportExternalMemory(&m_cudaMemory, &externalMemoryDesc), "cudaImportExternalMemory");
 
     cudaExternalMemoryBufferDesc bufferDesc {};

@@ -1,4 +1,5 @@
 #include <blocklab/gpu/cuda/CudaHelpers.h>
+#include <gpu/cuda/LaunchKernel.h>
 
 #include <cuda_runtime.h>
 
@@ -8,7 +9,7 @@
 namespace blocklab {
 namespace {
 
-    __global__ void floatNchwToImageKernel(uchar4* rgba, const float* nchw, std::uint32_t batchSize,
+    CUDA_KERNEL floatNchwToImageKernel(uchar4* rgba, const float* nchw, std::uint32_t batchSize,
         std::uint32_t width, std::uint32_t height, std::uint32_t imageGridWidth, std::uint32_t imageGridHeight,
         bool outputBGRA)
     {
@@ -18,7 +19,7 @@ namespace {
         const std::uint32_t pixelsPerCol = imageGridHeight * height;
         const std::uint32_t totalPixels = pixelsPerRow * pixelsPerCol;
         if (index >= totalPixels)
-            return;
+            CUDA_RETURN;
 
         const std::uint32_t dstY = index / pixelsPerRow;
         const std::uint32_t dstX = index - dstY * pixelsPerRow;
@@ -53,10 +54,11 @@ void enqueueObservationConversionForDisplay(cudaStream_t stream, std::uint8_t* d
 
     const std::uint32_t totalPixels = imageGridWidth * imageWidth * imageGridHeight * imageHeight;
     constexpr std::uint32_t ThreadCount = 256;
-    floatNchwToImageKernel<<<(totalPixels + ThreadCount - 1U) / ThreadCount, ThreadCount, 0, stream>>>(
+    launchKernel("floatNchwToImageKernel", &floatNchwToImageKernel,
+        { (totalPixels + ThreadCount - 1U) / ThreadCount, ThreadCount, 0, stream },
         reinterpret_cast<uchar4*>(destination), source, batchSize, imageWidth, imageHeight, imageGridWidth,
-        imageGridHeight, outputBGRA);
-    cudaCheck(cudaGetLastError(), "floatNchwToImageKernel");
+        imageGridHeight, outputBGRA
+    );
 }
 
 } // namespace blocklab

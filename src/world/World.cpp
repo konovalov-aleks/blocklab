@@ -92,7 +92,8 @@ void World::throwDrop(IVec3 blockPos, Item item)
     if (!isSolidBlock(blockType(blockBelow)))
         m_needRepositionDrops = true;
 
-    const std::uint32_t h = hashCombine(m_drops.size(), logicalTimeMs());
+    const std::uint32_t h = hashCombine(static_cast<std::uint32_t>(m_drops.size()),
+                                        static_cast<std::uint32_t>(logicalTimeMs()));
     const float dx = 0.3f * (randomFloat01(h) - 0.5f);
     const float dz = 0.3f * (randomFloat01(hash(h)) - 0.5f);
 

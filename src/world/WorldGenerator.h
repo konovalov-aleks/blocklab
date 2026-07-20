@@ -81,7 +81,7 @@ public:
 private:
     CudaFuture<WorldGenerationOutput> generate(const WorldGenerationInput&, WorldGenerationBuffers&&);
 
-    struct Impl;
+    class Impl;
 
     WorldGenerationConfig m_config;
     std::vector<BlockOverride> m_overrides;

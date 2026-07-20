@@ -31,6 +31,9 @@ Display::Display(
     , m_imageGridHeight((batchSize + m_imageGridWidth - 1) / m_imageGridWidth)
 {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    #ifdef __APPLE__
+    glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);
+    #endif // __APPLE__
     std::uint32_t wndWidth = m_imageWidth * m_imageGridWidth;
     std::uint32_t wndHeight = m_imageHeight * m_imageGridHeight;
     if (GLFWmonitor* monitor = glfwGetPrimaryMonitor()) {
@@ -121,8 +124,11 @@ bool Display::show(const ImageBatch& images)
 
     const vk::PipelineStageFlags waitStages[]
         = { vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer };
+    // FIXME
+    //const vk::Semaphore waitSemaphores[]
+    //    = { m_conversionFinishedSemaphore.vkSemaphore(), m_imageAvailableSemaphore.vkSemaphore() };
     const vk::Semaphore waitSemaphores[]
-        = { m_conversionFinishedSemaphore.vkSemaphore(), m_imageAvailableSemaphore.vkSemaphore() };
+        = { /*m_conversionFinishedSemaphore.vkSemaphore(),*/ m_imageAvailableSemaphore.vkSemaphore() };
     const vk::Semaphore signalSemaphores[] = { m_imageRenderFinishedSemaphores[nextImageIndex].vkSemaphore() };
     const vk::SubmitInfo submitInfo[] = {
         {
