@@ -221,8 +221,16 @@ cudaError_t cudaWaitExternalSemaphoresAsync(const cudaExternalSemaphore_t* extSe
 cudaError_t cudaSignalExternalSemaphoresAsync(const cudaExternalSemaphore_t* extSemArray,
     const cudaExternalSemaphoreSignalParams* paramsArray, unsigned numExtSems, cudaStream_t stream = nullptr);
 
+#ifndef __sinf
 inline float __sinf(float angle) { return __builtin_sinf(angle); }
+#endif
+
+#ifndef __cosf
 inline float __cosf(float angle) { return __builtin_cosf(angle); }
+#endif
+
+template <std::integral T>
+inline T min(T a, T b) { return a < b ? a : b; }
 
 template <std::integral T, std::convertible_to<T> T2 = T>
 T atomicAdd(T* address, T2 val)

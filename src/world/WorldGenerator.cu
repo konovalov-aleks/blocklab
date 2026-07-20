@@ -367,7 +367,7 @@ namespace {
         // lightSourceCount is the actual number of light sources found in the current scene. It may be larger than
         // the currently allocated lightSources buffer: overflowed sources are skipped for this frame and capacity
         // grows before the next one.
-        const std::uint32_t sourceCount = std::min(*lightSources.size, lightSources.capacity);
+        const std::uint32_t sourceCount = min(*lightSources.size, lightSources.capacity);
 
         for (std::uint32_t lightIndex = blockIdx.x; lightIndex < sourceCount; lightIndex += gridDim.x) {
             const uchar3& light = lightSources.data[lightIndex];
