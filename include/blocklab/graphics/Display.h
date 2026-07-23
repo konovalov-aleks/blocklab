@@ -76,7 +76,9 @@ private:
 
     VulkanCudaInteropBuffer m_buffer;
     cudaStream_t m_conversionStream = nullptr;
+    #ifndef CUDA_CPU_FALLBACK_MODE
     VulkanCudaInteropBinarySemaphore m_conversionFinishedSemaphore;
+    #endif // !CUDA_CPU_FALLBACK_MODE
 
     const std::uint32_t m_batchSize;
     const std::uint32_t m_imageWidth;

@@ -126,15 +126,13 @@ struct cudaExternalMemoryBufferDesc {
 };
 
 enum cudaExternalSemaphoreHandleType {
-    cudaExternalSemaphoreHandleTypeOpaqueFd = 1,
     cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd = 9,
 };
 
 struct cudaExternalSemaphoreHandleDesc {
     cudaExternalSemaphoreHandleType type;
-    union {
-        int fd;
-    } handle;
+    vk::Device device;
+    vk::Semaphore semaphore;
 };
 
 struct cudaExternalSemaphoreWaitParams {
@@ -161,7 +159,13 @@ extern thread_local dim3 gridDim;
 
 using cudaStream_t = void*;
 using cudaEvent_t = void*;
-using cudaExternalSemaphore_t = void*;
+
+struct cudaExternalSemaphoreStruct {
+    vk::Device device;
+    vk::Semaphore semaphore;
+};
+
+using cudaExternalSemaphore_t = cudaExternalSemaphoreStruct*;
 
 struct cudaExternalMemoryStruct {
     vk::Device device;

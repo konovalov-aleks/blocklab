@@ -174,22 +174,65 @@ cudaError_t cudaExternalMemoryGetMappedBuffer(void** devPtr, cudaExternalMemory_
     return cudaSuccess;
 }
 
-cudaError_t cudaImportExternalSemaphore(cudaExternalSemaphore_t* extSemOut, const cudaExternalSemaphoreHandleDesc*)
+cudaError_t cudaImportExternalSemaphore(cudaExternalSemaphore_t* extSemOut, const cudaExternalSemaphoreHandleDesc* desc)
 {
-    static unsigned id = 0;
-    *extSemOut = reinterpret_cast<cudaExternalSemaphore_t>(++id);
+    if (desc->type != cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd)
+        return cudaErrorNotYetImplemented;
+
+    assert(extSemOut);
+    cudaExternalSemaphore_t res = new cudaExternalSemaphoreStruct();
+    res->device = desc->device;
+    res->semaphore = desc->semaphore;
+    *extSemOut = res;
     return cudaSuccess;
 }
 
-cudaError_t cudaDestroyExternalSemaphore(cudaExternalSemaphore_t)
+cudaError_t cudaDestroyExternalSemaphore(cudaExternalSemaphore_t sem)
 {
+    delete sem;
     return cudaSuccess;
 }
 
-cudaError_t cudaWaitExternalSemaphoresAsync(const cudaExternalSemaphore_t* /* extSemArray */,
-    const cudaExternalSemaphoreWaitParams* /* paramsArray */, unsigned /* numExtSems */, cudaStream_t)
+cudaError_t cudaWaitExternalSemaphoresAsync(const cudaExternalSemaphore_t* extSemArray,
+    const cudaExternalSemaphoreWaitParams* paramsArray, unsigned numExtSems, cudaStream_t)
 {
-    // TODO
+    if (!numExtSems)
+        return cudaSuccess;
+
+    // TODO replace with a class like absl::InlinedVector
+    vk::Semaphore stackSemBuf[8];
+    std::unique_ptr<vk::Semaphore[]> heapSemBuf;
+
+    unsigned long long stackValueBuf[std::size(stackSemBuf)];
+    std::unique_ptr<unsigned long long[]> heapValueBuf;
+
+    vk::Semaphore* semaphores;
+    unsigned long long* values;
+
+    vk::Device device = extSemArray[0]->device;
+
+    if (numExtSems <= std::size(stackSemBuf)) {
+        semaphores = stackSemBuf;
+        values = stackValueBuf;
+    } else {
+        heapSemBuf = std::make_unique<vk::Semaphore[]>(numExtSems);
+        semaphores = heapSemBuf.get();
+        heapValueBuf = std::make_unique<unsigned long long[]>(numExtSems);
+        values = heapValueBuf.get();
+    }
+
+    for (unsigned i = 0; i < numExtSems; ++i) {
+        semaphores[i] = extSemArray[i]->semaphore;
+        values[i] = paramsArray[i].params.fence.value;
+        assert(extSemArray[i]->device == device);
+    }
+
+    vk::SemaphoreWaitInfo waitInfo{
+        .semaphoreCount = numExtSems,
+        .pSemaphores = semaphores,
+        .pValues = values,
+    };
+    blocklab::vkCheck(device.waitSemaphores(waitInfo, UINT64_MAX), "vk::Device::waitSemaphores");
     return cudaSuccess;
 }
 
@@ -200,5 +243,5 @@ cudaError_t cudaSignalExternalSemaphoresAsync(const cudaExternalSemaphore_t* ext
     (void)extSemArray;
     (void)paramsArray;
     (void)numExtSems;
-    return cudaSuccess;
+    return cudaErrorNotYetImplemented;
 }
