@@ -221,11 +221,6 @@ cudaError_t cudaWaitExternalSemaphoresAsync(const cudaExternalSemaphore_t* extSe
 cudaError_t cudaSignalExternalSemaphoresAsync(const cudaExternalSemaphore_t* extSemArray,
     const cudaExternalSemaphoreSignalParams* paramsArray, unsigned numExtSems, cudaStream_t stream = nullptr);
 
-#ifdef __APPLE__
-inline float __sinf(float angle) { return __builtin_sinf(angle); }
-inline float __cosf(float angle) { return __builtin_cosf(angle); }
-#endif // __APPLE__
-
 template <std::integral T>
 inline T min(T a, T b) { return a < b ? a : b; }
 

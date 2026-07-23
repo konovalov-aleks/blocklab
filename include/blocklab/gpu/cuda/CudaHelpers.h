@@ -18,4 +18,12 @@ inline void cudaCheck(cudaError_t result, const char* operation)
         fatalError(operation, " failed: ", cudaGetErrorString(result));
 }
 
+#if !defined(__CUDACC__) || defined(CUDA_CPU_FALLBACK_MODE)
+inline float fast_sinf(float angle) { return __builtin_sinf(angle); }
+inline float fast_cosf(float angle) { return __builtin_cosf(angle); }
+#else
+inline __device__ float fast_sinf(float angle) { return __sinf(angle); }
+inline __device__ float fast_cosf(float angle) { return __cosf(angle); }
+#endif
+
 } // namespace blocklab

@@ -119,9 +119,9 @@ namespace {
     {
         const std::int32_t sampleX = x + seedOffset(seed, 0x4f1bbc21U);
         const std::int32_t sampleZ = z + seedOffset(seed, 0x9a7c15d3U);
-        const float low = __sinf(static_cast<float>(sampleX) * 0.17f) * 2.2f;
-        const float high = __cosf(static_cast<float>(sampleZ) * 0.13f) * 1.8f;
-        const float diagonal = __sinf(static_cast<float>(sampleX + sampleZ) * 0.08f) * 2.0f;
+        const float low = fast_sinf(static_cast<float>(sampleX) * 0.17f) * 2.2f;
+        const float high = fast_cosf(static_cast<float>(sampleZ) * 0.13f) * 1.8f;
+        const float diagonal = fast_sinf(static_cast<float>(sampleX + sampleZ) * 0.08f) * 2.0f;
         const float rough = valueNoise(seed, sampleX / 3, sampleZ / 3) * 0.55f;
         return 9.0f + low + high + diagonal + rough;
     }
