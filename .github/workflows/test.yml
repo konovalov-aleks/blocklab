@@ -33,8 +33,6 @@ jobs:
           glslc --version
 
       - name: Vulkan diagnostics
-        env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
         run: |
           echo "Installed ICDs:"
           ls -la /usr/share/vulkan/icd.d || true
@@ -55,6 +53,4 @@ jobs:
 
       - name: Run tests
         working-directory: build
-        env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
         run: ./blocklab_tests
