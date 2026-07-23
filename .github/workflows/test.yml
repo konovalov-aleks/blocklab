@@ -1,4 +1,4 @@
-name: Build
+name: Test
 
 on:
   push:
@@ -22,6 +22,8 @@ jobs:
             glslc \
             libglfw3-dev \
             libvulkan-dev \
+            mesa-vulkan-drivers \
+            vulkan-tools \
             ninja-build
 
       - name: Show toolchain versions
@@ -30,11 +32,29 @@ jobs:
           ninja --version
           glslc --version
 
+      - name: Vulkan diagnostics
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: |
+          echo "Installed ICDs:"
+          ls -la /usr/share/vulkan/icd.d || true
+
+          echo
+          echo "Vulkan summary:"
+          vulkaninfo --summary || true
+
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCUDA_CPU_FALLBACK=ON
+        run: |
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCUDA_CPU_FALLBACK=ON
 
       - name: Build
         run: cmake --build build --parallel
 
-      - name: Run tests 
-        run: cd build && ./blocklab_tests
+      - name: Run tests
+        working-directory: build
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: ./blocklab_tests
