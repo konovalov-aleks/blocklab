@@ -38,7 +38,7 @@ void launchKernel(const char* name, FnT fn, KernelLaunchArgs launchArgs, ArgsT&&
 template <typename FnT, typename... ArgsT>
 void launchKernel(const char* /* name */, FnT fn, KernelLaunchArgs launchArgs, ArgsT&&... args)
 {
-    CpuKernelLauncher().launchKernel(fn, launchArgs, std::forward<ArgsT>(args)...);
+    CpuKernelLauncher::instance().launchKernel(fn, launchArgs, std::forward<ArgsT>(args)...);
 }
 
 #define CUDA_EXTERN_SHARED(type, name) type* name = reinterpret_cast<type*>(CpuKernelLauncher::dynamicSharedMemory());

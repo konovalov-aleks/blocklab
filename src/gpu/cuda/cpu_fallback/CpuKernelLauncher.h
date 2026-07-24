@@ -5,35 +5,48 @@
 #include <gpu/cuda/KernelLaunchArgs.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <coroutine>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <thread>
+#include <type_traits>
 #include <vector>
+#include <utility>
 
 namespace blocklab {
 
+// Not thread-safe. Concurrent kernel launches are not supported.
 class CpuKernelLauncher {
 public:
-    // TODO use thread pool
-
-    // TODO read hardware properties
-    static constexpr std::uint32_t s_nThreads = 12;
+    static CpuKernelLauncher& instance() { return s_instance; }
 
     template <typename FnT, typename... ArgsT>
     void launchKernel(FnT fn, KernelLaunchArgs launchArgs, ArgsT&&... args)
     {
+        static_assert((std::is_trivially_copyable_v<std::decay_t<ArgsT>> && ...),
+            "CPU kernel launcher copies kernel arguments");
+
         const std::uint32_t nBlocks = launchArgs.gridDim.x * launchArgs.gridDim.y * launchArgs.gridDim.z;
-        const std::uint32_t nThreadsToRun = std::min(s_nThreads, nBlocks);
-        m_threads.reserve(nThreadsToRun);
-        for (std::uint32_t i = 0; i < nThreadsToRun; ++i) {
-            m_threads.emplace_back([=, this]() {
-                threadFunc(i, nThreadsToRun, fn, launchArgs, args...);
-            });
+        const std::uint32_t nThreadsToRun = std::min(maxConcurrency(), nBlocks);
+
+        m_allTasksCompleted.store(false, std::memory_order_relaxed);
+        m_activeThreads.store(nThreadsToRun - 1, std::memory_order_relaxed);
+        for (std::uint32_t i = 1; i < nThreadsToRun; ++i) {
+            m_threadPool[i - 1].task = [=, this]() {
+                launchOnThread(i, nThreadsToRun, fn, launchArgs, args...);
+            };
         }
-        for (std::thread& t : m_threads)
-            t.join();
+        m_version.fetch_add(1, std::memory_order_release);
+        m_version.notify_all();
+
+        // use caller's thread for computations as well
+        launchOnThread(0, nThreadsToRun, fn, launchArgs, args...);
+
+        if (nThreadsToRun > 1)
+            m_allTasksCompleted.wait(false, std::memory_order_acquire);
     }
 
     static void* dynamicSharedMemory()
@@ -57,10 +70,20 @@ public:
     };
 
 private:
+    CpuKernelLauncher();
+    ~CpuKernelLauncher();
+
+    CpuKernelLauncher(const CpuKernelLauncher&) = delete;
+    CpuKernelLauncher& operator=(const CpuKernelLauncher&) = delete;
+
+    std::uint32_t maxConcurrency() const
+    {
+        return static_cast<std::uint32_t>(m_threadPool.size() + 1);
+    }
 
     template <typename FnT, typename... ArgsT>
-    void threadFunc(std::uint32_t offset, std::uint32_t stride,
-                    FnT fn, KernelLaunchArgs launchArgs, ArgsT&&... args)
+    void launchOnThread(std::uint32_t offset, std::uint32_t stride,
+                        FnT fn, KernelLaunchArgs launchArgs, ArgsT&&... args)
     {
         m_dynamicSharedMemory.resize(launchArgs.sharedMemBytes);
 
@@ -105,8 +128,21 @@ private:
         }
     }
 
+    struct ThreadInfo {
+        std::thread thread;
+        std::function<void()> task;
+    };
+
+    void threadFunc(ThreadInfo&);
+
+    static CpuKernelLauncher s_instance;
     static thread_local std::vector<char> m_dynamicSharedMemory;
-    std::vector<std::thread> m_threads;
+
+    std::vector<ThreadInfo> m_threadPool;
+    std::atomic<std::uint64_t> m_version = 0;
+    std::atomic_int m_activeThreads = 0;
+    std::atomic_bool m_allTasksCompleted = false;
+    std::atomic_bool m_terminationRequested = false;
 };
 
 } // namespace blocklab
