@@ -204,11 +204,11 @@ cudaError_t cudaWaitExternalSemaphoresAsync(const cudaExternalSemaphore_t* extSe
     vk::Semaphore stackSemBuf[8];
     std::unique_ptr<vk::Semaphore[]> heapSemBuf;
 
-    unsigned long long stackValueBuf[std::size(stackSemBuf)];
-    std::unique_ptr<unsigned long long[]> heapValueBuf;
+    std::uint64_t stackValueBuf[std::size(stackSemBuf)];
+    std::unique_ptr<std::uint64_t[]> heapValueBuf;
 
     vk::Semaphore* semaphores;
-    unsigned long long* values;
+    std::uint64_t* values;
 
     vk::Device device = extSemArray[0]->device;
 
@@ -218,13 +218,13 @@ cudaError_t cudaWaitExternalSemaphoresAsync(const cudaExternalSemaphore_t* extSe
     } else {
         heapSemBuf = std::make_unique<vk::Semaphore[]>(numExtSems);
         semaphores = heapSemBuf.get();
-        heapValueBuf = std::make_unique<unsigned long long[]>(numExtSems);
+        heapValueBuf = std::make_unique<std::uint64_t[]>(numExtSems);
         values = heapValueBuf.get();
     }
 
     for (unsigned i = 0; i < numExtSems; ++i) {
         semaphores[i] = extSemArray[i]->semaphore;
-        values[i] = paramsArray[i].params.fence.value;
+        values[i] = static_cast<std::uint64_t>(paramsArray[i].params.fence.value);
         assert(extSemArray[i]->device == device);
     }
 
