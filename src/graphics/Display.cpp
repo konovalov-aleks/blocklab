@@ -31,6 +31,9 @@ Display::Display(
     , m_imageGridHeight((batchSize + m_imageGridWidth - 1) / m_imageGridWidth)
 {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    #ifdef __APPLE__
+    glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);
+    #endif // __APPLE__
     std::uint32_t wndWidth = m_imageWidth * m_imageGridWidth;
     std::uint32_t wndHeight = m_imageHeight * m_imageGridHeight;
     if (GLFWmonitor* monitor = glfwGetPrimaryMonitor()) {
@@ -74,7 +77,9 @@ void Display::initialize(std::shared_ptr<Vulkan> vk)
     constexpr int nChannels = 4; // RGBA
     const vk::DeviceSize bufferSize = nChannels * m_imageGridWidth * m_imageWidth * m_imageGridHeight * m_imageHeight;
     m_buffer = VulkanCudaInteropBuffer(*m_vk, bufferSize, vk::BufferUsageFlagBits::eTransferSrc);
+    #ifndef CUDA_CPU_FALLBACK_MODE
     m_conversionFinishedSemaphore = { m_vk->device() };
+    #endif // !CUDA_CPU_FALLBACK_MODE
 
     recreateSwapchain();
 }
@@ -116,13 +121,19 @@ bool Display::show(const ImageBatch& images)
     if (acquireResult != vk::Result::eSuccess && acquireResult != vk::Result::eSuboptimalKHR) [[unlikely]]
         fatalError("vk::Device::acquireNextImageKHR failed with vk::Result ", static_cast<int>(acquireResult));
 
+    #ifndef CUDA_CPU_FALLBACK_MODE
     m_conversionFinishedSemaphore.enqueueSignal(m_conversionStream);
+    #endif // !CUDA_CPU_FALLBACK_MODE
     vkCheck(m_vk->device().resetFences(1, &*m_renderFence), "vk::Device::resetFences");
 
     const vk::PipelineStageFlags waitStages[]
         = { vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer };
-    const vk::Semaphore waitSemaphores[]
-        = { m_conversionFinishedSemaphore.vkSemaphore(), m_imageAvailableSemaphore.vkSemaphore() };
+    const vk::Semaphore waitSemaphores[] = {
+        #ifndef CUDA_CPU_FALLBACK_MODE
+        m_conversionFinishedSemaphore.vkSemaphore(),
+        #endif // !CUDA_CPU_FALLBACK_MODE
+        m_imageAvailableSemaphore.vkSemaphore(),
+    };
     const vk::Semaphore signalSemaphores[] = { m_imageRenderFinishedSemaphores[nextImageIndex].vkSemaphore() };
     const vk::SubmitInfo submitInfo[] = {
         {

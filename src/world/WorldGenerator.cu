@@ -2,6 +2,7 @@
 
 #include "LightSourceBuffer.h"
 #include <blocklab/gpu/cuda/CudaHelpers.h>
+#include <gpu/cuda/LaunchKernel.h>
 #include <gpu/cuda/PageLockedVector.h>
 #include <utility/Hash.h>
 
@@ -18,7 +19,7 @@ namespace blocklab {
 
 using VoxelLighting = std::uint8_t[6];
 
-static constexpr std::uint32_t s_maxLightPropagationDistance = 14;
+static constexpr std::int32_t s_maxLightPropagationDistance = 14;
 
 // 4 * N^2 + 2
 static constexpr std::uint32_t s_maxLightComputeQueueLength = 786;
@@ -60,9 +61,9 @@ private:
     // z : 6
     // visibleFacesMask: 6
     // blockType: 5
-    std::uint32_t m_data;
-    std::uint32_t m_blockLight = 0;
-    std::uint32_t m_skyLight = 0;
+    [[maybe_unused]] std::uint32_t m_data;
+    [[maybe_unused]] std::uint32_t m_blockLight = 0;
+    [[maybe_unused]] std::uint32_t m_skyLight = 0;
 };
 static_assert(sizeof(Voxel) == VoxelSize);
 static_assert(static_cast<std::uint8_t>(Block::COUNT) <= (1 << 5));
@@ -118,9 +119,9 @@ namespace {
     {
         const std::int32_t sampleX = x + seedOffset(seed, 0x4f1bbc21U);
         const std::int32_t sampleZ = z + seedOffset(seed, 0x9a7c15d3U);
-        const float low = __sinf(static_cast<float>(sampleX) * 0.17f) * 2.2f;
-        const float high = __cosf(static_cast<float>(sampleZ) * 0.13f) * 1.8f;
-        const float diagonal = __sinf(static_cast<float>(sampleX + sampleZ) * 0.08f) * 2.0f;
+        const float low = fast_sinf(static_cast<float>(sampleX) * 0.17f) * 2.2f;
+        const float high = fast_cosf(static_cast<float>(sampleZ) * 0.13f) * 1.8f;
+        const float diagonal = fast_sinf(static_cast<float>(sampleX + sampleZ) * 0.08f) * 2.0f;
         const float rough = valueNoise(seed, sampleX / 3, sampleZ / 3) * 0.55f;
         return 9.0f + low + high + diagonal + rough;
     }
@@ -167,7 +168,7 @@ namespace {
         return result;
     }
 
-    __global__ void buildBlockCacheKernel(CudaBuildParams params, const CudaOverride* overrides, TerrainHeader* header,
+    CUDA_KERNEL buildBlockCacheKernel(CudaBuildParams params, const CudaOverride* overrides, TerrainHeader* header,
         LightSourcesDevice lightSources, BlockInfo* blocks, HeightMapValueT* heightMap)
     {
         if (blockIdx.x == 0 && blockIdx.y == 0 && threadIdx.x == 0) {
@@ -193,7 +194,7 @@ namespace {
         blocks[index].skyLight = 0;
 
         if (block == Block::Torch) {
-            const std::uint32_t lightSourceIndex = atomicAdd(lightSources.size, 1);
+            const std::uint32_t lightSourceIndex = atomicAdd(lightSources.size, 1U);
             if (lightSourceIndex < lightSources.capacity) {
                 // If the buffer is not large enough, we simply skip this light source and increase
                 // the buffer size only for the next frame.
@@ -217,13 +218,13 @@ namespace {
             heightMap[localX + params.width * localZ] = maxHeight;
     }
 
-    __global__ void buildTerrainKernel(
+    CUDA_KERNEL buildTerrainKernel(
         CudaBuildParams params, Voxel* voxels, std::uint32_t* voxelCount, BlockInfo* blocks)
     {
         const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
-        const std::int32_t volume = params.width * params.height * params.depth;
+        const std::uint32_t volume = params.width * params.height * params.depth;
         if (index >= volume)
-            return;
+            CUDA_RETURN;
 
         const std::int32_t localX = index % params.width;
         const std::int32_t localY = (index / params.width) % params.height;
@@ -231,10 +232,13 @@ namespace {
 
         const Block block = blocks[index].blockType;
         if (block == Block::Air)
-            return;
+            CUDA_RETURN;
 
         const auto blockAt = [&params, blocks](int x, int y, int z) -> BlockInfo {
-            if (x < 0 || y < 0 || z < 0 || x >= params.width || y >= params.height || z >= params.depth) {
+            if (x < 0 || y < 0 || z < 0
+             || static_cast<std::uint32_t>(x) >= params.width
+             || static_cast<std::uint32_t>(y) >= params.height
+             || static_cast<std::uint32_t>(z) >= params.depth) {
                 // TODO: Revisit unloaded-neighbor semantics when terrain is generated as multiple resident chunks.
                 // Returning air renders boundary faces, which is useful for chunk seams, but creates currently
                 // hidden extra faces while the generated region moves with the player.
@@ -264,7 +268,7 @@ namespace {
         } else {
             if (isOpaqueBlock(rightBlock) && isOpaqueBlock(leftBlock) && isOpaqueBlock(topBlock)
                 && isOpaqueBlock(bottomBlock) && isOpaqueBlock(frontBlock) && isOpaqueBlock(backBlock))
-                return;
+                CUDA_RETURN;
 
             visibleFaces |= !isOpaqueBlock(leftBlock) ? VisibleFace::Left : 0;
             visibleFaces |= !isOpaqueBlock(rightBlock) ? VisibleFace::Right : 0;
@@ -291,9 +295,9 @@ namespace {
             static_cast<std::uint8_t>(backBlock.skyLight),
         };
 
-        const std::uint32_t voxelIndex = atomicAdd(voxelCount, 1);
+        const std::uint32_t voxelIndex = atomicAdd(voxelCount, 1u);
         if (voxelIndex >= params.maxVoxels)
-            return;
+            CUDA_RETURN;
 
         voxels[voxelIndex] = Voxel(make_uint3(localX, localY, localZ), block, visibleFaces, blockLight, skyLight);
     }
@@ -315,14 +319,14 @@ namespace {
             // this is a workaround via uint32_t CAS operation
 
             auto wordAddr
-                = reinterpret_cast<unsigned int*>(reinterpret_cast<std::uintptr_t>(&data) & ~std::uintptr_t(3));
+                = reinterpret_cast<std::uint32_t*>(reinterpret_cast<std::uintptr_t>(&data) & ~std::uintptr_t(3));
 
             const unsigned int byteOffset = reinterpret_cast<std::uintptr_t>(&data) & 3;
 
             const unsigned int shift = byteOffset * 8;
             const unsigned int mask = 0xFFu << shift;
 
-            std::int32_t oldWord = *wordAddr;
+            std::uint32_t oldWord = *wordAddr;
 
             for (;;) {
                 std::uint8_t oldByte = (oldWord >> shift) & 0xFFu;
@@ -358,7 +362,7 @@ namespace {
     };
 
     template <typename Adapter>
-    __global__ void propagateLights(CudaBuildParams params, LightSourcesDevice lightSources, BlockInfo* blocks)
+    CUDA_KERNEL propagateLights(CudaBuildParams params, LightSourcesDevice lightSources, BlockInfo* blocks)
     {
         // lightSourceCount is the actual number of light sources found in the current scene. It may be larger than
         // the currently allocated lightSources buffer: overflowed sources are skipped for this frame and capacity
@@ -368,30 +372,13 @@ namespace {
         for (std::uint32_t lightIndex = blockIdx.x; lightIndex < sourceCount; lightIndex += gridDim.x) {
             const uchar3& light = lightSources.data[lightIndex];
 
-            const auto center = s_maxLightPropagationDistance;
-            const auto dim = s_maxLightPropagationDistance * 2 + 1;
-            __shared__ __align__(4) LightingBlockCache blocksCache[dim][dim][dim];
+            const std::int32_t center = s_maxLightPropagationDistance;
+            const std::int32_t dim = s_maxLightPropagationDistance * 2 + 1;
+            alignas(4) __shared__ LightingBlockCache blocksCache[dim][dim][dim];
 
             const auto blockAt = [blocks, &params](int x, int y, int z) -> BlockInfo& {
                 return blocks[x + params.width * (y + params.height * z)];
             };
-
-            const std::uint32_t totalElements = dim * dim * dim;
-            for (std::uint32_t i = threadIdx.x; i < totalElements; i += blockDim.x) {
-                const int x = i % dim;
-                const int y = (i / dim) % dim;
-                const int z = i / (dim * dim);
-
-                const int worldX = light.x + x - center;
-                const int worldY = light.y + y - center;
-                const int worldZ = light.z + z - center;
-
-                const bool isOutOfBounds = worldX < 0 || worldY < 0 || worldZ < 0 || worldX >= params.width
-                    || worldY >= params.height || worldZ >= params.depth;
-
-                const bool isSolid = isOutOfBounds || isOpaqueBlock(blockAt(worldX, worldY, worldZ).blockType);
-                blocksCache[x][y][z].init(isSolid);
-            }
 
             __shared__ uchar3 queue1[s_maxLightComputeQueueLength];
             __shared__ uchar3 queue2[s_maxLightComputeQueueLength];
@@ -401,13 +388,36 @@ namespace {
             __shared__ uchar3* curQueue;
             __shared__ uchar3* newQueue;
 
-            if (threadIdx.x == 0) {
-                curQueue = queue1;
-                newQueue = queue2;
-                newQueue[0]
-                    = { s_maxLightPropagationDistance, s_maxLightPropagationDistance, s_maxLightPropagationDistance };
-                newQueueLength = 1;
-                blocksCache[center][center][center].setLight(15);
+            const std::uint32_t totalElements = dim * dim * dim;
+            const std::uint32_t centerIndex = center + dim * (center + center * dim);
+            for (std::uint32_t i = threadIdx.x; i < totalElements; i += blockDim.x) {
+                const int x = i % dim;
+                const int y = (i / dim) % dim;
+                const int z = i / (dim * dim);
+
+                const int worldX = light.x + x - center;
+                const int worldY = light.y + y - center;
+                const int worldZ = light.z + z - center;
+
+                const bool isOutOfBounds = worldX < 0 || worldY < 0 || worldZ < 0
+                                        || static_cast<std::uint32_t>(worldX) >= params.width
+                                        || static_cast<std::uint32_t>(worldY) >= params.height
+                                        || static_cast<std::uint32_t>(worldZ) >= params.depth;
+
+                const bool isSolid = isOutOfBounds || isOpaqueBlock(blockAt(worldX, worldY, worldZ).blockType);
+                blocksCache[x][y][z].init(isSolid);
+
+                if (i == centerIndex) {
+                    assert(x == center && y == center && z == center);
+
+                    // init shared variables
+                    curQueue = queue1;
+                    newQueue = queue2;
+                    newQueue[0]
+                        = { s_maxLightPropagationDistance, s_maxLightPropagationDistance, s_maxLightPropagationDistance };
+                    newQueueLength = 1;
+                    blocksCache[center][center][center].setLight(15);
+                }
             }
 
             const auto updateLight = [](int x, int y, int z, std::uint8_t light) {
@@ -416,13 +426,13 @@ namespace {
 
                 if (blocksCache[x][y][z].atomicSetLightIfGreater(light)) {
                     int index = atomicAdd(&newQueueLength, 1);
-                    assert(index < s_maxLightComputeQueueLength);
+                    assert(index < static_cast<int>(s_maxLightComputeQueueLength));
                     newQueue[index] = make_uchar3(x, y, z);
                 }
             };
 
             const std::int32_t queueIndex = threadIdx.x;
-            for (int iter = 0; iter < s_maxLightPropagationDistance; ++iter) {
+            for (std::int32_t iter = 0; iter < s_maxLightPropagationDistance; ++iter) {
                 __syncthreads();
                 if (threadIdx.x == 0) {
                     const auto tmp = curQueue;
@@ -453,7 +463,8 @@ namespace {
                 }
             }
 
-            for (int i = threadIdx.x; i < totalElements; i += blockDim.x) {
+            __syncthreads();
+            for (std::uint32_t i = threadIdx.x; i < totalElements; i += blockDim.x) {
                 const int x = i % dim;
                 const int y = (i / dim) % dim;
                 const int z = i / (dim * dim);
@@ -462,8 +473,10 @@ namespace {
                 const int worldY = light.y + y - center;
                 const int worldZ = light.z + z - center;
 
-                const bool isOutOfBounds = worldX < 0 || worldY < 0 || worldZ < 0 || worldX >= params.width
-                    || worldY >= params.height || worldZ >= params.depth;
+                const bool isOutOfBounds = worldX < 0 || worldY < 0 || worldZ < 0
+                                        || static_cast<std::uint32_t>(worldX) >= params.width
+                                        || static_cast<std::uint32_t>(worldY) >= params.height
+                                        || static_cast<std::uint32_t>(worldZ) >= params.depth;
                 if (isOutOfBounds)
                     continue;
 
@@ -474,13 +487,13 @@ namespace {
         }
     }
 
-    __global__ void computeSkyLightsInitialVertical(
+    CUDA_KERNEL computeSkyLightsInitialVertical(
         CudaBuildParams params, BlockInfo* blocks, HeightMapValueT* heightMap)
     {
         const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
         const std::uint32_t totalElements = params.width * params.height * params.depth;
         if (index >= totalElements)
-            return;
+            CUDA_RETURN;
 
         const std::uint32_t localX = index % params.width;
         const std::uint32_t localY = (index / params.width) % params.height;
@@ -490,19 +503,19 @@ namespace {
         blocks[index].skyLight = y > heightMap[localX + localZ * params.width] ? 15 : 0;
     }
 
-    __global__ void initSkyLightsPropagation(
+    CUDA_KERNEL initSkyLightsPropagation(
         CudaBuildParams params, LightSourcesDevice lightSources, BlockInfo* blocks, HeightMapValueT* heightMap)
     {
         static constexpr int2 s_directions[] = {
-            { 1, 0 },
-            { -1, 0 },
-            { 0, 1 },
-            { 0, -1 },
+            {  1,  0 },
+            { -1,  0 },
+            {  0,  1 },
+            {  0, -1 },
         };
 
         // true if the block is a start point for sky light propagation
         // (e.g. cave entrance)
-        extern __shared__ bool blocksToAddY[];
+        CUDA_EXTERN_SHARED(bool, blocksToAddY);
         __shared__ int minHeightToAdd;
         __shared__ int maxHeightToAdd;
         if (threadIdx.x == 0) {
@@ -520,8 +533,8 @@ namespace {
         const int neighborLocalZ = localZ + s_directions[direction].y;
 
         // TODO implement inter-chunk light propagation
-        if (neighborLocalX >= 0 && neighborLocalX < params.width && neighborLocalZ >= 0
-            && neighborLocalZ < params.depth) {
+        if (neighborLocalX >= 0 && static_cast<std::uint32_t>(neighborLocalX) < params.width
+         && neighborLocalZ >= 0 && static_cast<std::uint32_t>(neighborLocalZ) < params.depth) {
 
             const auto blockAt = [blocks, &params](std::int32_t x, std::int32_t y, std::int32_t z) -> BlockInfo& {
                 return blocks[x + params.width * (y + params.height * z)];
@@ -557,7 +570,7 @@ namespace {
 
         __syncthreads();
         if (threadIdx.x != 0)
-            return;
+            CUDA_RETURN;
 
         for (std::int32_t y = minHeightToAdd; y <= maxHeightToAdd; ++y) {
             if (blocksToAddY[y]) {
@@ -584,8 +597,10 @@ public:
     {
         cudaCheck(cudaStreamCreateWithFlags(&m_stream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags");
 
-        cudaCheck(cudaMalloc(&m_voxelCountDevice, sizeof(*m_voxelCountDevice)), "cudaMalloc voxelCount");
-        cudaCheck(cudaMallocHost(&m_voxelCountHost, sizeof(*m_voxelCountHost)), "cudaMallocHost voxelCount");
+        cudaCheck(cudaMalloc(reinterpret_cast<void**>(&m_voxelCountDevice), sizeof(*m_voxelCountDevice)),
+            "cudaMalloc voxelCount");
+        cudaCheck(cudaMallocHost(reinterpret_cast<void**>(&m_voxelCountHost), sizeof(*m_voxelCountHost)),
+            "cudaMallocHost voxelCount");
     }
 
     ~Impl()
@@ -667,8 +682,12 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
     if (m_blockCacheCapacity < blockCount) {
         cudaFree(m_blockCacheDevice);
         m_blockCacheCapacity = blockCount;
-        cudaCheck(cudaMalloc(&m_blockCacheDevice, sizeof(*m_blockCacheDevice) * m_blockCacheCapacity),
-            "cudaMalloc blockCache");
+        cudaCheck(
+            cudaMalloc(
+                reinterpret_cast<void**>(&m_blockCacheDevice),
+                sizeof(*m_blockCacheDevice) * m_blockCacheCapacity),
+            "cudaMalloc blockCache"
+        );
     }
 
     const std::uint32_t heightMapSize = static_cast<std::uint32_t>(input.size.x * input.size.z);
@@ -676,7 +695,11 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
         cudaFree(m_heightMapDevice);
         m_heightMapCapacity = heightMapSize;
         cudaCheck(
-            cudaMalloc(&m_heightMapDevice, sizeof(*m_heightMapDevice) * m_heightMapCapacity), "cudaMalloc heightMap");
+            cudaMalloc(
+                reinterpret_cast<void**>(&m_heightMapDevice),
+                sizeof(*m_heightMapDevice) * m_heightMapCapacity),
+            "cudaMalloc heightMap"
+        );
     }
 
     // buffer.size() is a number of light sources from the previous generation.
@@ -703,7 +726,12 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
         cudaFree(m_overridesDevice);
         m_overridesDevice = nullptr;
         m_overridesCapacity = static_cast<std::uint32_t>(std::max<std::size_t>(packedOverrides.size(), 1U));
-        cudaCheck(cudaMalloc(&m_overridesDevice, sizeof(CudaOverride) * m_overridesCapacity), "cudaMalloc overrides");
+        cudaCheck(
+            cudaMalloc(
+                reinterpret_cast<void**>(&m_overridesDevice),
+                sizeof(CudaOverride) * m_overridesCapacity),
+            "cudaMalloc overrides"
+        );
     }
     if (!packedOverrides.empty()) {
         cudaCheck(cudaMemcpyAsync(m_overridesDevice, packedOverrides.data(),
@@ -733,34 +761,38 @@ CudaFuture<WorldGenerationOutput> WorldGenerator::Impl::generate(
     };
 
     // 1. build a dense block cache
-    {
-        buildBlockCacheKernel<<<{ params.width, params.depth }, params.height, 0, m_stream>>>(params, m_overridesDevice,
-            buffers.terrain.header, m_blockLightBuffer.deviceData(), m_blockCacheDevice, m_heightMapDevice);
-        cudaCheck(cudaGetLastError(), "buildBlockCacheKernel");
-    }
-    // 2. compute block lighting
+    launchKernel("buildBlockCacheKernel", buildBlockCacheKernel,
+        { { params.width, params.depth }, params.height, 0, m_stream },
+        params, m_overridesDevice, buffers.terrain.header, m_blockLightBuffer.deviceData(),
+        m_blockCacheDevice, m_heightMapDevice
+    );
+
+        // 2. compute block lighting
     enqueueLightPropagation<BlockLightAdapter>(m_stream, params, m_blockLightBuffer);
 
     // 3. compute sky lighting
     {
-        constexpr std::int32_t threadCount = 256;
-        computeSkyLightsInitialVertical<<<(blockCount + threadCount - 1) / threadCount, threadCount, 0, m_stream>>>(
-            params, m_blockCacheDevice, m_heightMapDevice);
-        cudaCheck(cudaGetLastError(), "computeSkyLightsInitialVerticalKernel");
+        constexpr std::uint32_t threadCount = 256;
+        launchKernel("computeSkyLightsInitialVertical", computeSkyLightsInitialVertical,
+            { (blockCount + threadCount - 1) / threadCount, threadCount, 0, m_stream },
+            params, m_blockCacheDevice, m_heightMapDevice
+        );
 
-        const std::int32_t sharedMemSize = sizeof(bool) * params.height;
-        initSkyLightsPropagation<<<{ params.width, params.depth }, 4, sharedMemSize, m_stream>>>(
-            params, m_skyLightBuffer.deviceData(), m_blockCacheDevice, m_heightMapDevice);
-        cudaCheck(cudaGetLastError(), "initSkyLightsPropagationKernel");
+        const std::uint32_t sharedMemSize = sizeof(bool) * params.height;
+        launchKernel("initSkyLightsPropagation", initSkyLightsPropagation,
+            { { params.width, params.depth }, 4, sharedMemSize, m_stream },
+            params, m_skyLightBuffer.deviceData(), m_blockCacheDevice, m_heightMapDevice
+        );
 
         enqueueLightPropagation<SkyLightAdapter>(m_stream, params, m_skyLightBuffer);
     }
     // 4. build a terrain for rendering
     {
-        constexpr std::int32_t threadCount = 256;
-        buildTerrainKernel<<<(blockCount + threadCount - 1) / threadCount, threadCount, 0, m_stream>>>(
-            params, buffers.terrain.voxels, m_voxelCountDevice, m_blockCacheDevice);
-        cudaCheck(cudaGetLastError(), "buildTerrainKernel");
+        constexpr std::uint32_t threadCount = 256;
+        launchKernel("buildTerrainKernel", buildTerrainKernel,
+            { (blockCount + threadCount - 1) / threadCount, threadCount, 0, m_stream },
+            params, buffers.terrain.voxels, m_voxelCountDevice, m_blockCacheDevice
+        );
     }
 
     m_blockLightBuffer.enqueueUploadSize(m_stream);
@@ -805,9 +837,10 @@ void WorldGenerator::Impl::enqueueLightPropagation(
     // we can't use exact size here, because it's unknown right here, it will be computed asynchronously on GPU side
     const std::int32_t kernelBlockCount = std::min(buffer.capacity(), maxBlockCount);
     if (kernelBlockCount) [[likely]] {
-        propagateLights<Adapter>
-            <<<kernelBlockCount, kernelThreadCount, 0, stream>>>(params, buffer.deviceData(), m_blockCacheDevice);
-        cudaCheck(cudaGetLastError(), "propagateLightsKernel");
+        launchKernel("propagateLights", propagateLights<Adapter>,
+            { kernelBlockCount, kernelThreadCount, 0, stream },
+            params, buffer.deviceData(), m_blockCacheDevice
+        );
     }
 }
 

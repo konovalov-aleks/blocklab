@@ -11,7 +11,7 @@
 
 namespace blocklab {
 
-class AgentState;
+struct AgentState;
 class Environment;
 class Vulkan;
 class World;

@@ -1,0 +1,56 @@
+name: Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  ubuntu-cuda:
+    name: Tests (CPU fallback)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            glslc \
+            libglfw3-dev \
+            libvulkan-dev \
+            mesa-vulkan-drivers \
+            vulkan-tools \
+            ninja-build
+
+      - name: Show toolchain versions
+        run: |
+          cmake --version
+          ninja --version
+          glslc --version
+
+      - name: Vulkan diagnostics
+        run: |
+          echo "Installed ICDs:"
+          ls -la /usr/share/vulkan/icd.d || true
+
+          echo
+          echo "Vulkan summary:"
+          vulkaninfo --summary || true
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCUDA_CPU_FALLBACK=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests
+        working-directory: build
+        run: ./blocklab_tests

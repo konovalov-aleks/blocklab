@@ -10,7 +10,7 @@
 namespace blocklab {
 
 static constexpr float s_size = 0.25f;
-static constexpr float s_diagonalSize = s_size * std::sqrt(2.0f);
+static const float s_diagonalSize = s_size * std::sqrt(2.0f);
 
 HitCylinder Drop::hitVolume() const
 {
