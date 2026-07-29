@@ -1,3 +1,7 @@
+# Full test suite with CPU fallback
+# Runs in both Release (catches optimizer effects) and Debug (validates asserts)
+# Requires Vulkan drivers for off-screen rendering
+
 name: Test
 
 on:
@@ -8,8 +12,12 @@ on:
 
 jobs:
   ubuntu-cuda:
-    name: Tests (CPU fallback)
+    name: Ubuntu (CPU fallback) - ${{ matrix.build_type }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Release, Debug]
 
     steps:
       - name: Checkout
@@ -36,7 +44,6 @@ jobs:
         run: |
           echo "Installed ICDs:"
           ls -la /usr/share/vulkan/icd.d || true
-
           echo
           echo "Vulkan summary:"
           vulkaninfo --summary || true
@@ -45,7 +52,7 @@ jobs:
         run: |
           cmake -S . -B build \
             -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DCUDA_CPU_FALLBACK=ON
 
       - name: Build
