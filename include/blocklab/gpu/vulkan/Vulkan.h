@@ -32,10 +32,11 @@ template <typename T>
 }
 
 template <typename T, typename PoolT>
-vk::UniqueHandle<T, vk::DispatchLoaderStatic> wrapPoolUnique(T rawObject, vk::Device device, PoolT pool)
+auto wrapPoolUnique(T rawObject, vk::Device device, PoolT pool)
 {
-    return vk::UniqueHandle<T, vk::DispatchLoaderStatic>(
-        rawObject, vk::PoolFree<vk::Device, PoolT, vk::DispatchLoaderStatic>(device, pool));
+    using DefaultDispatch = VULKAN_HPP_DEFAULT_DISPATCHER_TYPE;
+    using Deleter = typename vk::UniqueHandleTraits<T, DefaultDispatch>::deleter;
+    return vk::UniqueHandle<T, DefaultDispatch>(rawObject, Deleter(device, pool));
 }
 
 class VulkanInstance {

@@ -54,7 +54,7 @@ TEST_CASE("Generated terrain block light matches an explicit torch volume", "[wo
     world.setBlock(torch, Block::Torch);
 
     const GeneratedVoxels generated = generateVoxelsAt(world, Center);
-    checkBlockLight(generated, volumeOrigin, volumeSize,
+    checkBlockLight(__LINE__, generated, volumeOrigin, volumeSize,
         {
             // Y = 13, rows are Z = -3..3.
             "6789876\n"
@@ -121,7 +121,7 @@ TEST_CASE("Generated terrain block light matches an explicit torch volume", "[wo
         });
 
     // Explicitly check the lit-to-dark edge on different sides of the torch.
-    checkBlockLight(generated, { 11, 14, 0 }, { 5, 5, 1 },
+    checkBlockLight(__LINE__, generated, { 11, 14, 0 }, { 5, 5, 1 },
         {
             // Y = 14, row is Z = 0.
             "21000",
@@ -134,7 +134,7 @@ TEST_CASE("Generated terrain block light matches an explicit torch volume", "[wo
             // Y = 18, row is Z = 0.
             "21000",
         });
-    checkBlockLight(generated, { -2, 27, 0 }, { 5, 5, 1 },
+    checkBlockLight(__LINE__, generated, { -2, 27, 0 }, { 5, 5, 1 },
         {
             // Y = 27, row is Z = 0.
             "23432",
@@ -165,7 +165,7 @@ TEST_CASE("Generated terrain block light enters a cave from an outside roof torc
 
     {
         const GeneratedVoxels generated = generateVoxelsAt(world, Center);
-        checkBlockLight(generated, checkedOrigin, checkedSize,
+        checkBlockLight(__LINE__, generated, checkedOrigin, checkedSize,
             {
                 // Y = 13, rows are Z = -4..1.
                 "SS000SS\n"
@@ -213,7 +213,7 @@ TEST_CASE("Generated terrain block light enters a cave from an outside roof torc
     world.setBlock(torch, Block::Torch);
     {
         const GeneratedVoxels generated = generateVoxelsAt(world, Center);
-        checkBlockLight(generated, checkedOrigin, checkedSize,
+        checkBlockLight(__LINE__, generated, checkedOrigin, checkedSize,
             {
                 // Y = 13, rows are Z = -4..1.
                 "SS565SS\n"
@@ -261,7 +261,7 @@ TEST_CASE("Generated terrain block light enters a cave from an outside roof torc
     partiallyCloseCaveEntrance(world);
     {
         const GeneratedVoxels generated = generateVoxelsAt(world, Center);
-        checkBlockLight(generated, checkedOrigin, checkedSize,
+        checkBlockLight(__LINE__, generated, checkedOrigin, checkedSize,
             {
                 // Y = 13, rows are Z = -4..1.
                 "SS5S5SS\n"
@@ -309,7 +309,7 @@ TEST_CASE("Generated terrain block light enters a cave from an outside roof torc
     closeCaveEntrance(world);
     {
         const GeneratedVoxels generated = generateVoxelsAt(world, Center);
-        checkBlockLight(generated, checkedOrigin, checkedSize,
+        checkBlockLight(__LINE__, generated, checkedOrigin, checkedSize,
             {
                 // Y = 13, rows are Z = -4..1.
                 "SSSSSSS\n"
@@ -369,7 +369,7 @@ TEST_CASE("Generated terrain block light exits a cave from an inside torch", "[w
 
     {
         const GeneratedVoxels generated = generateVoxelsAt(world, Center);
-        checkBlockLight(generated, checkedOrigin, checkedSize,
+        checkBlockLight(__LINE__, generated, checkedOrigin, checkedSize,
             {
                 // Y = 13, rows are Z = -8..-3.
                 "6789876\n"
@@ -417,7 +417,7 @@ TEST_CASE("Generated terrain block light exits a cave from an inside torch", "[w
     partiallyCloseCaveEntrance(world);
     {
         const GeneratedVoxels generated = generateVoxelsAt(world, Center);
-        checkBlockLight(generated, checkedOrigin, checkedSize,
+        checkBlockLight(__LINE__, generated, checkedOrigin, checkedSize,
             {
                 // Y = 13, rows are Z = -8..-3.
                 "6787876\n"
@@ -465,7 +465,7 @@ TEST_CASE("Generated terrain block light exits a cave from an inside torch", "[w
     closeCaveEntrance(world);
     {
         const GeneratedVoxels generated = generateVoxelsAt(world, Center);
-        checkBlockLight(generated, checkedOrigin, checkedSize,
+        checkBlockLight(__LINE__, generated, checkedOrigin, checkedSize,
             {
                 // Y = 13, rows are Z = -8..-3.
                 "0000000\n"
@@ -532,7 +532,7 @@ TEST_CASE("Generated terrain lighting follows torch state transitions", "[world]
     // No light sources: the checked slice is dark.
     {
         const GeneratedVoxels generated = generateVoxelsAt(world, Center);
-        checkBlockLight(generated, sliceOrigin, sliceSize,
+        checkBlockLight(__LINE__, generated, sliceOrigin, sliceSize,
             {
                 // Y = 12, rows are Z = -1..1.
                 "000000000\n"
@@ -577,7 +577,7 @@ TEST_CASE("Generated terrain lighting follows torch state transitions", "[world]
     world.setBlock(leftTorch, Block::Torch);
     {
         const GeneratedVoxels generated = generateVoxelsAt(world, Center);
-        checkBlockLight(generated, sliceOrigin, sliceSize,
+        checkBlockLight(__LINE__, generated, sliceOrigin, sliceSize,
             {
                 // Y = 12, rows are Z = -1..1.
                 "89A987654\n"
@@ -622,7 +622,7 @@ TEST_CASE("Generated terrain lighting follows torch state transitions", "[world]
     world.setBlock(rightTorch, Block::Torch);
     {
         const GeneratedVoxels generated = generateVoxelsAt(world, Center);
-        checkBlockLight(generated, sliceOrigin, sliceSize,
+        checkBlockLight(__LINE__, generated, sliceOrigin, sliceSize,
             {
                 // Y = 12, rows are Z = -1..1.
                 "89A989A98\n"
@@ -667,7 +667,7 @@ TEST_CASE("Generated terrain lighting follows torch state transitions", "[world]
     world.setBlock(rightTorch, Block::Air);
     {
         const GeneratedVoxels generated = generateVoxelsAt(world, Center);
-        checkBlockLight(generated, sliceOrigin, sliceSize,
+        checkBlockLight(__LINE__, generated, sliceOrigin, sliceSize,
             {
                 // Y = 12, rows are Z = -1..1.
                 "89A987654\n"
@@ -713,7 +713,7 @@ TEST_CASE("Generated terrain lighting follows torch state transitions", "[world]
     CHECK(world.blockType(leftTorch) == Block::Air);
     {
         const GeneratedVoxels generated = generateVoxelsAt(world, Center);
-        checkBlockLight(generated, sliceOrigin, sliceSize,
+        checkBlockLight(__LINE__, generated, sliceOrigin, sliceSize,
             {
                 // Y = 12, rows are Z = -1..1.
                 "000000000\n"

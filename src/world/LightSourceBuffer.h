@@ -20,8 +20,10 @@ public:
 
     LightSourceBuffer()
     {
-        cudaCheck(cudaMalloc(&m_sizeDevice, sizeof(*m_sizeDevice)), "cudaMalloc (LightSourceBuffer::m_sizeDevice)");
-        cudaCheck(cudaMallocHost(&m_sizeHost, sizeof(*m_sizeHost)), "cudaMallocHost (LightSourceBuffer::m_sizeHost)");
+        cudaCheck(cudaMalloc(reinterpret_cast<void**>(&m_sizeDevice), sizeof(*m_sizeDevice)),
+            "cudaMalloc (LightSourceBuffer::m_sizeDevice)");
+        cudaCheck(cudaMallocHost(reinterpret_cast<void**>(&m_sizeHost), sizeof(*m_sizeHost)),
+            "cudaMallocHost (LightSourceBuffer::m_sizeHost)");
 
         *m_sizeHost = 0;
     }
@@ -53,7 +55,8 @@ public:
                 m_capacity = std::max(m_capacity + 1, m_capacity + m_capacity / 2);
         }
 
-        cudaCheck(cudaMalloc(&m_data, sizeof(*m_data) * m_capacity), "cudaMalloc (LightSourceBuffer::m_data)");
+        cudaCheck(cudaMalloc(reinterpret_cast<void**>(&m_data), sizeof(*m_data) * m_capacity),
+            "cudaMalloc (LightSourceBuffer::m_data)");
     }
 
     std::uint32_t capacity() const { return m_capacity; }

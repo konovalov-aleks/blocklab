@@ -129,7 +129,7 @@ TEST_CASE("PageLockedVector memory can be used as CUDA memcpy host memory", "[cu
         values[i] = static_cast<std::uint32_t>(100U + i);
 
     std::uint32_t* device = nullptr;
-    requireCuda(cudaMalloc(&device, sizeof(std::uint32_t) * values.size()));
+    requireCuda(cudaMalloc(reinterpret_cast<void**>(&device), sizeof(std::uint32_t) * values.size()));
     requireCuda(cudaMemcpy(device, values.data(), sizeof(std::uint32_t) * values.size(), cudaMemcpyHostToDevice));
 
     std::array<std::uint32_t, 8> copied {};

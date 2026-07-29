@@ -9,6 +9,9 @@ namespace blocklab {
 
 VulkanSemaphore::VulkanSemaphore(vk::Device device, vk::SemaphoreType type, std::uint64_t initialValue, bool exported)
 {
+    #ifdef CUDA_CPU_FALLBACK_MODE
+    exported = false;
+    #endif
     const vk::ExportSemaphoreCreateInfo exportInfo {
         .handleTypes = vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd,
     };

@@ -91,7 +91,7 @@ void VulkanHostBuffer::upload(Vulkan& vk, vk::DeviceSize dstOffset, const void* 
     assert(dstOffset < this->size());
     assert(size > 0 && (size <= this->size() - dstOffset));
 
-    void* mapped = vkCheck(vk.device().mapMemory(vkMemory(), dstOffset, size), "vkMapMemory");
+    void* mapped = vkCheck(vk.device().mapMemory(vkMemory(), dstOffset, size), "VkDevice::MapMemory");
     std::memcpy(mapped, data, static_cast<std::size_t>(size));
     vk.device().unmapMemory(vkMemory());
 }

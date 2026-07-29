@@ -62,7 +62,8 @@ void updateWorldCacheAt(const World& world, IVec3 center)
     cudaCheck(cudaMalloc(&voxelMemory, VoxelSize * TestMaxTerrainVoxels), "cudaMalloc test terrain voxels");
     auto* const voxels = static_cast<Voxel*>(voxelMemory);
     TerrainHeader* terrainHeader = nullptr;
-    cudaCheck(cudaMalloc(&terrainHeader, sizeof(TerrainHeader)), "cudaMalloc test terrain header");
+    cudaCheck(cudaMalloc(reinterpret_cast<void**>(&terrainHeader), sizeof(TerrainHeader)),
+        "cudaMalloc test terrain header");
     AgentState agent;
     agent.position = { static_cast<float>(center.x), static_cast<float>(center.y), static_cast<float>(center.z) };
     WorldGenerationBuffers buffers {
@@ -87,7 +88,8 @@ GeneratedVoxels generateVoxelsAt(const World& world, IVec3 center)
     cudaCheck(cudaMalloc(&voxelMemory, VoxelSize * TestMaxTerrainVoxels), "cudaMalloc test terrain voxels");
     auto* const voxels = static_cast<Voxel*>(voxelMemory);
     TerrainHeader* terrainHeader = nullptr;
-    cudaCheck(cudaMalloc(&terrainHeader, sizeof(TerrainHeader)), "cudaMalloc test terrain header");
+    cudaCheck(cudaMalloc(reinterpret_cast<void**>(&terrainHeader), sizeof(TerrainHeader)),
+        "cudaMalloc test terrain header");
     AgentState agent;
     agent.position = { static_cast<float>(center.x), static_cast<float>(center.y), static_cast<float>(center.z) };
     WorldGenerationBuffers buffers {
@@ -136,9 +138,10 @@ void generateCave(World& world, IVec3 origin, IVec3 size, Block wall)
     clearBlocks(world, origin + IVec3 { 1, 1, 1 }, size - IVec3 { 2, 2, 2 });
 }
 
-void checkBlockLight(
-    const GeneratedVoxels& generated, IVec3 origin, IVec3 size, std::initializer_list<std::string_view> layers)
+void checkBlockLight(int lineno, const GeneratedVoxels& generated, IVec3 origin, IVec3 size,
+                     std::initializer_list<std::string_view> layers)
 {
+    CAPTURE(lineno);
     REQUIRE(static_cast<std::int32_t>(layers.size()) == size.y);
 
     std::int32_t y = 0;
@@ -160,6 +163,7 @@ void checkBlockLight(
             const IVec3 pos = origin + IVec3 { x, y, z };
             const BlockInfo& block = generatedBlockAt(generated, pos);
             INFO("pos=(" << pos.x << ", " << pos.y << ", " << pos.z << "), mask='" << c << "'");
+            INFO("local_pos=(" << x << ", " << y << ", " << z << ")");
             if (c == 'S') {
                 CHECK(isSolidBlock(block));
                 CHECK(block.blockLight == 0);

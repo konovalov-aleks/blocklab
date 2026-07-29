@@ -4,7 +4,7 @@ if(NOT DEFINED CMAKE_CUDA_HOST_COMPILER AND EXISTS /usr/bin/clang-14)
     set(CMAKE_CUDA_HOST_COMPILER /usr/bin/clang-14)
 endif()
 
-project(blocklab LANGUAGES CXX CUDA)
+project(blocklab LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -14,14 +14,19 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_EXTENSIONS OFF)
 
 option(BLOCKLAB_ENABLE_CLI_DISPLAY "Build the FTXUI-based CLI debug display" ON)
+option(CUDA_CPU_FALLBACK "Build CUDA code as native C++ for CPU Thread Pool" OFF)
 
 include(FetchContent)
 
 find_package(Vulkan REQUIRED)
 find_package(glfw3 REQUIRED)
-find_package(CUDAToolkit REQUIRED)
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 find_package(pybind11 CONFIG QUIET)
+
+if (NOT CUDA_CPU_FALLBACK)
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+endif()
 
 find_program(GLSLC_EXECUTABLE glslc REQUIRED)
 
@@ -94,7 +99,7 @@ if(NOT pybind11_FOUND)
     FetchContent_MakeAvailable(pybind11)
 endif()
 
-add_library(blocklab_lib
+set(BLOCKLAB_SOURCES
     src/characters/AgentCharacter.cpp
     src/characters/Character.cpp
     src/characters/meshes/PigMesh.cpp
@@ -122,6 +127,8 @@ add_library(blocklab_lib
     src/world/WorldGenerator.cu
 )
 
+add_library(blocklab_lib ${BLOCKLAB_SOURCES})
+
 if(BLOCKLAB_ENABLE_CLI_DISPLAY)
     target_sources(blocklab_lib PRIVATE src/cli/CliDisplay.cpp)
 endif()
@@ -137,12 +144,14 @@ target_compile_features(blocklab_lib PUBLIC cxx_std_20)
 set_target_properties(blocklab_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(blocklab_lib
     PUBLIC
-        CUDA::cudart
         glm::glm
-    PRIVATE
         Vulkan::Vulkan
+    PRIVATE
         glfw
 )
+if (NOT CUDA_CPU_FALLBACK)
+    target_link_libraries(blocklab_lib PUBLIC CUDA::cudart)
+endif()
 if(BLOCKLAB_ENABLE_CLI_DISPLAY)
     target_link_libraries(blocklab_lib PRIVATE ftxui::screen ftxui::dom)
 endif()
@@ -150,6 +159,23 @@ add_dependencies(blocklab_lib blocklab_shaders)
 target_compile_definitions(blocklab_lib PRIVATE BLOCKLAB_SHADER_DIR="${BLOCKLAB_SHADER_OUTPUT_DIR}")
 target_compile_definitions(blocklab_lib PUBLIC VULKAN_HPP_NO_EXCEPTIONS VULKAN_HPP_NO_STRUCT_CONSTRUCTORS)
 target_compile_definitions(blocklab_lib PUBLIC GLM_ENABLE_EXPERIMENTAL)
+
+if (CUDA_CPU_FALLBACK)
+    message(STATUS ">>>> BUILDING IN CUDA CPU FALLBACK MODE <<<<")
+    add_compile_definitions(CUDA_CPU_FALLBACK_MODE=1)
+    target_sources(blocklab_lib PRIVATE
+        src/gpu/cuda/cpu_fallback/CpuKernelLauncher.cpp
+        src/gpu/cuda/cpu_fallback/CudaRuntimeCpuFallback.cpp
+    )
+
+    foreach(src_file ${BLOCKLAB_SOURCES})
+        if(${src_file} MATCHES ".*\\.cu$")
+            set_source_files_properties(${src_file} PROPERTIES LANGUAGE CXX)
+        endif()
+    endforeach()
+
+    target_include_directories(blocklab_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/cuda/cpu_fallback)
+endif ()
 
 blocklab_enable_strict_warnings(blocklab_lib)
 

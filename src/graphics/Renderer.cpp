@@ -608,7 +608,7 @@ namespace {
                 = VulkanCudaInteropBuffer(vk, observationBytes, vk::BufferUsageFlagBits::eTransferDst);
             const std::size_t tensorBytes = static_cast<std::size_t>(state.renderExtent.width)
                 * static_cast<std::size_t>(state.renderExtent.height) * 3U * state.batchSize * sizeof(float);
-            cudaCheck(cudaMalloc(&frame.observationTensor, tensorBytes), "cudaMalloc observation tensor");
+            cudaCheck(cudaMalloc(reinterpret_cast<void**>(&frame.observationTensor), tensorBytes), "cudaMalloc observation tensor");
         }
 
         const vk::DescriptorPoolSize poolSizes[] {
@@ -927,7 +927,7 @@ void Renderer::uploadInstances(std::size_t slotIndex, const World& world)
     const vk::DeviceSize uploadBytes = sizeof(EntityInstance) * m_instances.size();
     const vk::DeviceSize uploadOffset = sizeof(EntityInstance) * slot.instanceOffset;
     void* mapped = vkCheck(m_vk.device().mapMemory(m_state->instanceBuffer.vkMemory(), uploadOffset, uploadBytes),
-        "vkMapMemory instances");
+        "vkDevice::mapMemory instances");
     std::memcpy(mapped, m_instances.data(), static_cast<std::size_t>(uploadBytes));
     m_vk.device().unmapMemory(m_state->instanceBuffer.vkMemory());
 }
@@ -949,7 +949,7 @@ void Renderer::drawFrame()
     m_state->paramsBuffer.upload(m_vk, 0, m_renderParams.get(), sizeof(RenderParams) * m_batchSize);
 
     vk::CommandBuffer commandBuffer = offscreenFrame.commandBuffer;
-    commandBuffer.reset();
+    vkCheck(commandBuffer.reset(), "VkCommandBuffer::reset");
     const vk::CommandBufferBeginInfo beginInfo;
     vkCheck(commandBuffer.begin(beginInfo), "VkCommandBuffer::begin");
     const vk::ClearValue clearValues[] {

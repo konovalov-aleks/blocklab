@@ -39,6 +39,8 @@ namespace details {
 
 } // namespace details
 
+#ifndef CUDA_CPU_FALLBACK_MODE
+
 class VulkanCudaInteropBinarySemaphore : public VulkanBinarySemaphore, public details::CudaSemaphoreBase {
 public:
     VulkanCudaInteropBinarySemaphore() = default;
@@ -50,6 +52,7 @@ public:
     void enqueueWait(cudaStream_t);
     void enqueueSignal(cudaStream_t);
 };
+#endif // !CUDA_CPU_FALLBACK_MODE
 
 class VulkanCudaInteropTimelineSemaphore : public VulkanTimelineSemaphore, public details::CudaSemaphoreBase {
 public:

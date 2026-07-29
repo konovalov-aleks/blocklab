@@ -17,6 +17,8 @@ namespace details {
     CudaSemaphoreBase::CudaSemaphoreBase(
         vk::Device device, vk::Semaphore vkSemaphore, cudaExternalSemaphoreHandleType cudaHandleType)
     {
+        #ifndef CUDA_CPU_FALLBACK_MODE
+
         auto vkGetSemaphoreFdKHRFn
             = reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(vkGetDeviceProcAddr(device, "vkGetSemaphoreFdKHR"));
         if (!vkGetSemaphoreFdKHRFn) [[unlikely]]
@@ -29,10 +31,18 @@ namespace details {
         };
         int fd = -1;
         vkCheck(vkGetSemaphoreFdKHRFn(device, &fdInfo, &fd), "vkGetSemaphoreFdKHR");
+        cudaExternalSemaphoreHandleDesc externalSemaphoreDesc {};
+        externalSemaphoreDesc.handle.fd = fd;
+
+        #else // CUDA_CPU_FALLBACK_MODE
 
         cudaExternalSemaphoreHandleDesc externalSemaphoreDesc {};
+        externalSemaphoreDesc.device = device;
+        externalSemaphoreDesc.semaphore = vkSemaphore;
+
+        #endif
+
         externalSemaphoreDesc.type = cudaHandleType;
-        externalSemaphoreDesc.handle.fd = fd;
         cudaCheck(cudaImportExternalSemaphore(&m_cudaSemaphore, &externalSemaphoreDesc),
             "cudaImportExternalSemaphore render");
     }
@@ -57,6 +67,8 @@ namespace details {
     }
 
 } // namespace details
+
+#ifndef CUDA_CPU_FALLBACK_MODE
 
 VulkanCudaInteropBinarySemaphore::VulkanCudaInteropBinarySemaphore(vk::Device device)
     : VulkanBinarySemaphore(device, true)
@@ -89,6 +101,8 @@ void VulkanCudaInteropBinarySemaphore::enqueueSignal(cudaStream_t stream)
     cudaCheck(cudaSignalExternalSemaphoresAsync(&cudaSemaphore(), &signalParams, 1, stream),
         "cudaSignalExternalSemaphoresAsync[binary]");
 }
+
+#endif // !CUDA_CPU_FALLBACK_MODE
 
 VulkanCudaInteropTimelineSemaphore::VulkanCudaInteropTimelineSemaphore(vk::Device device, std::uint64_t initialValue)
     : VulkanTimelineSemaphore(device, initialValue, true)

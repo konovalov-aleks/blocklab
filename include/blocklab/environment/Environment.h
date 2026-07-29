@@ -10,7 +10,7 @@
 namespace blocklab {
 
 class Agent;
-class AgentState;
+struct AgentState;
 class Renderer;
 class World;
 

@@ -1,3 +1,7 @@
+# CI workflow to verify that the project compiles with CUDA
+# Tests are not run because GitHub runners don't have GPUs
+# This provides fast feedback on compilation issues
+
 name: Build
 
 on:
