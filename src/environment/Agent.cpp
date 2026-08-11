@@ -110,8 +110,13 @@ namespace {
         if (occlusionDistance < blockDistance)
             blockDistance = std::numeric_limits<float>::max();
 
-        if (blockPos && blockDistance * blockDistance < closestCharacterSqr)
-            return BlockTarget { .normal = blockNormal, .position = *blockPos };
+        if (blockPos && blockDistance * blockDistance < closestCharacterSqr) {
+            return BlockTarget {
+                .position = *blockPos,
+                .normal = blockNormal,
+            };
+        }
+
         if (character)
             return *character;
 
