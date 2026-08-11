@@ -38,8 +38,8 @@ namespace {
 
 } // namespace
 
-PigCharacter::PigCharacter(EntityId id, Vec3 position)
-    : NPC(id, CharacterKind::Pig, position, { .radius = 0.35f, .height = 0.8f })
+PigCharacter::PigCharacter(World& world, EntityId id, Vec3 position)
+    : NPC(world, id, CharacterKind::Pig, position, { .radius = 0.35f, .height = 0.8f })
     , m_walkSeed(pigSeed(id, position))
 {
     m_health = 3;
@@ -51,7 +51,7 @@ PigCharacter::PigCharacter(EntityId id, Vec3 position)
     m_forward = { std::sin(angle), 0.0f, std::cos(angle) };
 }
 
-void PigCharacter::updateState(World& world, Vec3 threatPosition, float dt)
+void PigCharacter::updateState(Vec3 threatPosition, float dt)
 {
     const float threatDistance = length2D(m_position - threatPosition);
     if (threatDistance < PigThreatDistance && m_state.kind != CharacterStateKind::Panic) {
@@ -63,7 +63,7 @@ void PigCharacter::updateState(World& world, Vec3 threatPosition, float dt)
     }
 
     m_state.timer = std::max(0.0f, m_state.timer - dt);
-    if (horizontalBlocked() && onGround())
+    if (horizontalBlocked() && grounded())
         m_blockedTimer += dt;
     else
         m_blockedTimer = 0.0f;
@@ -82,7 +82,7 @@ void PigCharacter::updateState(World& world, Vec3 threatPosition, float dt)
         }
         break;
     case CharacterStateKind::MoveTo:
-        moveToward(world, m_state.target, PigWalkSpeed, dt);
+        moveToward(m_state.target, PigWalkSpeed, dt);
         if (m_blockedTimer >= RetargetBlockedTime) {
             setState({
                 .kind = CharacterStateKind::Idle,
@@ -99,7 +99,7 @@ void PigCharacter::updateState(World& world, Vec3 threatPosition, float dt)
         }
         break;
     case CharacterStateKind::Panic:
-        fleeFrom(world, threatPosition, PigPanicSpeed, dt);
+        fleeFrom(threatPosition, PigPanicSpeed, dt);
         if (m_blockedTimer >= RetargetBlockedTime || m_state.timer <= 0.0f) {
             setState({
                 .kind = CharacterStateKind::Idle,

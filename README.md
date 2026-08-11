@@ -21,7 +21,7 @@ BlockLab currently provides:
 Near-term work is focused on making the environment less prototype-like:
 
 - ~~Inventory and dropped items.~~ ✅
-- Interaction with NPC.
+- ~~Interaction with NPC.~~ ✅
 - NPC spawn.
 - Health / hunger management.
 - More world content: trees, water, lava, and additional block/entity types.

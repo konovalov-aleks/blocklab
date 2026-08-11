@@ -16,26 +16,28 @@ struct AgentState {
     Vec3 velocity {};
     float yaw = 0.0f;
     float pitch = 0.0f;
-    bool onGround = false;
+    bool grounded = false;
     std::int32_t blocksCollected = 0;
     std::int32_t blocksPlaced = 0;
 };
 
 class Agent {
 public:
-    Agent();
+    Agent(World&);
 
     void reset(Vec3 position);
-    void step(World&, const AgentAction&, float dt);
+    void step(const AgentAction&, float dt);
 
     const Inventory& inventory() const { return m_inventory; }
     const AgentState& state() const { return m_state; }
     AgentState& mutableState() { return m_state; }
 
 private:
-    void pickDrops(World&);
-    void interact(World&, const AgentAction&);
+    void pickDrops();
+    void interact(const AgentAction&);
     void syncStateFromBody();
+
+    World& world() const { return m_character.world(); }
 
     AgentState m_state;
     AgentCharacter m_character;

@@ -8,7 +8,7 @@ namespace blocklab {
 
 class AgentCharacter : public Character {
 public:
-    AgentCharacter(Vec3 position);
+    AgentCharacter(World&, Vec3 position);
 
     using Character::applyPhysics;
     using Character::requestJump;

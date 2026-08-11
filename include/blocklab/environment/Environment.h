@@ -11,6 +11,7 @@ namespace blocklab {
 
 class Agent;
 struct AgentState;
+struct EnvInstance;
 class Renderer;
 class World;
 
@@ -42,8 +43,7 @@ private:
 
     static constexpr float s_fixedDt = 1.0f / 60.0f;
 
-    std::unique_ptr<World[]> m_worlds;
-    std::unique_ptr<Agent[]> m_agents;
+    std::unique_ptr<EnvInstance[]> m_instances;
     Observation m_observation;
     Renderer& m_renderer;
     std::unique_ptr<std::uint32_t[]> m_stepCounts;
