@@ -44,7 +44,7 @@ inline bool collides(const HitCylinder& c1, const HitCylinder& c2)
 inline std::optional<float> rayCylinderEntryDistance(const Ray& r, const HitCylinder& c)
 {
     const Vec2 rDirection2d = { r.direction.x, r.direction.z };
-    const float horizontalLength = std::sqrtf(glm::length2(rDirection2d));
+    const float horizontalLength = std::sqrt(glm::length2(rDirection2d));
     if (horizontalLength < std::numeric_limits<float>::epsilon()) {
         // vertical ray
         const bool insideFootprint =
@@ -73,7 +73,7 @@ inline std::optional<float> rayCylinderEntryDistance(const Ray& r, const HitCyli
     if (h2 > r2)
         return std::nullopt;
 
-    const float a = std::sqrtf(r2 - h2);
+    const float a = std::sqrt(r2 - h2);
     // t is the distance along the horizontal unit direction; the 3D distance along the ray is
     // t / horizontalLength, because the ray direction has that horizontal projection.
     const float t1 = tCenter - a;
