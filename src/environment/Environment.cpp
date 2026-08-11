@@ -1,5 +1,7 @@
 #include <blocklab/environment/Environment.h>
 
+#include "EnvInstance.h"
+
 #include <blocklab/graphics/Renderer.h>
 #include <blocklab/utility/Error.h>
 #include <utility/Hash.h>
@@ -14,8 +16,7 @@ namespace blocklab {
 static constexpr Vec3 InitialAgentPosition { 0.5f, 14.0f, 0.5f };
 
 Environment::Environment(Renderer& renderer, std::uint32_t numEnvs, std::uint32_t maxSteps)
-    : m_worlds(std::make_unique<World[]>(numEnvs))
-    , m_agents(std::make_unique<Agent[]>(numEnvs))
+    : m_instances(std::make_unique<EnvInstance[]>(numEnvs))
     , m_observation(numEnvs)
     , m_renderer(renderer)
     , m_stepCounts(std::make_unique<std::uint32_t[]>(numEnvs))
@@ -28,7 +29,7 @@ Environment::Environment(Renderer& renderer, std::uint32_t numEnvs, std::uint32_
         fatalError("Environment batch size must be positive");
 
     for (std::uint32_t i = 0; i < numEnvs; ++i)
-        m_observation.inventories().set(i, m_agents[i].inventory());
+        m_observation.inventories().set(i, m_instances[i].agent.inventory());
 }
 
 Environment::~Environment() = default;
@@ -36,20 +37,20 @@ Environment::~Environment() = default;
 void Environment::reset(std::uint32_t seed)
 {
     for (std::uint32_t i = 0; i < m_batchSize; ++i) {
-        World& world = m_worlds[i];
+        World& world = m_instances[i].world;
         world.resetSeed(hash(seed + i));
-        m_agents[i].reset(InitialAgentPosition);
+        m_instances[i].agent.reset(InitialAgentPosition);
     }
 
     // update block cache before character's initialization
     updateObservation();
 
     for (std::uint32_t i = 0; i < m_batchSize; ++i) {
-        World& world = m_worlds[i];
+        World& world = m_instances[i].world;
         m_stepCounts[i] = 0;
         world.resetCharacters();
         const float spawnY = static_cast<float>(world.terrainHeight({ 0, 0 })) + 1.05f;
-        m_agents[i].reset({ InitialAgentPosition.x, spawnY, InitialAgentPosition.z });
+        m_instances[i].agent.reset({ InitialAgentPosition.x, spawnY, InitialAgentPosition.z });
     }
 
     // we have moved the agent's initial position according to the ground height,
@@ -63,12 +64,11 @@ std::span<const StepResult> Environment::step(std::span<const AgentAction> actio
         fatalError("Action batch size does not match environment batch size");
 
     for (std::uint32_t i = 0; i < m_batchSize; ++i) {
-        World& world = m_worlds[i];
-        Agent& agent = m_agents[i];
+        Agent& agent = m_instances[i].agent;
         StepResult& result = m_stepResults[i];
         const AgentState before = agent.state();
-        agent.step(world, actions[i], s_fixedDt);
-        world.update(s_fixedDt, agent.state().position);
+        agent.step(actions[i], s_fixedDt);
+        m_instances[i].world.update(s_fixedDt, agent.state().position);
         ++m_stepCounts[i];
 
         const AgentState& after = agent.state();
@@ -91,9 +91,9 @@ std::span<const StepResult> Environment::step(std::span<const AgentAction> actio
 const Observation& Environment::updateObservation()
 {
     for (std::uint32_t i = 0; i < m_batchSize; ++i)
-        m_renderAgents[i] = m_agents[i].state();
+        m_renderAgents[i] = m_instances[i].agent.state();
     const Renderer::RenderResult renderObservation
-        = m_renderer.renderObservations({ m_worlds.get(), m_batchSize }, { m_renderAgents.get(), m_batchSize });
+        = m_renderer.renderObservations({ m_instances.get(), m_batchSize });
     if (renderObservation.images.batchSize() != m_batchSize) [[unlikely]]
         fatalError("Observation renderer returned an unexpected batch size");
     m_observation.setImageBatchRef(renderObservation.images);

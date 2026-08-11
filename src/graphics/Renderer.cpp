@@ -11,6 +11,7 @@
 #include <blocklab/utility/Error.h>
 #include <characters/meshes/PigMesh.h>
 #include <environment/CudaObservation.h>
+#include <environment/EnvInstance.h>
 #include <gpu/vulkan/Memory.h>
 #include <world/Drop.h>
 #include <world/Lighting.h>
@@ -880,7 +881,7 @@ void Renderer::uploadInstances(std::size_t slotIndex, const World& world)
     m_instances.clear();
     m_instances.push_back({});
     for (const std::unique_ptr<NPC>& character : world.characters()) {
-        if (!character->isAlive() || character->kind() == CharacterKind::Agent)
+        if (!character->alive() || character->kind() == CharacterKind::Agent)
             continue;
         const Vec3 position = character->position();
         const Vec3 velocity = character->velocity();
@@ -1089,16 +1090,14 @@ void Renderer::drawFrame()
     offscreenFrame.conversionTaskFuture = conversionTask.share();
 }
 
-Renderer::RenderResult Renderer::renderObservations(std::span<const World> worlds, std::span<const AgentState> agents)
+Renderer::RenderResult Renderer::renderObservations(std::span<const EnvInstance> instances)
 {
-    if (worlds.size() != agents.size()) [[unlikely]]
-        fatalError("renderObservations world/agent count mismatch");
-
     ++m_observationVersion;
-    assert(worlds.size() == m_batchSize);
-    for (std::size_t i = 0; i < worlds.size(); ++i) {
-        renderObservationSlot(i, worlds[i], agents[i]);
-        m_renderParams[i] = buildRenderParams(agents[i], worlds[i]);
+    assert(instances.size() == m_batchSize);
+    for (std::size_t i = 0; i < instances.size(); ++i) {
+        const EnvInstance& instance = instances[i];
+        renderObservationSlot(i, instance.world, instance.agent.state());
+        m_renderParams[i] = buildRenderParams(instance.agent.state(), instance.world);
     }
     drawFrame();
     OffscreenFrame& frame = m_state->frames[m_state->lastSubmittedFrame];

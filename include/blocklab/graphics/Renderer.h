@@ -12,7 +12,7 @@
 namespace blocklab {
 
 struct AgentState;
-class Environment;
+struct EnvInstance;
 class Vulkan;
 class World;
 class WorldGenerator;
@@ -60,7 +60,7 @@ public:
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
 
-    RenderResult renderObservations(std::span<const World>, std::span<const AgentState>);
+    RenderResult renderObservations(std::span<const EnvInstance>);
 
     struct RenderParams {
         struct alignas(16) FrameInfo {

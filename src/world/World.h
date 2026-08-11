@@ -77,8 +77,11 @@ public:
     std::size_t overrideCount() const { return m_overrideCount; }
 
     const std::vector<std::unique_ptr<NPC>>& characters() const { return m_characters; }
+    void addCharacter(std::unique_ptr<NPC> character) { m_characters.push_back(std::move(character)); }
 
     static constexpr bool isValidHeight(std::int32_t y) { return y >= s_minY && y <= s_maxY; }
+
+    void onCharacterKilled() { m_hasObsoleteCharacters = true; }
 
 private:
     using OverrideClusterColumn = std::map<std::int32_t, OverrideCluster>;
@@ -143,6 +146,8 @@ private:
     std::deque<Drop> m_drops;
     bool m_hasObsoleteDrops = false;
     bool m_needRepositionDrops = false;
+
+    bool m_hasObsoleteCharacters = false;
 
     mutable BlockCache m_blockCache;
 };

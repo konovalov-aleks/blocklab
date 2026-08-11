@@ -1,6 +1,7 @@
 #include "Agent.h"
 
 #include <algorithms/Raycast.h>
+#include <characters/Character.h>
 #include <blocklab/utility/Error.h>
 #include <blocklab/utility/Math.h>
 #include <world/World.h>
@@ -9,10 +10,20 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <limits>
+#include <variant>
 
 namespace blocklab {
 
 namespace {
+
+    struct BlockTarget {
+        IVec3 position;
+        std::optional<IVec3> normal;
+    };
+    using CharacterTarget = std::reference_wrapper<Character>;
+    using CursorTarget = std::variant<std::monostate, BlockTarget, CharacterTarget>;
 
     constexpr float s_eyeHeight = 1.62f;
 
@@ -45,10 +56,72 @@ namespace {
         fatalError("Invalid item type: ", static_cast<int>(item));
     }
 
+    constexpr float s_maxBlockInteractionDistance = 4.5f;
+    constexpr float s_maxCharacterInteractionDistance = 3.0f;
+
+    CursorTarget cursorTarget(World& world, Vec3 position, Vec3 direction)
+    {
+        float blockDistance = std::numeric_limits<float>::max();
+        std::optional<IVec3> blockPos;
+        std::optional<IVec3> blockNormal;
+
+        raycast(position, direction,
+            [&world, &blockDistance, &blockPos, &blockNormal](const RaycastCbParams& p) {
+                if (p.distance > s_maxBlockInteractionDistance)
+                    return RaycastCommand::Break;
+
+                const Block hitBlock = world.blockType(p.pos);
+                if (hitBlock != Block::Air) {
+                    blockDistance = p.distance;
+                    blockPos = p.pos;
+                    blockNormal = p.normal;
+                    return RaycastCommand::Break;
+                }
+                return RaycastCommand::Continue;
+            }
+        );
+
+        // Distance at which the ray first enters any character's body, regardless of reach: a
+        // body in the way occludes what's behind it even when it is out of melee range.
+        float occlusionDistance = std::numeric_limits<float>::max();
+
+        float closestCharacterSqr = std::numeric_limits<float>::max();
+        Character* character = nullptr;
+        const float maxCharacterDistanceSqr = sqr(s_maxCharacterInteractionDistance);
+        for (const std::unique_ptr<NPC>& c : world.characters()) {
+            assert(c);
+            assert(c->alive());
+            const std::optional<float> entry = rayCylinderEntryDistance({ position, direction }, c->hitVolume());
+            if (!entry)
+                continue;
+            occlusionDistance = std::min(occlusionDistance, *entry);
+            const float dx = c->position().x - position.x;
+            const float dz = c->position().z - position.z;
+            if (dx * dx + dz * dz > maxCharacterDistanceSqr)
+                continue;
+            const float distanceSqr = glm::length2(position - c->position());
+            if (distanceSqr < closestCharacterSqr) {
+                closestCharacterSqr = distanceSqr;
+                character = c.get();
+            }
+        }
+
+        // An entity body in the way shields the block behind it
+        if (occlusionDistance < blockDistance)
+            blockDistance = std::numeric_limits<float>::max();
+
+        if (blockPos && blockDistance * blockDistance < closestCharacterSqr)
+            return BlockTarget { .normal = blockNormal, .position = *blockPos };
+        if (character)
+            return *character;
+
+        return {};
+    }
+
 } // namespace
 
-Agent::Agent()
-    : m_character({ 0.0f, 14.0f, 0.0f })
+Agent::Agent(World& world)
+    : m_character(world, { 0.0f, 14.0f, 0.0f })
 {
 }
 
@@ -63,7 +136,7 @@ void Agent::reset(Vec3 position)
     syncStateFromBody();
 }
 
-void Agent::step(World& world, const AgentAction& action, float dt)
+void Agent::step(const AgentAction& action, float dt)
 {
     if (action.activeHotbarSlot) {
         if (!Inventory::isHotbarSlot(*action.activeHotbarSlot)) [[unlikely]]
@@ -89,25 +162,25 @@ void Agent::step(World& world, const AgentAction& action, float dt)
     m_character.setHorizontalMovement(wishDir, moveSpeed, acceleration, dt);
     if (action.jump)
         m_character.requestJump(jumpSpeed);
-    m_character.applyPhysics(world, dt);
+    m_character.applyPhysics(dt);
     syncStateFromBody();
-    pickDrops(world);
-    interact(world, action);
+    pickDrops();
+    interact(action);
     syncStateFromBody();
 }
 
-void Agent::pickDrops(World& world)
+void Agent::pickDrops()
 {
     const auto hitVolume = m_character.hitVolume();
-    const auto& drops = world.drops();
+    const auto& drops = world().drops();
     for (std::size_t i = 0; i < drops.size(); ++i) {
         const Drop& drop = drops[i];
         if (drop.alive() && collides(hitVolume, drop.hitVolume()))
-            world.moveDropItemsToInventory(i, m_inventory);
+            world().moveDropItemsToInventory(i, m_inventory);
     }
 }
 
-void Agent::interact(World& world, const AgentAction& action)
+void Agent::interact(const AgentAction& action)
 {
     if (!action.attack && !action.use)
         return;
@@ -115,53 +188,47 @@ void Agent::interact(World& world, const AgentAction& action)
     const Vec3 eye = m_character.position() + Vec3 { 0.0f, s_eyeHeight, 0.0f };
     const Vec3 forward = forwardFromAngles(m_state.yaw, m_state.pitch);
 
-    constexpr float maxBlockInteractionDistance = 4.5f;
-
+    CursorTarget target = cursorTarget(world(), eye, forward);
     if (action.attack) {
-        raycast(eye, forward, [this, &world](const RaycastCbParams& p) {
-            if (p.distance > maxBlockInteractionDistance)
-                return RaycastCommand::Break;
-
-            const Block hitBlock = world.blockType(p.pos);
-            if (hitBlock != Block::Air) {
-                if (world.setBlock(p.pos, Block::Air, true))
-                    ++m_state.blocksCollected;
-                return RaycastCommand::Break;
-            }
-            return RaycastCommand::Continue;
-        });
-
+        if (BlockTarget* block = std::get_if<BlockTarget>(&target)) {
+            assert(world().blockType(block->position) != Block::Air);
+            if (world().setBlock(block->position, Block::Air, true))
+                ++m_state.blocksCollected;
+        } else if (CharacterTarget* c = std::get_if<CharacterTarget>(&target)) {
+            // Minecraft base-punch knockback strength: 0.4 blocks/tick = 8 m/s. Sprint hits are
+            // 0.9 bpt = 18 m/s, which is what the previous arbitrary 20 m/s approximated and why
+            // the pig used to fly ~5.7 m.
+            constexpr float hitKnockback = 8.0f;
+            constexpr int damage = 1;
+            c->get().onHit(forward, hitKnockback, damage);
+        }
     } else if (action.use) {
-        Item& activeItem = m_inventory[m_inventory.activeHotbarSlot()];
-        if (activeItem.empty())
-            return;
-        const Block itemBlock = inventoryItemBlock(activeItem.type());
+        if (BlockTarget* bt = std::get_if<BlockTarget>(&target)) {
+            Item& activeItem = m_inventory[m_inventory.activeHotbarSlot()];
+            if (activeItem.empty())
+                return;
+            const Block itemBlock = inventoryItemBlock(activeItem.type());
 
-        raycast(eye, forward, [this, itemBlock, &world, &activeItem](const RaycastCbParams& p) {
-            if (p.distance > maxBlockInteractionDistance)
-                return RaycastCommand::Break;
-
-            const Block block = world.blockType(p.pos);
+            const Block block = world().blockType(bt->position);
             if (!isSolidBlock(block))
-                return RaycastCommand::Continue;
+                return;
 
-            const IVec3 prevBlock = p.normal ? p.pos + *p.normal
-                                             : p.pos; // the agent is inside a solid block
-            assert(world.isInsideLoadedCache(prevBlock));
+            const IVec3 prevBlock = bt->normal ? bt->position + *bt->normal
+                                               : bt->position; // the agent is inside a solid block
+            assert(world().isInsideLoadedCache(prevBlock));
             if (isSolidBlock(itemBlock) && m_character.occupiesBlock(prevBlock))
-                return RaycastCommand::Break;
+                return;
 
-            if (itemBlock == Block::Torch && p.normal != IVec3 { 0, 1, 0 }) {
+            if (itemBlock == Block::Torch && bt->normal != IVec3 { 0, 1, 0 }) {
                 // currently Torch can be only placed on a top block surface
-                return RaycastCommand::Break;
+                return;
             }
 
-            if (world.setBlock(prevBlock, itemBlock)) {
+            if (world().setBlock(prevBlock, itemBlock)) {
                 activeItem.remove(1);
                 ++m_state.blocksPlaced;
             }
-            return RaycastCommand::Break;
-        });
+        }
     }
 }
 
@@ -169,7 +236,7 @@ void Agent::syncStateFromBody()
 {
     m_state.position = m_character.position();
     m_state.velocity = m_character.velocity();
-    m_state.onGround = m_character.onGround();
+    m_state.grounded = m_character.grounded();
 }
 
 } // namespace blocklab

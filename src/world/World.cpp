@@ -395,9 +395,9 @@ void World::updateDrops(float dTime)
 void World::updateCharacters(float dt, Vec3 threatPosition)
 {
     for (std::unique_ptr<NPC>& character : m_characters) {
-        if (!character->isAlive())
+        if (!character->alive())
             continue;
-        character->update(*this, threatPosition, dt);
+        character->update(threatPosition, dt);
     }
 }
 
@@ -412,6 +412,17 @@ void World::gc()
             ), m_drops.end()
         );
         m_hasObsoleteDrops = false;
+    }
+
+    // 2. remove dead characters
+    if (m_hasObsoleteCharacters) {
+        m_characters.erase(
+            std::remove_if(
+                m_characters.begin(), m_characters.end(),
+                [](const std::unique_ptr<NPC>& c) { return !c || !c->alive(); }
+            ), m_characters.end()
+        );
+        m_hasObsoleteCharacters = false;
     }
 }
 
@@ -493,7 +504,7 @@ void World::spawnTestPigs()
             static_cast<float>(terrainHeight({ x, z })) + 1.05f,
             z,
         };
-        m_characters.push_back(std::make_unique<PigCharacter>(m_nextEntityId++, position));
+        m_characters.push_back(std::make_unique<PigCharacter>(*this, m_nextEntityId++, position));
     }
 }
 

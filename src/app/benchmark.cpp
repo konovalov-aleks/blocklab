@@ -6,6 +6,7 @@
 #include <blocklab/graphics/Display.h>
 #include <blocklab/graphics/Renderer.h>
 #include <environment/Agent.h>
+#include <environment/EnvInstance.h>
 #include <world/World.h>
 
 #include <algorithm>
@@ -27,8 +28,8 @@ namespace blocklab {
 
 class EnvironmentInternalAccessBenchmarkHelper {
 public:
-    static World& world(Environment& env, std::size_t i) { return env.m_worlds[i]; }
-    static const AgentState& agentState(Environment& env, std::size_t i) { return env.m_agents[i].state(); }
+    static World& world(Environment& env, std::size_t i) { return env.m_instances[i].world; }
+    static const AgentState& agentState(Environment& env, std::size_t i) { return env.m_instances[i].agent.state(); }
 };
 
 namespace {
